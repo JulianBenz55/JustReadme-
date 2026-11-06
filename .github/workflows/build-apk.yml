@@ -53,7 +53,7 @@ jobs:
 
           ./gradlew --version
 
-          # 4. Android SDK einrichten
+      # 4. Android SDK einrichten
       - name: Setup Android SDK
         shell: bash
         run: |
@@ -75,8 +75,6 @@ jobs:
 
           echo "Android SDK: $SDK_ROOT"
 
-          # Nur notwendige Werkzeuge installieren.
-          # Keine Android-37-Plattform erzwingen.
           "$SDKMANAGER" \
             --sdk_root="$SDK_ROOT" \
             --install \
@@ -84,11 +82,9 @@ jobs:
             "build-tools;36.0.0"
 
           echo "===== VORHANDENE SDK-PLATTFORMEN ====="
-
           ls -lah "$SDK_ROOT/platforms/"
 
           echo "===== ANDROID JAR DATEIEN ====="
-
           find "$SDK_ROOT/platforms" \
             -maxdepth 2 \
             -name android.jar \
@@ -148,9 +144,9 @@ jobs:
           echo "===== JAVA ====="
           java -version
 
-          echo "===== GRADLE MEMORY ====="
-          echo "Gradle heap: 5 GB"
-          echo "Kotlin daemon heap: 1 GB"
+          echo "===== MEMORY CONFIGURATION ====="
+          echo "Gradle heap: 3 GB"
+          echo "Kotlin daemon heap: 2 GB"
           echo "Workers: 1"
 
       # 8. OSS Offline Release APK bauen
@@ -168,8 +164,8 @@ jobs:
             --max-workers=1 \
             --stacktrace \
             --build-cache \
-            -Dorg.gradle.jvmargs="-Xms512m -Xmx5g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" \
-            -Pkotlin.daemon.jvmargs=-Xmx1g
+            -Dorg.gradle.jvmargs="-Xms512m -Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" \
+            -Pkotlin.daemon.jvmargs=-Xmx2g
 
       # 9. APK-Dateien einsammeln
       - name: Collect APK files
