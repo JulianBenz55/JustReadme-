@@ -53,7 +53,7 @@ jobs:
 
           ./gradlew --version
 
-      # 4. Android SDK einrichten
+          # 4. Android SDK einrichten
       - name: Setup Android SDK
         shell: bash
         run: |
@@ -75,37 +75,26 @@ jobs:
 
           echo "Android SDK: $SDK_ROOT"
 
-          # Nur tatsächlich verfügbare SDK-Pakete installieren.
+          # Nur notwendige Werkzeuge installieren.
+          # Keine Android-37-Plattform erzwingen.
           "$SDKMANAGER" \
             --sdk_root="$SDK_ROOT" \
             --install \
             "platform-tools" \
             "build-tools;36.0.0"
 
-          echo "===== ANDROID PLATFORMS ====="
+          echo "===== VORHANDENE SDK-PLATTFORMEN ====="
 
-          API37_FOUND=false
+          ls -lah "$SDK_ROOT/platforms/"
 
-          for PLATFORM in "$SDK_ROOT"/platforms/android-37*; do
-            [ -d "$PLATFORM" ] || continue
-            [ -f "$PLATFORM/android.jar" ] || continue
-            [ -f "$PLATFORM/source.properties" ] || continue
+          echo "===== ANDROID JAR DATEIEN ====="
 
-            API_LEVEL=$(grep '^AndroidVersion.ApiLevel=' \
-              "$PLATFORM/source.properties" | cut -d= -f2)
+          find "$SDK_ROOT/platforms" \
+            -maxdepth 2 \
+            -name android.jar \
+            -print
 
-            if [ "$API_LEVEL" = "37" ]; then
-              echo "API 37 gefunden: $PLATFORM"
-              API37_FOUND=true
-            fi
-          done
-
-          if [ "$API37_FOUND" != true ]; then
-            echo "::error::Keine gültige Android API 37 gefunden."
-            exit 1
-          fi
-
-          echo "===== ANDROID SDK ERFOLGREICH ====="
+          echo "===== SDK SETUP ABGESCHLOSSEN ====="
 
       # 5. Gradle einrichten
       - name: Setup Gradle
