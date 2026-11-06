@@ -21,7 +21,6 @@ jobs:
     timeout-minutes: 120
 
     env:
-      JAVA_TOOL_OPTIONS: "-Xms512m -Xmx5g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
       GRADLE_OPTS: "-Dorg.gradle.daemon=false"
 
     steps:
@@ -49,7 +48,7 @@ jobs:
           test -f ./gradlew
           test -f gradle/wrapper/gradle-wrapper.jar
 
-          echo "Gradle wrapper permissions:"
+          echo "===== GRADLE WRAPPER ====="
           ls -l ./gradlew
 
           ./gradlew --version
@@ -67,38 +66,46 @@ jobs:
             exit 1
           fi
 
-          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
-            -type f -name sdkmanager | sort -V | tail -n 1)"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
-          if [ -z "$SDKMANAGER" ]; then
+          if [ ! -x "$SDKMANAGER" ]; then
             echo "::error::sdkmanager nicht gefunden."
             exit 1
           fi
 
           echo "Android SDK: $SDK_ROOT"
 
-          set +o pipefail
-          yes | "$SDKMANAGER" \
-            --sdk_root="$SDK_ROOT" --licenses >/dev/null
-          LICENSE_STATUS=$?
-          set -o pipefail
-
-          if [ "$LICENSE_STATUS" -ne 0 ]; then
-            echo "::error::SDK-Lizenzen konnten nicht akzeptiert werden."
-            exit "$LICENSE_STATUS"
-          fi
-
-          SDK_PACKAGES=(
-            "platform-tools"
-            "platforms;android-37"
-            "build-tools;36.0.0"
-          )
-
+          # Nur tatsächlich verfügbare SDK-Pakete installieren.
           "$SDKMANAGER" \
             --sdk_root="$SDK_ROOT" \
-            --install "${SDK_PACKAGES[@]}"
+            --install \
+            "platform-tools" \
+            "build-tools;36.0.0"
 
-          echo "Android SDK erfolgreich eingerichtet."
+          echo "===== ANDROID PLATFORMS ====="
+
+          API37_FOUND=false
+
+          for PLATFORM in "$SDK_ROOT"/platforms/android-37*; do
+            [ -d "$PLATFORM" ] || continue
+            [ -f "$PLATFORM/android.jar" ] || continue
+            [ -f "$PLATFORM/source.properties" ] || continue
+
+            API_LEVEL=$(grep '^AndroidVersion.ApiLevel=' \
+              "$PLATFORM/source.properties" | cut -d= -f2)
+
+            if [ "$API_LEVEL" = "37" ]; then
+              echo "API 37 gefunden: $PLATFORM"
+              API37_FOUND=true
+            fi
+          done
+
+          if [ "$API37_FOUND" != true ]; then
+            echo "::error::Keine gültige Android API 37 gefunden."
+            exit 1
+          fi
+
+          echo "===== ANDROID SDK ERFOLGREICH ====="
 
       # 5. Gradle einrichten
       - name: Setup Gradle
@@ -132,7 +139,7 @@ jobs:
               -keypass "$PASS" \
               -dname "CN=Episteme Local"
 
-            echo "::warning::Es wurde ein neuer Signierschlüssel erstellt. Ohne dauerhaft gespeicherten Keystore ist dieser Schlüssel bei zukünftigen Builds nicht identisch."
+            echo "::warning::Neuer Signierschlüssel erstellt. Für spätere Updates denselben Keystore dauerhaft speichern."
           fi
 
           {
@@ -142,7 +149,7 @@ jobs:
             echo "MYAPP_RELEASE_KEY_PASSWORD=$PASS"
           } >> local.properties
 
-      # 7. Speicherdiagnose vor dem Build
+      # 7. Speicherdiagnose
       - name: Check available memory
         shell: bash
         run: |
@@ -152,7 +159,7 @@ jobs:
           echo "===== JAVA ====="
           java -version
 
-          echo "===== GRADLE CONFIGURATION ====="
+          echo "===== GRADLE MEMORY ====="
           echo "Gradle heap: 5 GB"
           echo "Kotlin daemon heap: 1 GB"
           echo "Workers: 1"
