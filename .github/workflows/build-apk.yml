@@ -23,7 +23,30 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
+      # The setup-android action currently attempts to install the obsolete
+      # SDK package "tools". Modern command-line tools no longer publish it.
+      # GitHub's Ubuntu runner already provides the Android SDK and sdkmanager.
+      - name: Android SDK vorbereiten
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK_ROOT/cmdline-tools" ]; then
+            echo "Android command-line tools fehlen: $SDK_ROOT/cmdline-tools"
+            exit 1
+          fi
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager wurde nicht gefunden."
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \\
+            "platform-tools" \\
+            "platforms;android-37" \\
+            "build-tools;36.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
 
