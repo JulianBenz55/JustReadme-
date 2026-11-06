@@ -1,69 +1,42 @@
 
+# Baut die lokale/offline-Variante von Episteme als APK
+# und hängt sie an ein GitHub-Release.
+
 name: Build APK (oss offline)
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: write
 
-concurrency:
-  group: oss-apk-build-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
-    name: Build OSS Release APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-
-    env:
-      JAVA_TOOL_OPTIONS: "-Xms512m -Xmx5g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
-      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+    timeout-minutes: 90
 
     steps:
-      # 1. Repository herunterladen
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      # 1. Repository
+      - uses: actions/checkout@v4
 
-      # 2. Java 21 installieren
-      - name: Setup Java 21
-        uses: actions/setup-java@v4
+      # 2. Java 21
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
 
-      # 3. Gradle Wrapper absichern
-      - name: Fix Gradle wrapper permissions
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x ./gradlew
-
-          test -f ./gradlew
-          test -f gradle/wrapper/gradle-wrapper.jar
-
-          echo "Gradle wrapper permissions:"
-          ls -l ./gradlew
-
-          ./gradlew --version
-
-      # 4. Android SDK einrichten
-      - name: Setup Android SDK
+      # 3. Android SDK
+      - name: Android SDK einrichten
         shell: bash
         run: |
           set -euo pipefail
 
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
-          if [ -z "$SDK_ROOT" ]; then
-            echo "::error::Android SDK nicht gefunden."
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT/cmdline-tools" ]; then
+            echo "::error::Android SDK oder cmdline-tools nicht gefunden."
             exit 1
           fi
 
@@ -76,11 +49,13 @@ jobs:
           fi
 
           echo "Android SDK: $SDK_ROOT"
+          echo "sdkmanager: $SDKMANAGER"
 
+          # Lizenzen akzeptieren, ohne Broken-Pipe-Warnung
           set +o pipefail
-          yes | "$SDKMANAGER" \
+          yes 2>/dev/null | "$SDKMANAGER" \
             --sdk_root="$SDK_ROOT" --licenses >/dev/null
-          LICENSE_STATUS=$?
+          LICENSE_STATUS=${PIPESTATUS[1]}
           set -o pipefail
 
           if [ "$LICENSE_STATUS" -ne 0 ]; then
@@ -88,9 +63,11 @@ jobs:
             exit "$LICENSE_STATUS"
           fi
 
+          # Ursprüngliche SDK-Pakete beibehalten.
+          # Kein nicht verfügbares android-37 installieren.
           SDK_PACKAGES=(
             "platform-tools"
-            "platforms;android-37"
+            "platforms;android-36"
             "build-tools;36.0.0"
           )
 
@@ -98,16 +75,59 @@ jobs:
             --sdk_root="$SDK_ROOT" \
             --install "${SDK_PACKAGES[@]}"
 
-          echo "Android SDK erfolgreich eingerichtet."
+          echo "===== INSTALLIERTE ANDROID PLATTFORMEN ====="
+          ls -la "$SDK_ROOT/platforms/"
 
-      # 5. Gradle einrichten
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-cleanup: always
+          # compileSdk 37 wird vom Projekt verwendet.
+          # Die bereits vorhandene Plattform wird nicht überschrieben.
+          if [ ! -d "$SDK_ROOT/platforms/android-37" ]; then
+            echo "::error::compileSdk 37 ist auf diesem Runner nicht installiert."
+            exit 1
+          fi
 
-      # 6. Signierung vorbereiten
-      - name: Prepare release signing
+      # 4. Gradle Cache
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 5. Gradle-Speicher konfigurieren
+      - name: Configure Gradle memory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          touch gradle.properties
+
+          cat >> gradle.properties <<'EOF'
+
+          # CI memory configuration
+          org.gradle.jvmargs=-Xms512m -Xmx4g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8
+          org.gradle.workers.max=1
+          org.gradle.parallel=false
+          org.gradle.vfs.watch=false
+          org.gradle.caching=true
+
+          # Kotlin compiler daemon
+          kotlin.daemon.jvmargs=-Xmx1g
+          EOF
+
+          echo "===== GRADLE MEMORY SETTINGS ====="
+          tail -n 10 gradle.properties
+
+      # 6. Wrapper absichern
+      - name: Fix Gradle wrapper permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          test -f gradle/wrapper/gradle-wrapper.jar
+
+          ls -l ./gradlew
+
+          ./gradlew --version
+
+      # 7. Signierung vorbereiten
+      - name: Signing vorbereiten
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -116,14 +136,13 @@ jobs:
           set -euo pipefail
 
           PASS="${KEYSTORE_PASSWORD:-episteme-local}"
-          KEYSTORE="$RUNNER_TEMP/release.jks"
 
           if [ -n "${KEYSTORE_BASE64:-}" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
-            echo "Vorhandener Release-Key geladen."
+            echo "$KEYSTORE_BASE64" | base64 -d \
+              > "$RUNNER_TEMP/release.jks"
           else
             keytool -genkeypair -v \
-              -keystore "$KEYSTORE" \
+              -keystore "$RUNNER_TEMP/release.jks" \
               -alias episteme \
               -keyalg RSA \
               -keysize 2048 \
@@ -131,19 +150,17 @@ jobs:
               -storepass "$PASS" \
               -keypass "$PASS" \
               -dname "CN=Episteme Local"
-
-            echo "::warning::Es wurde ein neuer Signierschlüssel erstellt. Ohne dauerhaft gespeicherten Keystore ist dieser Schlüssel bei zukünftigen Builds nicht identisch."
           fi
 
           {
-            echo "MYAPP_RELEASE_STORE_FILE=$KEYSTORE"
+            echo "MYAPP_RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks"
             echo "MYAPP_RELEASE_STORE_PASSWORD=$PASS"
             echo "MYAPP_RELEASE_KEY_ALIAS=episteme"
             echo "MYAPP_RELEASE_KEY_PASSWORD=$PASS"
           } >> local.properties
 
-      # 7. Speicherdiagnose vor dem Build
-      - name: Check available memory
+      # 8. Speicherdiagnose
+      - name: Check build environment
         shell: bash
         run: |
           echo "===== SYSTEM MEMORY ====="
@@ -152,13 +169,11 @@ jobs:
           echo "===== JAVA ====="
           java -version
 
-          echo "===== GRADLE CONFIGURATION ====="
-          echo "Gradle heap: 5 GB"
-          echo "Kotlin daemon heap: 1 GB"
-          echo "Workers: 1"
+          echo "===== GRADLE ====="
+          cat gradle.properties
 
-      # 8. OSS Offline Release APK bauen
-      - name: Build OSS Release APK
+      # 9. APK bauen
+      - name: APK bauen (oss, offline)
         shell: bash
         run: |
           set -euo pipefail
@@ -170,13 +185,10 @@ jobs:
             --no-daemon \
             --no-watch-fs \
             --max-workers=1 \
-            --stacktrace \
-            --build-cache \
-            -Dorg.gradle.jvmargs="-Xms512m -Xmx5g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" \
-            -Pkotlin.daemon.jvmargs=-Xmx1g
+            --stacktrace
 
-      # 9. APK-Dateien einsammeln
-      - name: Collect APK files
+      # 10. APK einsammeln
+      - name: APK einsammeln
         shell: bash
         run: |
           set -euo pipefail
@@ -190,26 +202,25 @@ jobs:
             -exec cp {} dist/ \;
 
           if ! compgen -G "dist/*.apk" > /dev/null; then
-            echo "::error::Es wurde keine APK erzeugt."
+            echo "::error::Keine APK erzeugt."
             exit 1
           fi
 
-          echo "===== GENERATED APK FILES ====="
+          echo "===== APK DATEIEN ====="
           ls -lh dist/
 
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
-      # 10. APK als Artifact hochladen
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      # 11. APK Artifact
+      - uses: actions/upload-artifact@v4
         with:
-          name: episteme-oss-release-apk
+          name: episteme-apk
           path: dist/*
           if-no-files-found: error
           retention-days: 30
 
-      # 11. GitHub Release erstellen
-      - name: Create GitHub Release
+      # 12. GitHub Release
+      - name: Release mit APK anlegen
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -219,14 +230,12 @@ jobs:
           TAG="build-${GITHUB_RUN_NUMBER}"
 
           gh release create "$TAG" dist/*.apk \
-            --title "OSS APK Build ${GITHUB_RUN_NUMBER}" \
-            --notes "Automatischer OSS Release Build.
-          Commit: ${GITHUB_SHA}
-          Build: ${GITHUB_RUN_NUMBER}" \
+            --title "Build ${GITHUB_RUN_NUMBER}" \
+            --notes "Automatisch gebaut aus ${GITHUB_SHA}" \
             --prerelease
 
-      # 12. Fehlerdiagnose
-      - name: Upload build diagnostics
+      # 13. Fehlerdiagnose
+      - name: Build-Diagnose sichern
         if: failure()
         uses: actions/upload-artifact@v4
         with:
