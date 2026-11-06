@@ -21,39 +21,52 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # Installiere SDK-Komponenten direkt. android-actions/setup-android@v3
-      # ruft sdkmanager mit dem entfernten Legacy-Paket "tools" auf.
+      # Nicht android-actions/setup-android@v3 verwenden:
+      # Diese Action fordert in dieser Umgebung das entfernte Paket "tools" an.
+      # Die Runner-Images enthalten bereits Android command-line tools.
       - name: Android SDK einrichten
         shell: bash
         run: |
           set -euo pipefail
+
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT/cmdline-tools" ]; then
-            echo "Android SDK oder command-line-tools nicht gefunden."
+            echo "::error::Android SDK oder cmdline-tools wurden auf dem Runner nicht gefunden."
             exit 1
           fi
 
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager wurde nicht gefunden."
+            echo "::error::sdkmanager wurde nicht gefunden."
             exit 1
           fi
 
-          # sdkmanager beendet 'yes' regulär vorzeitig. pipefail für genau
-          # diesen Lizenzschritt deaktivieren, damit Broken pipe nicht fehlschlägt.
-          set +o pipefail
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
-          set -o pipefail
+          echo "Android SDK: $SDK_ROOT"
+          echo "sdkmanager: $SDKMANAGER"
 
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
-            "platform-tools" \
-            "platforms;android-37" \
-            "cmake;3.22.1"
+          # 'yes' kann SIGPIPE erhalten, sobald sdkmanager fertig ist.
+          # Deshalb hier absichtlich KEIN pipefail für diese Lizenz-Pipeline.
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null
+          LICENSE_STATUS=$?
+          set -o pipefail
+          if [ "$LICENSE_STATUS" -ne 0 ]; then
+            echo "::error::Android SDK-Lizenzen konnten nicht akzeptiert werden."
+            exit "$LICENSE_STATUS"
+          fi
+
+          # Das Projekt verwendet compileSdk 36. android-37 ist hier nicht nötig.
+          SDK_PACKAGES=(
+            "platform-tools"
+            "platforms;android-36"
+            "build-tools;36.0.0"
+          )
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install "${SDK_PACKAGES[@]}"
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # Signatur-Schlüssel: Mit KEYSTORE_BASE64 / KEYSTORE_PASSWORD bleiben Updates
-      # über die alte Installation möglich. Ohne Secrets wird ein neuer Schlüssel erzeugt.
+      # Signatur-Schlüssel: Mit den Secrets KEYSTORE_BASE64 / KEYSTORE_PASSWORD
+      # bleiben Updates über die alte Installation möglich.
       - name: Signing vorbereiten
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -64,8 +77,8 @@ jobs:
           if [ -n "${KEYSTORE_BASE64:-}" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           else
-            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" -alias episteme \
-              -keyalg RSA -keysize 2048 -validity 10000 \
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" -alias episteme \\
+              -keyalg RSA -keysize 2048 -validity 10000 \\
               -storepass "$PASS" -keypass "$PASS" -dname "CN=Episteme Local"
           fi
           {
@@ -95,5 +108,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="build-${{ github.run_number }}"
-          gh release create "$TAG" dist/*.apk --title "Build ${{ github.run_number }}" \
+          gh release create "$TAG" dist/*.apk --title "Build ${{ github.run_number }}" \\
             --notes "Automatisch gebaut aus ${{ github.sha }}" --prerelease
