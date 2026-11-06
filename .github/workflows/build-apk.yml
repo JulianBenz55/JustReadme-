@@ -77,9 +77,13 @@ jobs:
           if [ -n "${KEYSTORE_BASE64:-}" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           else
-            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" -alias episteme \\
-              -keyalg RSA -keysize 2048 -validity 10000 \\
-              -storepass "$PASS" -keypass "$PASS" -dname "CN=Episteme Local"
+            keytool -genkeypair -v \
+              -keystore "$RUNNER_TEMP/release.jks" \
+              -alias episteme \
+              -keyalg RSA -keysize 2048 \
+              -validity 10000 \
+              -storepass "$PASS" -keypass "$PASS" \
+              -dname "CN=Episteme Local"
           fi
           {
             echo "MYAPP_RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks"
