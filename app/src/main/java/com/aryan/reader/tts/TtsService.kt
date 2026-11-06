@@ -1,0 +1,1722 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.tts
+
+import android.Manifest
+import com.aryan.reader.appCheckHeaderMap
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.IconCompat
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.FlagSet
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.CommandButton
+import androidx.media3.session.DefaultMediaNotificationProvider
+import androidx.media3.session.MediaNotification
+import androidx.media3.session.MediaSession
+import androidx.media3.session.MediaSessionService
+import com.aryan.reader.R
+import com.aryan.reader.GEMINI_CLOUD_TTS_MODEL
+import com.aryan.reader.loadAiByokSettings
+import com.aryan.reader.logMediaTransport
+import com.aryan.reader.pinPostedPlaybackNotification
+import com.aryan.reader.MediaNotificationBitmapLoader
+import com.aryan.reader.mediaButtonKeyEventDetails
+import com.aryan.reader.playerTransportSnapshot
+import com.aryan.reader.tts.TtsPlaybackManager.TtsMode
+import com.aryan.reader.audiobook.BookTtsSessionCoordinator
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import timber.log.Timber
+import java.io.File
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
+import com.google.common.collect.ImmutableList
+import java.util.concurrent.CopyOnWriteArraySet
+import kotlin.time.Duration.Companion.milliseconds
+
+data class WordTimingInfo(val word: String, val startTime: Double)
+
+data class TtsAudioData(
+    val audioFile: File?,
+    val serverText: String?,
+    val wordTimings: List<WordTimingInfo>?,
+    val error: String? = null,
+    val streamUri: String? = null,
+    val costMicros: Long = 0L
+)
+
+/** Carries a stable cloud error (e.g. INSUFFICIENT_CREDITS) through catch blocks. */
+class TtsCloudException(val ttsError: String) : Exception(ttsError)
+
+data class PageCharacterRange(
+    val pageInChapter: Int,
+    val cfi: String,
+    val startOffset: Int,
+    val endOffset: Int
+)
+
+class ConcurrentInputStream : java.io.InputStream() {
+    private val queue = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    private var currentBuffer: ByteArray? = null
+    private var bufferPos = 0
+    private var eofReached = false
+
+    var isFinished = false
+        private set
+
+    var isClosed = false
+        private set
+
+    fun write(data: ByteArray) {
+        if (!isClosed) queue.offer(data)
+    }
+
+    override fun read(): Int {
+        val b = ByteArray(1)
+        val readCount = read(b, 0, 1)
+        return if (readCount == -1) -1 else b[0].toInt() and 0xFF
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (eofReached) {
+            isFinished = true
+            return -1
+        }
+        if (len == 0) return 0
+
+        if (currentBuffer == null || bufferPos >= currentBuffer!!.size) {
+            try {
+                // Blocks here safely until data arrives
+                currentBuffer = queue.take()
+                bufferPos = 0
+                if (currentBuffer!!.isEmpty()) {
+                    eofReached = true
+                    isFinished = true
+                    return -1
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return -1
+            }
+        }
+
+        val available = currentBuffer!!.size - bufferPos
+        val toCopy = len.coerceAtMost(available)
+        System.arraycopy(currentBuffer!!, bufferPos, b, off, toCopy)
+        bufferPos += toCopy
+        return toCopy
+    }
+
+    override fun close() {
+        if (!isClosed) {
+            isClosed = true
+            queue.offer(ByteArray(0)) // Send EOF marker
+        }
+    }
+}
+
+object StreamRegistry {
+    private val streams = java.util.concurrent.ConcurrentHashMap<String, java.io.InputStream>()
+    private val totalBytesMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val finishedMap = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    fun register(id: String, stream: java.io.InputStream) {
+        streams[id] = stream
+        totalBytesMap[id] = 0L
+        finishedMap[id] = false
+    }
+    fun get(id: String): java.io.InputStream? = streams[id]
+
+    fun markFinished(id: String, totalBytes: Long) {
+        totalBytesMap[id] = totalBytes
+        finishedMap[id] = true
+    }
+    fun getStreamMetadata(id: String): Pair<Boolean, Long> {
+        return (finishedMap[id] ?: false) to (totalBytesMap[id] ?: 0L)
+    }
+
+    fun remove(id: String) {
+        streams.remove(id)?.let { try { it.close() } catch (_: Exception) {} }
+        totalBytesMap.remove(id)
+        finishedMap.remove(id)
+    }
+    fun clear() {
+        streams.values.forEach { try { it.close() } catch (_: Exception) {} }
+        streams.clear()
+    }
+}
+
+@UnstableApi
+class InputStreamDataSource : androidx.media3.datasource.BaseDataSource(true) {
+    private var inputStream: java.io.InputStream? = null
+    private var opened = false
+    private var uri: android.net.Uri? = null
+    private var bytesReadTotal: Long = 0
+
+    override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long {
+        uri = dataSpec.uri
+        Timber.tag("TTS_CLOUD_DIAG").d("InputStreamDataSource.open called for $uri, position=${dataSpec.position}")
+
+        val streamId = uri?.host ?: uri?.lastPathSegment ?: throw java.io.IOException("No stream ID")
+        val stream = StreamRegistry.get(streamId) ?: throw java.io.IOException("Stream not found")
+
+        if (stream is ConcurrentInputStream && stream.isFinished) {
+            Timber.tag("TTS_CLOUD_DIAG").d("InputStreamDataSource.open returning 0 bytes for finished stream to prevent retry.")
+            opened = true
+            transferInitializing(dataSpec)
+            transferStarted(dataSpec)
+            return 0
+        }
+
+        inputStream = stream
+        opened = true
+        transferInitializing(dataSpec)
+
+        if (dataSpec.position > bytesReadTotal) {
+            val toSkip = dataSpec.position - bytesReadTotal
+            var skipped = 0L
+            while (skipped < toSkip) {
+                val s = inputStream?.skip(toSkip - skipped) ?: 0L
+                if (s <= 0L) break
+                skipped += s
+            }
+            bytesReadTotal += skipped
+        }
+
+        transferStarted(dataSpec)
+        return C.LENGTH_UNSET.toLong()
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length == 0) return 0
+        return try {
+            val bytesRead = inputStream?.read(buffer, offset, length) ?: -1
+            if (bytesRead == -1) {
+                Timber.tag("TTS_CLOUD_DIAG").d("InputStreamDataSource EOF reached for $uri")
+                return C.RESULT_END_OF_INPUT
+            }
+            bytesReadTotal += bytesRead
+            bytesTransferred(bytesRead)
+            bytesRead
+        } catch (e: java.io.IOException) {
+            Timber.tag("TTS_CLOUD_DIAG").e(e, "Stream read interrupted/broken for $uri")
+            C.RESULT_END_OF_INPUT
+        }
+    }
+
+    override fun getUri(): android.net.Uri? = uri
+
+    override fun close() {
+        if (opened) {
+            opened = false
+            transferEnded()
+        }
+    }
+}
+
+private const val TTS_FOREGROUND_CHANNEL_ID = "tts_playback"
+// Keep this aligned with Media3's default notification ID so playback updates replace the fallback.
+private const val TTS_FOREGROUND_NOTIFICATION_ID = 1001
+private const val TTS_FOREGROUND_IDLE_GRACE_MS = 15_000L
+private const val ACTION_TTS_NOTIFICATION_PREVIOUS_CHUNK = "com.aryan.reader.tts.NOTIFICATION_PREVIOUS_CHUNK"
+private const val ACTION_TTS_NOTIFICATION_NEXT_CHUNK = "com.aryan.reader.tts.NOTIFICATION_NEXT_CHUNK"
+const val ACTION_START_BOOK_TTS = "com.aryan.reader.tts.START_BOOK_AUDIOBOOK"
+const val ACTION_BOOK_TTS_PREVIOUS_CHAPTER = "com.aryan.reader.tts.BOOK_AUDIOBOOK_PREVIOUS_CHAPTER"
+const val ACTION_BOOK_TTS_NEXT_CHAPTER = "com.aryan.reader.tts.BOOK_AUDIOBOOK_NEXT_CHAPTER"
+const val ACTION_BOOK_TTS_SELECT_CHAPTER = "com.aryan.reader.tts.BOOK_AUDIOBOOK_SELECT_CHAPTER"
+const val ACTION_BOOK_TTS_SLEEP_TIMER = "com.aryan.reader.tts.BOOK_AUDIOBOOK_SLEEP_TIMER"
+const val ACTION_BOOK_TTS_CANCEL_SLEEP_TIMER = "com.aryan.reader.tts.BOOK_AUDIOBOOK_CANCEL_SLEEP_TIMER"
+const val EXTRA_BOOK_TTS_BOOK_ID = "book_tts_book_id"
+const val EXTRA_BOOK_TTS_START_POLICY = "book_tts_start_policy"
+const val EXTRA_BOOK_TTS_CHAPTER_INDEX = "book_tts_chapter_index"
+const val EXTRA_BOOK_TTS_SLEEP_MINUTES = "book_tts_sleep_minutes"
+const val EXTRA_BOOK_TTS_AUTH_TOKEN = "book_tts_auth_token"
+private const val TTS_NOTIFICATION_PREVIOUS_REQUEST_CODE = 4208
+private const val TTS_NOTIFICATION_NEXT_REQUEST_CODE = 4209
+
+internal fun ensureTtsNotificationChannel(context: android.content.Context) {
+    val notificationManager = context.getSystemService(NotificationManager::class.java)
+    val channel = NotificationChannel(
+        TTS_FOREGROUND_CHANNEL_ID,
+        context.getString(R.string.tts_notification_channel_name),
+        NotificationManager.IMPORTANCE_LOW
+    ).apply {
+        description = context.getString(R.string.tts_notification_channel_desc)
+        setShowBadge(false)
+    }
+    notificationManager.createNotificationChannel(channel)
+}
+
+@UnstableApi
+private class TtsMediaNotificationProvider(
+    context: android.content.Context
+) : DefaultMediaNotificationProvider(
+    context,
+    { _ -> TTS_FOREGROUND_NOTIFICATION_ID },
+    TTS_FOREGROUND_CHANNEL_ID,
+    R.string.tts_notification_channel_name
+) {
+    private val appContext = context.applicationContext
+
+    override fun addNotificationActions(
+        mediaSession: MediaSession,
+        mediaButtons: ImmutableList<CommandButton>,
+        builder: NotificationCompat.Builder,
+        actionFactory: MediaNotification.ActionFactory
+    ): IntArray {
+        val actions = super.addNotificationActions(
+            mediaSession,
+            mediaButtons,
+            builder,
+            TtsNotificationActionFactory(appContext, actionFactory)
+        )
+        logMediaTransport(
+            "tts-notification-actions",
+            "buttons=${mediaButtons.size} names=${mediaButtons.joinToString("|") { it.displayName.toString() }} " +
+                "actions=${actions.joinToString()} ${playerTransportSnapshot(mediaSession.player)}"
+        )
+        return actions
+    }
+}
+
+@UnstableApi
+private class TtsNotificationActionFactory(
+    private val context: android.content.Context,
+    private val delegate: MediaNotification.ActionFactory
+) : MediaNotification.ActionFactory {
+    override fun createMediaAction(
+        mediaSession: MediaSession,
+        icon: IconCompat,
+        title: CharSequence,
+        command: Int
+    ): NotificationCompat.Action {
+        return when (command) {
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> createChunkSkipAction(
+                iconResId = R.drawable.skip_previous,
+                title = title,
+                action = ACTION_TTS_NOTIFICATION_PREVIOUS_CHUNK,
+                requestCode = TTS_NOTIFICATION_PREVIOUS_REQUEST_CODE
+            )
+            Player.COMMAND_SEEK_TO_NEXT,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> createChunkSkipAction(
+                iconResId = R.drawable.skip_next,
+                title = title,
+                action = ACTION_TTS_NOTIFICATION_NEXT_CHUNK,
+                requestCode = TTS_NOTIFICATION_NEXT_REQUEST_CODE
+            )
+            else -> delegate.createMediaAction(mediaSession, icon, title, command)
+        }
+    }
+
+    override fun createCustomAction(
+        mediaSession: MediaSession,
+        icon: IconCompat,
+        title: CharSequence,
+        customAction: String,
+        extras: android.os.Bundle
+    ): NotificationCompat.Action {
+        return delegate.createCustomAction(mediaSession, icon, title, customAction, extras)
+    }
+
+    override fun createCustomActionFromCustomCommandButton(
+        mediaSession: MediaSession,
+        customCommandButton: CommandButton
+    ): NotificationCompat.Action {
+        return delegate.createCustomActionFromCustomCommandButton(mediaSession, customCommandButton)
+    }
+
+    override fun createMediaActionPendingIntent(mediaSession: MediaSession, command: Int): PendingIntent {
+        return delegate.createMediaActionPendingIntent(mediaSession, command)
+    }
+
+    override fun createNotificationDismissalIntent(mediaSession: MediaSession): PendingIntent {
+        return delegate.createNotificationDismissalIntent(mediaSession)
+    }
+
+    private fun createChunkSkipAction(
+        iconResId: Int,
+        title: CharSequence,
+        action: String,
+        requestCode: Int
+    ): NotificationCompat.Action {
+        val intent = Intent(context, TtsService::class.java).apply {
+            this.action = action
+            setPackage(context.packageName)
+        }
+        val pendingIntent = PendingIntent.getService(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Action.Builder(
+            IconCompat.createWithResource(context, iconResId),
+            title,
+            pendingIntent
+        )
+            .setShowsUserInterface(false)
+            .build()
+    }
+}
+
+@UnstableApi
+private class TtsSessionPlayer(
+    player: Player,
+    private val canSkipToPreviousChunk: () -> Boolean,
+    private val canSkipToNextChunk: () -> Boolean,
+    private val skipToPreviousChunk: () -> Unit,
+    private val skipToNextChunk: () -> Unit,
+    private val isCurrentChunkStreaming: () -> Boolean,
+    private val currentChunkDurationForNotification: (Long) -> Long,
+    private val isDirectLocalPlayback: () -> Boolean,
+    private val localIsPlaying: () -> Boolean,
+    private val localPlayWhenReady: () -> Boolean,
+    private val localPlaybackState: () -> Int,
+    private val playDirectLocal: () -> Unit,
+    private val pauseDirectLocal: () -> Unit,
+    private val stopDirectLocal: () -> Unit
+) : ForwardingPlayer(player) {
+    private data class LocalPlayerSnapshot(
+        val playbackState: Int,
+        val playWhenReady: Boolean,
+        val isPlaying: Boolean,
+        val canSkipPrevious: Boolean,
+        val canSkipNext: Boolean
+    )
+
+    private val applicationHandler = Handler(player.applicationLooper)
+    private val registeredListeners = CopyOnWriteArraySet<Player.Listener>()
+    private var lastLocalSnapshot: LocalPlayerSnapshot? = null
+
+    override fun addListener(listener: Player.Listener) {
+        registeredListeners += listener
+        super.addListener(listener)
+    }
+
+    override fun removeListener(listener: Player.Listener) {
+        registeredListeners -= listener
+        super.removeListener(listener)
+    }
+
+    fun invalidateDirectLocalState() {
+        if (Looper.myLooper() != applicationHandler.looper) {
+            applicationHandler.post(::invalidateDirectLocalState)
+            return
+        }
+        if (!isDirectLocalPlayback()) {
+            lastLocalSnapshot = null
+            return
+        }
+        val snapshot = LocalPlayerSnapshot(
+            playbackState = localPlaybackState(),
+            playWhenReady = localPlayWhenReady(),
+            isPlaying = localIsPlaying(),
+            canSkipPrevious = canSkipToPreviousChunk(),
+            canSkipNext = canSkipToNextChunk()
+        )
+        val previous = lastLocalSnapshot
+        if (snapshot == previous) return
+        lastLocalSnapshot = snapshot
+
+        val eventBuilder = FlagSet.Builder()
+        if (previous?.playbackState != snapshot.playbackState) {
+            eventBuilder.add(EVENT_PLAYBACK_STATE_CHANGED)
+            registeredListeners.forEach { it.onPlaybackStateChanged(snapshot.playbackState) }
+        }
+        if (previous?.playWhenReady != snapshot.playWhenReady) {
+            eventBuilder.add(EVENT_PLAY_WHEN_READY_CHANGED)
+            registeredListeners.forEach {
+                it.onPlayWhenReadyChanged(
+                    snapshot.playWhenReady,
+                    PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST
+                )
+            }
+        }
+        if (previous?.isPlaying != snapshot.isPlaying) {
+            eventBuilder.add(EVENT_IS_PLAYING_CHANGED)
+            registeredListeners.forEach { it.onIsPlayingChanged(snapshot.isPlaying) }
+        }
+        if (previous?.canSkipPrevious != snapshot.canSkipPrevious ||
+            previous.canSkipNext != snapshot.canSkipNext
+        ) {
+            eventBuilder.add(EVENT_AVAILABLE_COMMANDS_CHANGED)
+            val commands = availableCommands
+            registeredListeners.forEach { it.onAvailableCommandsChanged(commands) }
+        }
+        val events = Player.Events(eventBuilder.build())
+        if (events.size() > 0) {
+            registeredListeners.forEach { it.onEvents(this, events) }
+        }
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "Direct local player invalidated. state=${snapshot.playbackState}, playWhenReady=${snapshot.playWhenReady}, isPlaying=${snapshot.isPlaying}, previous=${snapshot.canSkipPrevious}, next=${snapshot.canSkipNext}"
+        )
+    }
+
+    override fun getAvailableCommands(): Player.Commands {
+        val builder = super.getAvailableCommands().buildUpon()
+        if (canSkipToPreviousChunk()) {
+            builder
+                .add(COMMAND_SEEK_TO_PREVIOUS)
+                .add(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        } else {
+            builder
+                .remove(COMMAND_SEEK_TO_PREVIOUS)
+                .remove(COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        }
+        if (canSkipToNextChunk()) {
+            builder
+                .add(COMMAND_SEEK_TO_NEXT)
+                .add(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        } else {
+            builder
+                .remove(COMMAND_SEEK_TO_NEXT)
+                .remove(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        }
+        if (isDirectLocalPlayback()) {
+            builder
+                .remove(COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .remove(COMMAND_SEEK_TO_DEFAULT_POSITION)
+                .remove(COMMAND_SEEK_TO_MEDIA_ITEM)
+                .remove(COMMAND_SEEK_BACK)
+                .remove(COMMAND_SEEK_FORWARD)
+        }
+        return builder.build()
+    }
+
+    override fun play() {
+        logMediaTransport(
+            "tts-session-player-play",
+            "directLocal=${isDirectLocalPlayback()} localPlaying=${localIsPlaying()} ${playerTransportSnapshot(this)}"
+        )
+        if (isDirectLocalPlayback()) playDirectLocal() else super.play()
+    }
+
+    override fun pause() {
+        logMediaTransport(
+            "tts-session-player-pause",
+            "directLocal=${isDirectLocalPlayback()} localPlaying=${localIsPlaying()} ${playerTransportSnapshot(this)}"
+        )
+        if (isDirectLocalPlayback()) pauseDirectLocal() else super.pause()
+    }
+
+    override fun stop() {
+        logMediaTransport(
+            "tts-session-player-stop",
+            "directLocal=${isDirectLocalPlayback()} localPlaying=${localIsPlaying()} ${playerTransportSnapshot(this)}"
+        )
+        // A transport stop (notification dismissal, headset stop, task dismissal) always ends the
+        // complete TTS session; it must never leave playback running without its session.
+        stopDirectLocal()
+    }
+
+    override fun getPlayWhenReady(): Boolean =
+        if (isDirectLocalPlayback()) localPlayWhenReady() else super.getPlayWhenReady()
+
+    override fun isPlaying(): Boolean =
+        if (isDirectLocalPlayback()) localIsPlaying() else super.isPlaying()
+
+    override fun getPlaybackState(): Int =
+        if (isDirectLocalPlayback()) localPlaybackState() else super.getPlaybackState()
+
+    override fun isCurrentMediaItemSeekable(): Boolean =
+        if (isDirectLocalPlayback()) false else super.isCurrentMediaItemSeekable()
+
+    override fun isCommandAvailable(command: Int): Boolean {
+        return getAvailableCommands().contains(command)
+    }
+
+    override fun hasPreviousMediaItem(): Boolean {
+        return canSkipToPreviousChunk() || super.hasPreviousMediaItem()
+    }
+
+    override fun hasNextMediaItem(): Boolean {
+        return canSkipToNextChunk() || super.hasNextMediaItem()
+    }
+
+    override fun seekToPrevious() {
+        skipToPreviousChunk()
+    }
+
+    override fun seekToPreviousMediaItem() {
+        skipToPreviousChunk()
+    }
+
+    override fun seekToNext() {
+        skipToNextChunk()
+    }
+
+    override fun seekToNextMediaItem() {
+        skipToNextChunk()
+    }
+
+    override fun getDuration(): Long {
+        if (isDirectLocalPlayback()) return C.TIME_UNSET
+        return notificationDurationMs().takeIf { it != C.TIME_UNSET } ?: super.getDuration()
+    }
+
+    override fun getCurrentPosition(): Long =
+        if (isDirectLocalPlayback()) 0L else super.getCurrentPosition()
+
+    override fun getBufferedPosition(): Long {
+        if (isDirectLocalPlayback()) return 0L
+        return adjustedStreamingBufferedPosition(super.getBufferedPosition())
+    }
+
+    override fun getContentDuration(): Long {
+        return getDuration()
+    }
+
+    override fun getContentBufferedPosition(): Long {
+        return getBufferedPosition()
+    }
+
+    override fun getBufferedPercentage(): Int {
+        val duration = notificationDurationMs()
+        if (!isCurrentChunkStreaming() || duration == C.TIME_UNSET || duration <= 0L) {
+            return super.getBufferedPercentage()
+        }
+        val bufferedPosition = getBufferedPosition().coerceIn(0L, duration)
+        return ((bufferedPosition * 100L) / duration).toInt().coerceIn(0, 100)
+    }
+
+    override fun isCurrentMediaItemDynamic(): Boolean {
+        return if (isCurrentChunkStreaming()) false else super.isCurrentMediaItemDynamic()
+    }
+
+    private fun notificationDurationMs(): Long {
+        val currentPositionMs = super.getCurrentPosition().coerceAtLeast(0L)
+        return currentChunkDurationForNotification(currentPositionMs)
+    }
+
+    private fun adjustedStreamingBufferedPosition(delegatePositionMs: Long): Long {
+        val duration = notificationDurationMs()
+        if (!isCurrentChunkStreaming() || duration == C.TIME_UNSET || duration <= 0L) {
+            return delegatePositionMs
+        }
+        val currentPositionMs = super.getCurrentPosition().coerceAtLeast(0L)
+        val bufferedPositionMs = if (delegatePositionMs == C.TIME_UNSET || delegatePositionMs < currentPositionMs) {
+            currentPositionMs
+        } else {
+            delegatePositionMs
+        }
+        return bufferedPositionMs.coerceIn(0L, duration)
+    }
+}
+
+@UnstableApi
+class TtsService : MediaSessionService() {
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var mediaSession: MediaSession? = null
+    private lateinit var player: ExoPlayer
+    private lateinit var playbackManager: TtsPlaybackManager
+    private lateinit var cacheManager: TtsCacheManager
+    private lateinit var bookTtsCoordinator: BookTtsSessionCoordinator
+    private var foregroundNotificationShown = false
+    private var foregroundPlaybackExpected = false
+    private var foregroundIdleJob: Job? = null
+    private var foregroundBookTitle: String? = null
+    private var foregroundChapterTitle: String? = null
+    private var bookSleepTimerJob: Job? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action != null) {
+            val keyEventDetails = if (intent.action == Intent.ACTION_MEDIA_BUTTON) {
+                " ${mediaButtonKeyEventDetails(intent)}"
+            } else {
+                ""
+            }
+            logMediaTransport(
+                "tts-on-start-command",
+                "action=${intent.action} startId=$startId$keyEventDetails " +
+                    playerTransportSnapshot(if (::player.isInitialized) player else null)
+            )
+        }
+        when (intent?.action) {
+            ACTION_START_BOOK_TTS -> {
+                val bookId = intent.getStringExtra(EXTRA_BOOK_TTS_BOOK_ID)
+                logMediaTransport(
+                    "tts-book-start-command",
+                    "bookId=$bookId policy=${intent.getStringExtra(EXTRA_BOOK_TTS_START_POLICY)} " +
+                        "chapter=${intent.getIntExtra(EXTRA_BOOK_TTS_CHAPTER_INDEX, -1)} " +
+                        "coordinatorReady=${::bookTtsCoordinator.isInitialized}"
+                )
+                if (!bookId.isNullOrBlank() && ::bookTtsCoordinator.isInitialized) {
+                    showPreparingForegroundNotification("book-audiobook-start")
+                    bookTtsCoordinator.start(
+                        bookId = bookId,
+                        startPolicy = intent.getStringExtra(EXTRA_BOOK_TTS_START_POLICY)
+                            ?: BookTtsSessionCoordinator.START_RESUME,
+                        selectedChapterIndex = intent.getIntExtra(EXTRA_BOOK_TTS_CHAPTER_INDEX, -1).takeIf { it >= 0 },
+                        authToken = intent.getStringExtra(EXTRA_BOOK_TTS_AUTH_TOKEN)
+                    )
+                }
+                return START_STICKY
+            }
+            ACTION_BOOK_TTS_PREVIOUS_CHAPTER -> {
+                if (::bookTtsCoordinator.isInitialized) bookTtsCoordinator.skipChapter(-1)
+                return START_STICKY
+            }
+            ACTION_BOOK_TTS_NEXT_CHAPTER -> {
+                if (::bookTtsCoordinator.isInitialized) bookTtsCoordinator.skipChapter(1)
+                return START_STICKY
+            }
+            ACTION_BOOK_TTS_SELECT_CHAPTER -> {
+                val chapter = intent.getIntExtra(EXTRA_BOOK_TTS_CHAPTER_INDEX, -1)
+                if (chapter >= 0 && ::bookTtsCoordinator.isInitialized) bookTtsCoordinator.selectChapter(chapter)
+                return START_STICKY
+            }
+            ACTION_BOOK_TTS_SLEEP_TIMER -> {
+                bookSleepTimerJob?.cancel()
+                bookSleepTimerJob = null
+
+                val minutes = intent.getIntExtra(
+                    EXTRA_BOOK_TTS_SLEEP_MINUTES,
+                    0
+                )
+
+                if (minutes > 0) {
+                    bookSleepTimerJob = scope.launch {
+                        var remainingSeconds = minutes * 60
+                        while (remainingSeconds > 0) {
+                            delay(1_000.milliseconds)
+                            remainingSeconds = com.aryan.reader.shared.advanceSharedSleepTimer(
+                                remainingSeconds,
+                                ::player.isInitialized && player.isPlaying,
+                            )
+                        }
+
+                        bookSleepTimerJob = null
+
+                        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+                            "Book TTS sleep timer expired after $minutes minute(s)."
+                        )
+
+                        if (::bookTtsCoordinator.isInitialized) {
+                            bookTtsCoordinator.stopForSleepTimer()
+                        } else {
+                            stopSelf()
+                        }
+                    }
+                }
+
+                return START_STICKY
+            }
+
+            ACTION_BOOK_TTS_CANCEL_SLEEP_TIMER -> {
+                bookSleepTimerJob?.cancel()
+                bookSleepTimerJob = null
+
+                Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+                    "Book TTS sleep timer cancelled."
+                )
+
+                return START_STICKY
+            }
+            ACTION_TTS_NOTIFICATION_PREVIOUS_CHUNK -> {
+                Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("Notification previous chunk action received.")
+                Timber.tag(TTS_CHUNK_NAV_DIAG_TAG).i(
+                    "serviceAction=notification-previous hasPlaybackManager=${::playbackManager.isInitialized} playerInitialized=${::player.isInitialized}"
+                )
+                if (::playbackManager.isInitialized) {
+                    playbackManager.skipToPreviousChunkFromTransport()
+                }
+                return START_STICKY
+            }
+            ACTION_TTS_NOTIFICATION_NEXT_CHUNK -> {
+                Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("Notification next chunk action received.")
+                Timber.tag(TTS_CHUNK_NAV_DIAG_TAG).i(
+                    "serviceAction=notification-next hasPlaybackManager=${::playbackManager.isInitialized} playerInitialized=${::player.isInitialized}"
+                )
+                if (::playbackManager.isInitialized) {
+                    playbackManager.skipToNextChunkFromTransport()
+                }
+                return START_STICKY
+            }
+        }
+
+        val result = super.onStartCommand(intent, flags, startId)
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "onStartCommand. action=${intent?.action}, startId=$startId, result=$result"
+        )
+        val hasPreparedMedia = ::player.isInitialized && player.mediaItemCount > 0
+        if (!hasPreparedMedia) {
+            showPreparingForegroundNotification("onStartCommand")
+            scheduleForegroundIdleStop(startId)
+        }
+        return result
+    }
+
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        val hasNotificationPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        val playerState = if (::player.isInitialized) {
+            "playbackState=${player.playbackState}, isPlaying=${player.isPlaying}, playWhenReady=${player.playWhenReady}, mediaItems=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}"
+        } else {
+            "player=uninitialized"
+        }
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "onUpdateNotification called. startInForegroundRequired=$startInForegroundRequired, hasPostNotifications=$hasNotificationPermission, $playerState"
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            Timber.tag(TTS_NOTIFICATION_DIAG_TAG).w(
+                "POST_NOTIFICATIONS is missing, but MediaSession notifications are exempt. Delegating notification update."
+            )
+        }
+
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("Delegating notification update to MediaSessionService.")
+        logMediaTransport(
+            "tts-on-update-notification",
+            "startInForegroundRequired=$startInForegroundRequired " +
+                playerTransportSnapshot(if (::player.isInitialized) player else null)
+        )
+        super.onUpdateNotification(session, startInForegroundRequired)
+        pinPostedPlaybackNotification(
+            context = this,
+            notificationId = TTS_FOREGROUND_NOTIFICATION_ID,
+            playWhenReady = session.player.playWhenReady,
+            playbackState = session.player.playbackState,
+            diagnosticsTag = TTS_NOTIFICATION_DIAG_TAG
+        )
+    }
+
+    private fun showPreparingForegroundNotification(
+        reason: String,
+        bookTitle: String? = foregroundBookTitle,
+        chapterTitle: String? = foregroundChapterTitle
+    ) {
+        foregroundBookTitle = bookTitle
+        foregroundChapterTitle = chapterTitle
+        ensureTtsNotificationChannel()
+
+        try {
+            val notification = buildPreparingForegroundNotification(bookTitle, chapterTitle)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    TTS_FOREGROUND_NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(TTS_FOREGROUND_NOTIFICATION_ID, notification)
+            }
+            foregroundNotificationShown = true
+            Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("Fallback foreground notification shown. reason=$reason")
+        } catch (e: Exception) {
+            Timber.tag(TTS_NOTIFICATION_DIAG_TAG).e(e, "Failed to show fallback foreground notification. reason=$reason")
+            stopSelf()
+        }
+    }
+
+    private fun buildPreparingForegroundNotification(bookTitle: String?, chapterTitle: String?): Notification {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        val contentIntent = launchIntent?.let {
+            PendingIntent.getActivity(this, 0, it, pendingIntentFlags())
+        }
+        val title = bookTitle?.takeIf { it.isNotBlank() } ?: getString(R.string.app_name)
+        val text = chapterTitle?.takeIf { it.isNotBlank() }
+            ?.let { getString(R.string.tts_notification_preparing_chapter, it) }
+            ?: getString(R.string.tts_notification_preparing)
+
+        return NotificationCompat.Builder(this, TTS_FOREGROUND_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setOngoing(true)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .apply {
+                if (contentIntent != null) {
+                    setContentIntent(contentIntent)
+                }
+            }
+            .build()
+    }
+
+    private fun ensureTtsNotificationChannel() {
+        ensureTtsNotificationChannel(this)
+    }
+
+    private fun pendingIntentFlags(): Int {
+        return PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    }
+
+    private fun scheduleForegroundIdleStop(startId: Int) {
+        foregroundIdleJob?.cancel()
+        bookSleepTimerJob?.cancel()
+        foregroundIdleJob = scope.launch {
+            delay(TTS_FOREGROUND_IDLE_GRACE_MS.milliseconds)
+            val playbackInactive = !::player.isInitialized ||
+                (!player.isPlaying && !player.playWhenReady && player.mediaItemCount == 0)
+            if (!foregroundPlaybackExpected && playbackInactive) {
+                Timber.tag(TTS_NOTIFICATION_DIAG_TAG).w(
+                    "Foreground service start did not become an active TTS session. Stopping fallback foreground."
+                )
+                stopTtsForeground()
+                stopSelf(startId)
+            }
+        }
+    }
+
+    // Media3 confines ExoPlayer (and the start/stopForeground bookkeeping around it) to
+    // the application thread, but TtsPlaybackManager invokes the session callbacks below
+    // from worker coroutines (e.g. the first-chunk failure path on DefaultDispatcher), which
+    // crashes in ExoPlayerImpl.verifyApplicationThread. Hop when off-thread (same pattern as
+    // TtsPlaybackManager.updateSessionControls); run inline when already on the app thread.
+    private fun runOnApplicationThread(block: () -> Unit) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            scope.launch { block() }
+        } else {
+            block()
+        }
+    }
+
+    private fun onPlaybackSessionPreparing(bookTitle: String?, chapterTitle: String?) {
+        foregroundPlaybackExpected = true
+        foregroundIdleJob?.cancel()
+        logMediaTransport(
+            "tts-foreground-preparing",
+            "book=$bookTitle chapter=$chapterTitle " +
+                playerTransportSnapshot(if (::player.isInitialized) player else null)
+        )
+        showPreparingForegroundNotification("START_TTS_COMMAND", bookTitle, chapterTitle)
+    }
+
+    private fun onPlaybackSessionStopped() {
+        foregroundPlaybackExpected = false
+        foregroundIdleJob?.cancel()
+        foregroundBookTitle = null
+        foregroundChapterTitle = null
+        logMediaTransport(
+            "tts-foreground-stopped",
+            playerTransportSnapshot(if (::player.isInitialized) player else null)
+        )
+        stopTtsForeground()
+    }
+
+    private fun stopTtsForeground() {
+        if (!foregroundNotificationShown) return
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: Exception) {
+            Timber.tag(TTS_NOTIFICATION_DIAG_TAG).w(e, "Failed to stop fallback foreground notification.")
+        } finally {
+            foregroundNotificationShown = false
+        }
+    }
+
+    private val okHttpClient = OkHttpClient.Builder().build()
+    private val liveClient by lazy {
+        GeminiLiveClient(okHttpClient) { errorMsg ->
+            if (::playbackManager.isInitialized) {
+                playbackManager.forceStopWithError(errorMsg)
+            }
+        }
+    }
+
+    // Stateless REST clients for the current (non-Live) Cloud TTS paths.
+    // Longer read timeout: one request synthesizes a whole chunk.
+    private val restHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
+    private val fishRestClient by lazy { FishRestTtsClient(restHttpClient) }
+    private val geminiRestClient by lazy { GeminiRestTtsClient(restHttpClient) }
+
+    /**
+     * Fish Audio synthesis over plain HTTP. Two modes share the wire format:
+     * - credited Cloud TTS via the worker (POST {worker}/v2/tts, Firebase token)
+     * - BYOK via api.fish.audio directly (user's Fish key, `model` header)
+     * Returns raw mp3 bytes; callers run on Dispatchers.IO (blocking calls).
+     */
+    class FishRestTtsClient(private val client: OkHttpClient) {
+        data class Synthesis(
+            val audioBytes: ByteArray?,
+            val error: String?,
+            val costMicros: Long = 0L,
+            val retryAfterSeconds: Int = 0
+        )
+
+        private fun spendGuardSynthesis(code: Int, body: String): Synthesis {
+            val parsed = com.aryan.reader.shared.parseSpendGuardError(body)
+            if (parsed != null) {
+                return Synthesis(
+                    null,
+                    com.aryan.reader.shared.spendGuardSentinel(parsed.first, parsed.second),
+                    retryAfterSeconds = parsed.second
+                )
+            }
+            return Synthesis(null, "Fish TTS error $code")
+        }
+
+        private fun post(url: String, json: String, headers: Map<String, String>): Synthesis {
+            val body = json.toRequestBody("application/json".toMediaType())
+            val builder = Request.Builder().url(url).post(body)
+            headers.forEach { (name, value) -> builder.header(name, value) }
+            client.newCall(builder.build()).execute().use { response ->
+                if (response.code == 402) {
+                    val detail = runCatching { response.body?.string().orEmpty() }.getOrDefault("")
+                    if (detail.isBlank()) return Synthesis(null, "INSUFFICIENT_CREDITS")
+                    // 402 is either an empty wallet (legacy INSUFFICIENT_CREDITS)
+                    // or the daily spend fraud cap (DAILY_SPEND_LIMIT).
+                    val parsed = com.aryan.reader.shared.parseSpendGuardError(detail)
+                    if (parsed != null && parsed.first == "DAILY_SPEND_LIMIT") {
+                        return Synthesis(
+                            null,
+                            com.aryan.reader.shared.spendGuardSentinel(parsed.first, parsed.second),
+                            retryAfterSeconds = parsed.second
+                        )
+                    }
+                    return Synthesis(null, "INSUFFICIENT_CREDITS")
+                }
+                if (response.code == 429) {
+                    val detail = runCatching { response.body?.string().orEmpty() }.getOrDefault("")
+                    return spendGuardSynthesis(429, detail.ifBlank { "{\"error\":\"RATE_LIMITED\",\"retry_after_seconds\":30}" })
+                }
+                if (!response.isSuccessful) {
+                    val detail = runCatching { response.body?.string().orEmpty().take(300) }.getOrDefault("")
+                    Timber.tag("TTS_CLOUD_DIAG").e("Fish TTS failed HTTP ${response.code}: $detail")
+                    return Synthesis(null, "Fish TTS error ${response.code}")
+                }
+                // Per-chunk USD cost for the overlay session-spend line.
+                val costMicros = response.header("X-Tts-Cost-Micros")?.toLongOrNull() ?: 0L
+                val bytes = response.body?.bytes()
+                if (bytes == null || bytes.isEmpty()) return Synthesis(null, "Empty audio response")
+                return Synthesis(bytes, null, costMicros = costMicros)
+            }
+        }
+
+        fun synthesizeViaWorker(baseUrl: String, firebaseToken: String, text: String, voiceId: String): Synthesis {
+            val url = baseUrl.trimEnd('/') + fishWorkerTtsPath
+            val json = JSONObject().apply {
+                put("text", text)
+                put("voiceId", voiceId)
+                put("format", "mp3")
+                put("latency", "normal")
+            }.toString()
+            return post(url, json, mapOf("Authorization" to "Bearer $firebaseToken") + appCheckHeaderMap())
+        }
+
+        fun synthesizeSampleViaWorker(baseUrl: String, firebaseToken: String, text: String, voiceId: String): Synthesis {
+            val url = baseUrl.trimEnd('/') + fishWorkerTtsSamplePath
+            val json = JSONObject().apply {
+                put("text", text)
+                put("voiceId", voiceId)
+                put("format", "mp3")
+                put("latency", "balanced")
+            }.toString()
+            return post(url, json, mapOf("Authorization" to "Bearer $firebaseToken") + appCheckHeaderMap())
+        }
+
+        fun synthesizeViaByok(fishKey: String, text: String, referenceId: String, model: String = FISH_BYOK_MODEL_HEADER): Synthesis {
+            val json = JSONObject().apply {
+                put("text", text)
+                put("reference_id", referenceId)
+                put("format", "mp3")
+                put("mp3_bitrate", 128)
+                put("normalize", true)
+                put("latency", "normal")
+                put("chunk_length", 300)
+                put("condition_on_previous_chunks", true)
+            }.toString()
+            return post(
+                fishDirectTtsUrl,
+                json,
+                mapOf("Authorization" to "Bearer $fishKey", "model" to model)
+            )
+        }
+    }
+
+    /**
+     * Gemini proper (non-Live) TTS over REST (`:generateContent` with
+     * responseModalities AUDIO). BYOK only: called with the user's Gemini key.
+     * Returns wav bytes (PCM wrapped via the shared header helper).
+     */
+    class GeminiRestTtsClient(private val client: OkHttpClient) {
+        data class Synthesis(val wavBytes: ByteArray?, val error: String?)
+
+        fun synthesize(apiKey: String, model: String, voiceName: String, text: String): Synthesis {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+            val json = JSONObject().apply {
+                put("contents", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", org.json.JSONArray().apply {
+                            put(JSONObject().apply { put("text", text) })
+                        })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("responseModalities", org.json.JSONArray().apply { put("AUDIO") })
+                    put("speechConfig", JSONObject().apply {
+                        put("voiceConfig", JSONObject().apply {
+                            put("prebuiltVoiceConfig", JSONObject().apply { put("voiceName", voiceName) })
+                        })
+                    })
+                })
+            }.toString()
+            val body = json.toRequestBody("application/json".toMediaType())
+            client.newCall(Request.Builder().url(url).post(body).build()).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val detail = runCatching { response.body?.string().orEmpty().take(300) }.getOrDefault("")
+                    Timber.tag("TTS_CLOUD_DIAG").e("Gemini TTS failed HTTP ${response.code}: $detail")
+                    return Synthesis(null, "Gemini TTS error ${response.code}")
+                }
+                val responseJson = runCatching {
+                    JSONObject(response.body?.string().orEmpty())
+                }.getOrNull() ?: return Synthesis(null, "Bad Gemini TTS response")
+                val parts = responseJson.optJSONArray("candidates")
+                    ?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+                    ?: return Synthesis(null, "No audio generated")
+                for (i in 0 until parts.length()) {
+                    val inline = parts.optJSONObject(i)?.optJSONObject("inlineData") ?: continue
+                    val b64 = inline.optString("data")
+                    if (b64.isBlank()) continue
+                    val pcm = try {
+                        android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                    } catch (_: Exception) {
+                        continue
+                    }
+                    val rate = Regex("rate=(\\d+)").find(inline.optString("mimeType"))?.groupValues
+                        ?.getOrNull(1)?.toIntOrNull() ?: 24000
+                    // 16-bit mono PCM is the documented Gemini TTS layout.
+                    val out = ByteArray(44 + pcm.size)
+                    createWavHeaderUnknownLength(rate).copyInto(out)
+                    pcm.copyInto(out, 44)
+                    return Synthesis(out, null)
+                }
+                return Synthesis(null, "No audio generated")
+            }
+        }
+    }
+
+    class GeminiLiveClient(
+        private val client: OkHttpClient,
+        private val onAsyncError: (String) -> Unit = {}
+    ) {
+        private var webSocket: WebSocket? = null
+
+        private val connectionMutex = Mutex()
+        private val generationMutex = Mutex()
+        private var clientScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        private var audioChannel = Channel<GeminiWsEvent>(Channel.UNLIMITED)
+        private var setupDeferred = CompletableDeferred<Boolean>().apply { complete(false) }
+
+        var connectedSpeaker: String? = null
+
+        sealed class GeminiWsEvent {
+            data class Audio(val bytes: ByteArray) : GeminiWsEvent()
+            object TurnComplete : GeminiWsEvent()
+            data class Error(val message: String) : GeminiWsEvent()
+        }
+
+        suspend fun ensureConnected(
+            serverUrl: String,
+            speaker: String,
+            authToken: String?,
+            directGeminiApiKey: String? = null
+        ) = connectionMutex.withLock {
+            if (webSocket != null) {
+                if (connectedSpeaker == speaker) {
+                    val isSetup = try { setupDeferred.await() } catch(_: Exception) { false }
+                    if (isSetup) return@withLock
+                }
+                Timber.tag("TTS_CLOUD_DIAG").d("Closing existing WS. Speaker changed or setup failed.")
+                webSocket?.close(1000, "Reconnecting")
+                webSocket = null
+            }
+
+            val url = if (!directGeminiApiKey.isNullOrBlank()) {
+                "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$directGeminiApiKey"
+            } else {
+                val sanitizedUrl = serverUrl.removeSuffix("/")
+                val wsUrlStr = sanitizedUrl.replace("https://", "wss://").replace("http://", "ws://")
+                "$wsUrlStr/live?speaker=$speaker&token=${authToken ?: ""}"
+            }
+
+            Timber.tag("TTS_CLOUD_DIAG").d("Connecting to WS: ${if (!directGeminiApiKey.isNullOrBlank()) "Gemini BYOK" else url}")
+            val request = Request.Builder().url(url).build()
+            val connectedDeferred = CompletableDeferred<Boolean>()
+
+            var connectionError: String? = null
+
+            setupDeferred = CompletableDeferred()
+            connectedSpeaker = speaker
+
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    Timber.tag("TTS_CLOUD_DIAG").d("WS Opened. Sending Setup configuration to Gemini...")
+
+                    val systemPrompt = """
+                        You are a professional audiobook narrator. 
+                        Your ONLY task is to read the exact text provided to you, word for word, neutral emotion, and with good pacing. 
+                        Do NOT add any conversational filler, acknowledgments, or extra words (e.g., do not say "Sure, here is the text"). 
+                        Do NOT skip any parts or summarize. Output ONLY the audio reading of the provided text. If you encounter unreadable, non-verbal, or non-linguistic content (e.g., symbols like "※▼◆", raw formatting markers, broken characters, or pure punctuation clusters with no readable words), silently skip it and continue reading.
+                    """.trimIndent()
+
+                    val setupMsg = JSONObject().apply {
+                        put("setup", JSONObject().apply {
+                            put("model", "models/$GEMINI_CLOUD_TTS_MODEL")
+                            put("systemInstruction", JSONObject().apply {
+                                put("parts", org.json.JSONArray().apply {
+                                    put(JSONObject().apply {
+                                        put("text", systemPrompt)
+                                    })
+                                })
+                            })
+                            put("generationConfig", JSONObject().apply {
+                                put("responseModalities", org.json.JSONArray().apply { put("AUDIO") })
+                                put("speechConfig", JSONObject().apply {
+                                    put("voiceConfig", JSONObject().apply {
+                                        put("prebuiltVoiceConfig", JSONObject().apply {
+                                            put("voiceName", speaker)
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    }.toString()
+
+                    webSocket.send(setupMsg)
+                    connectedDeferred.complete(true)
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    try {
+                        val json = JSONObject(text)
+                        if (json.has("error")) {
+                            val errObj = json.opt("error")
+                            val errMsg = if (errObj is JSONObject) errObj.toString() else errObj?.toString() ?: "Unknown API Error"
+                            Timber.tag("TTS_CLOUD_DIAG").e("API ERROR RETURNED: $errMsg")
+                            audioChannel.trySend(GeminiWsEvent.Error(errMsg))
+                            setupDeferred.complete(false)
+                            return
+                        }
+                        if (json.has("setupComplete")) {
+                            setupDeferred.complete(true)
+                        }
+
+                        val serverContent = json.optJSONObject("serverContent")
+                        if (serverContent != null) {
+                            val turnComplete = serverContent.optBoolean("turnComplete", false)
+                            val modelTurn = serverContent.optJSONObject("modelTurn")
+                            val parts = modelTurn?.optJSONArray("parts")
+
+                            if (parts != null) {
+                                for (i in 0 until parts.length()) {
+                                    val part = parts.getJSONObject(i)
+                                    val inlineData = part.optJSONObject("inlineData")
+                                    if (inlineData != null) {
+                                        val b64 = inlineData.optString("data")
+                                        if (b64.isNotEmpty()) {
+                                            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                                            audioChannel.trySend(GeminiWsEvent.Audio(bytes))
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (turnComplete) {
+                                audioChannel.trySend(GeminiWsEvent.TurnComplete)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Timber.tag("TTS_CLOUD_DIAG").e(e, "Error parsing WS message text")
+                    }
+                }
+
+                override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
+                    onMessage(webSocket, bytes.utf8())
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    connectionError = if (response?.code == 402) {
+                        "INSUFFICIENT_CREDITS"
+                    } else {
+                        "WS Failure: ${t.message} | Response: ${response?.code}"
+                    }
+                    Timber.tag("TTS_CLOUD_DIAG").e(t)
+                    audioChannel.trySend(GeminiWsEvent.Error(connectionError))
+                    this@GeminiLiveClient.webSocket = null
+                    connectedDeferred.complete(false)
+                    setupDeferred.complete(false)
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    audioChannel.trySend(GeminiWsEvent.Error("Connection Closed: $reason"))
+                    this@GeminiLiveClient.webSocket = null
+                    setupDeferred.complete(false)
+                }
+            })
+
+            val isConnected = connectedDeferred.await()
+            if (!isConnected) throw IllegalStateException(connectionError ?: "Failed to connect to proxy WebSocket")
+
+            val isSetup = try {
+                kotlinx.coroutines.withTimeout(10000L.milliseconds) { setupDeferred.await() }
+            } catch (_: Exception) { false }
+
+            if (!isSetup) {
+                webSocket?.close(1000, "Setup failed")
+                webSocket = null
+                connectedSpeaker = null
+                throw IllegalStateException("Failed to complete Gemini setup")
+            } else {
+                Timber.tag("TTS_CLOUD_DIAG").d("Gemini setup complete")
+            }
+        }
+
+        fun generateChunk(text: String, cacheFile: File?): TtsAudioData {
+            if (text.isBlank()) return TtsAudioData(null, null, null, "Text is blank")
+
+            val streamId = java.util.UUID.randomUUID().toString()
+            val concurrentStream = ConcurrentInputStream()
+            StreamRegistry.register(streamId, concurrentStream)
+            val header = createWavHeaderUnknownLength(24000)
+            concurrentStream.write(header)
+
+            clientScope.launch {
+                generationMutex.withLock {
+                    var fileOutputStream: java.io.FileOutputStream? = null
+                    var tempFile: File? = null
+
+                    try {
+                        if (!isActive) return@launch
+
+                        // Prepare cache temp file
+                        if (cacheFile != null) {
+                            tempFile = File(cacheFile.absolutePath + ".tmp")
+                            fileOutputStream = java.io.FileOutputStream(tempFile)
+                            fileOutputStream.write(header)
+                        }
+
+                        Timber.tag("TTS_CLOUD_DIAG").d("Starting API generation task for chunk: ${text.take(15)}...")
+
+                        audioChannel = Channel(Channel.UNLIMITED)
+                        val chunkGenStartTime = System.currentTimeMillis()
+                        var firstByteTime = -1L
+
+                        val payload = JSONObject().apply {
+                            put("realtimeInput", JSONObject().apply {
+                                put("text", text)
+                            })
+                        }.toString()
+
+                        val sent = webSocket?.send(payload) ?: false
+                        if (!sent) {
+                            Timber.tag("TTS_CLOUD_DIAG").e("Failed to send text payload over WS")
+                            return@launch
+                        }
+
+                        var receivedAudioBytes = 0
+                        kotlinx.coroutines.withTimeout(30000L.milliseconds) {
+                            for (event in audioChannel) {
+                                when (event) {
+                                    is GeminiWsEvent.Audio -> {
+                                        if (firstByteTime == -1L) {
+                                            firstByteTime = System.currentTimeMillis()
+                                            Timber.tag("TTS_CLOUD_DIAG").i("TTFB: ${firstByteTime - chunkGenStartTime}ms")
+                                        }
+                                        concurrentStream.write(event.bytes)
+                                        fileOutputStream?.write(event.bytes)
+                                        receivedAudioBytes += event.bytes.size
+                                    }
+                                    is GeminiWsEvent.TurnComplete -> {
+                                        Timber.tag("TTS_CLOUD_DIAG").i("Chunk generation complete. Bytes: $receivedAudioBytes")
+                                        StreamRegistry.markFinished(streamId, receivedAudioBytes.toLong() + 44)
+
+                                        fileOutputStream?.close()
+                                        fileOutputStream = null
+                                        if (tempFile != null && cacheFile != null && receivedAudioBytes > 0) {
+                                            patchWavHeader(tempFile, receivedAudioBytes)
+                                            tempFile.renameTo(cacheFile)
+                                            Timber.tag("TTS_CLOUD_DIAG").d("Successfully cached chunk to ${cacheFile.name}")
+                                        }
+                                        break
+                                    }
+                                    is GeminiWsEvent.Error -> {
+                                        Timber.tag("TTS_CLOUD_DIAG").e("WS Error received: ${event.message}")
+                                        onAsyncError(event.message)
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        Timber.tag("TTS_CLOUD_DIAG").e(e, "Timeout waiting for audio/TurnComplete")
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        Timber.tag("TTS_CLOUD_DIAG").i(e, "Streaming job cancelled due to user skip/flush")
+                    } catch (e: Exception) {
+                        Timber.tag("TTS_CLOUD_DIAG").e(e, "Exception piping audio")
+                    } finally {
+                        Timber.tag("TTS_CLOUD_DIAG").d("Closing stream for ${text.take(15)}")
+                        concurrentStream.close()
+                        fileOutputStream?.close()
+                        if (cacheFile != null && !cacheFile.exists()) {
+                            tempFile?.delete()
+                        }
+                    }
+                }
+            }
+
+            return TtsAudioData(null, text, emptyList(), streamUri = "ttsstream://$streamId")
+        }
+
+        fun close() {
+            clientScope.cancel()
+            clientScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+            webSocket?.close(1000, "Context Reset")
+            webSocket = null
+            connectedSpeaker = null
+            setupDeferred = CompletableDeferred<Boolean>().apply { complete(false) }
+            StreamRegistry.clear()
+        }
+    }
+
+    val audioGenerator: suspend (bookTitle: String, chapterTitle: String?, chunkIndex: Int, totalChunks: Int, text: String, speaker: String, mode: TtsMode, authToken: String?) -> TtsAudioData =
+        { bookTitle, chapterTitle, chunkIndex, totalChunks, text, speaker, mode, authToken ->
+            cacheManager.saveTotalChunks(bookTitle, chapterTitle, totalChunks)
+            when (mode) {
+                TtsMode.CLOUD -> {
+                    val byok = loadAiByokSettings(this@TtsService)
+                    val useByokFish = byok.isFishByokTtsAvailable
+                    val useByokGemini = !useByokFish && byok.isGeminiRestByokTtsAvailable
+                    // Cache layout mirrors the legacy one; only the container
+                    // differs (mp3 for Fish REST, wav for Gemini REST).
+                    val extension = if (useByokGemini) "wav" else FISH_CLOUD_AUDIO_EXTENSION
+                    val effectiveVoice = if (useByokGemini) {
+                        speaker.takeIf { voice -> GEMINI_TTS_SPEAKERS.any { it.id == voice } }
+                            ?: DEFAULT_SPEAKER_ID
+                    } else {
+                        // Fish accepts UUID reference_ids and `fish-` catalog
+                        // aliases; anything else (e.g. a stale Gemini voice
+                        // name) falls back to the worker's default voice.
+                        speaker.takeIf { voice ->
+                            isFishReferenceId(voice) || voice.startsWith("fish-")
+                        } ?: "default"
+                    }
+                    val cachedFile = cacheManager.getCacheFile(
+                        bookTitle, chapterTitle, text, effectiveVoice, mode, extension
+                    )
+                    val minCachedBytes = if (extension == "mp3") 1024L else 44L
+
+                    if (cachedFile.exists() && cachedFile.length() > minCachedBytes) {
+                        Timber.tag("TTS_CLOUD_DIAG").i("Using cached audio for chunk $chunkIndex")
+                        TtsAudioData(audioFile = cachedFile, serverText = text, wordTimings = emptyList(), error = null, streamUri = null)
+                    } else {
+                        try {
+                            val hasCreditBackend = googleCloudWorkerTtsUrl.isNotBlank()
+                            if (!useByokFish && !useByokGemini && !hasCreditBackend) {
+                                TtsAudioData(audioFile = null, serverText = null, wordTimings = null, error = getString(R.string.tts_error_cloud_not_configured))
+                            } else {
+                                var chunkCostMicros = 0L
+                                val synthesisBytes: ByteArray? = withContext(Dispatchers.IO) {
+                                    when {
+                                        useByokFish -> {
+                                            // The selected model drives the Fish
+                                            // `model` header, so the free tier is
+                                            // actually used when it is picked.
+                                            val result = fishRestClient.synthesizeViaByok(
+                                                byok.fishKey,
+                                                text,
+                                                effectiveVoice,
+                                                fishModelHeaderForTtsModel(byok.ttsModel),
+                                            )
+                                            if (result.error != null) throw TtsCloudException(result.error)
+                                            result.audioBytes
+                                        }
+                                        useByokGemini -> {
+                                            val result = geminiRestClient.synthesize(
+                                                byok.geminiKey, byok.ttsModel.substringAfter(':'),
+                                                effectiveVoice, text
+                                            )
+                                            if (result.error != null) throw TtsCloudException(result.error)
+                                            result.wavBytes
+                                        }
+                                        else -> {
+                                            val result = fishRestClient.synthesizeViaWorker(
+                                                googleCloudWorkerTtsUrl, authToken.orEmpty(),
+                                                text, effectiveVoice
+                                            )
+                                            if (result.error != null) throw TtsCloudException(result.error)
+                                            chunkCostMicros = result.costMicros
+                                            result.audioBytes
+                                        }
+                                    }
+                                }
+                                val bytes = synthesisBytes
+                                if (bytes == null || bytes.isEmpty()) {
+                                    TtsAudioData(audioFile = null, serverText = null, wordTimings = null, error = "Empty audio response")
+                                } else {
+                                    // Same temp-file + rename pattern as the
+                                    // legacy path so partial downloads never
+                                    // poison the cache.
+                                    val tempFile = File(cachedFile.absolutePath + ".tmp")
+                                    tempFile.writeBytes(bytes)
+                                    if (extension == "wav") {
+                                        patchWavHeader(tempFile, bytes.size - 44)
+                                    }
+                                    if (tempFile.renameTo(cachedFile)) {
+                                        Timber.tag("TTS_CLOUD_DIAG").d("Cached chunk $chunkIndex to ${cachedFile.name}")
+                                    }
+                                    TtsAudioData(audioFile = cachedFile, serverText = text, wordTimings = emptyList(), error = null, streamUri = null, costMicros = chunkCostMicros)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Timber.tag("TTS_CLOUD_DIAG").e(e, "Cloud TTS generation failed")
+                            val message = (e as? TtsCloudException)?.ttsError
+                                ?: e.message ?: "Failed to connect to TTS service"
+                            TtsAudioData(audioFile = null, serverText = null, wordTimings = null, error = message)
+                        }
+                    }
+                }
+                TtsMode.BASE -> {
+                    TtsAudioData(
+                        audioFile = null,
+                        serverText = null,
+                        wordTimings = null,
+                        error = "Direct local TTS must not use the audio generator"
+                    )
+                }
+            }
+        }
+
+    override fun onCreate() {
+        super.onCreate()
+        Timber.d("TtsService created.")
+        setMediaNotificationProvider(TtsMediaNotificationProvider(this))
+        // Never keep a media notification around for a stopped/idle player. Once a TTS session
+        // ends, the notification must be gone instead of lingering as Media3's basic fallback.
+        setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER)
+        // ExoPlayer, the media session and the playback manager can be slow to initialize on
+        // low-end devices. Promote immediately so a startForegroundService request cannot time
+        // out while onCreate is still building those objects.
+        showPreparingForegroundNotification("onCreate")
+        val hasNotificationPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "TtsService onCreate. sdk=${Build.VERSION.SDK_INT}, hasPostNotifications=$hasNotificationPermission"
+        )
+
+        cacheManager = TtsCacheManager(this)
+
+        val audioAttributes = AudioAttributes.Builder()
+            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+            .setUsage(C.USAGE_MEDIA)
+            .build()
+
+        val defaultDataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this)
+        val dataSourceFactory = androidx.media3.datasource.DataSource.Factory {
+            object : androidx.media3.datasource.DataSource {
+                private var dataSource: androidx.media3.datasource.DataSource? = null
+                private val defaultDataSource = defaultDataSourceFactory.createDataSource()
+                private val streamDataSource = InputStreamDataSource()
+
+                override fun addTransferListener(transferListener: androidx.media3.datasource.TransferListener) {
+                    defaultDataSource.addTransferListener(transferListener)
+                    streamDataSource.addTransferListener(transferListener)
+                }
+
+                override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long {
+                    dataSource = if (dataSpec.uri.scheme == "ttsstream") {
+                        streamDataSource
+                    } else {
+                        defaultDataSource
+                    }
+                    return dataSource!!.open(dataSpec)
+                }
+
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                    return dataSource!!.read(buffer, offset, length)
+                }
+
+                override fun getUri(): android.net.Uri? = dataSource?.uri
+
+                override fun close() {
+                    dataSource?.close()
+                }
+            }
+        }
+
+        player = ExoPlayer.Builder(this)
+            .setAudioAttributes(audioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
+            .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
+            .build()
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("ExoPlayer created for TTS service.")
+
+        playbackManager = TtsPlaybackManager(
+            context = this,
+            player = player,
+            generateAudioChunk = audioGenerator,
+            onResetContext = { liveClient.close() },
+            onPlaybackSessionPreparing = { bookTitle, chapterTitle ->
+                runOnApplicationThread { onPlaybackSessionPreparing(bookTitle, chapterTitle) }
+            },
+            onPlaybackSessionStopped = {
+                runOnApplicationThread { onPlaybackSessionStopped() }
+            },
+            onExplicitStopRequested = {
+                // Manual stop and sleep-timer stop both terminate the complete session.
+                // Natural chapter handoffs never invoke this callback.
+                bookSleepTimerJob?.cancel()
+                bookSleepTimerJob = null
+                stopSelf()
+            }
+        )
+
+        val sessionPlayer = TtsSessionPlayer(
+            player = player,
+            canSkipToPreviousChunk = playbackManager::canSkipToPreviousChunk,
+            canSkipToNextChunk = playbackManager::canSkipToNextChunk,
+            skipToPreviousChunk = playbackManager::skipToPreviousChunkFromTransport,
+            skipToNextChunk = playbackManager::skipToNextChunkFromTransport,
+            isCurrentChunkStreaming = playbackManager::isCurrentChunkStreaming,
+            currentChunkDurationForNotification = playbackManager::currentChunkDurationForNotification,
+            isDirectLocalPlayback = playbackManager::isDirectLocalPlayback,
+            localIsPlaying = playbackManager::localIsPlaying,
+            localPlayWhenReady = {
+                playbackManager.localIsPlaying() ||
+                    playbackManager.localPlaybackState() == Player.STATE_BUFFERING
+            },
+            localPlaybackState = playbackManager::localPlaybackState,
+            playDirectLocal = playbackManager::playFromTransport,
+            pauseDirectLocal = playbackManager::pauseFromTransport,
+            stopDirectLocal = playbackManager::stopFromTransport
+        )
+
+        mediaSession = MediaSession.Builder(this, sessionPlayer)
+            .setId("reader-tts-playback")
+            .setCallback(playbackManager)
+            // Serve artwork synchronously so notification re-posts never bypass the pinning path.
+            .setBitmapLoader(MediaNotificationBitmapLoader(this))
+            .build()
+
+        mediaSession?.let { playbackManager.setMediaSession(it) }
+        playbackManager.setDirectLocalPlayerStateInvalidator(sessionPlayer::invalidateDirectLocalState)
+        bookTtsCoordinator = BookTtsSessionCoordinator(this, scope, playbackManager)
+        logMediaTransport(
+            "tts-service-created",
+            "session=reader-tts-playback sessionAvailable=${mediaSession != null}"
+        )
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("MediaSession created and attached to playback manager. sessionAvailable=${mediaSession != null}")
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "onTaskRemoved. playWhenReady=${if (::player.isInitialized) player.playWhenReady else null}, isPlaying=${if (::player.isInitialized) player.isPlaying else null}"
+        )
+        // Home/background keeps media playback alive. Removing Episteme from
+        // Recents is an explicit task dismissal and must end the TTS session.
+        if (::playbackManager.isInitialized) {
+            playbackManager.stopForAppTaskRemoval()
+        }
+        stopSelf()
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).w("Task removed; TTS playback and service stopped.")
+    }
+
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "onGetSession. package=${controllerInfo.packageName}, sessionAvailable=${mediaSession != null}"
+        )
+        logMediaTransport(
+            "tts-on-get-session",
+            "package=${controllerInfo.packageName} sessionAvailable=${mediaSession != null}"
+        )
+        return mediaSession
+    }
+
+    override fun onDestroy() {
+        Timber.d("TtsService is being destroyed.")
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).w("TtsService onDestroy.")
+        logMediaTransport("tts-service-destroyed", "sessionAlive=${mediaSession != null}")
+        foregroundIdleJob?.cancel()
+        bookSleepTimerJob?.cancel()
+        bookSleepTimerJob = null
+
+        if (::bookTtsCoordinator.isInitialized) {
+            bookTtsCoordinator.release()
+        }
+        scope.cancel()
+        stopTtsForeground()
+        if (::playbackManager.isInitialized) {
+            playbackManager.release()
+        }
+        var playerReleased = false
+        mediaSession?.let { session ->
+            if (::player.isInitialized) {
+                player.release()
+                playerReleased = true
+            }
+            session.release()
+            mediaSession = null
+        }
+        if (!playerReleased && ::player.isInitialized) {
+            player.release()
+        }
+        super.onDestroy()
+    }
+
+}

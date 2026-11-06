@@ -1,0 +1,210 @@
+package com.aryan.reader
+
+import com.aryan.reader.shared.sharedAppLanguageOptions
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.w3c.dom.Element
+
+class AppLanguageOptionsTest {
+
+    @Test
+    fun `supported app languages expose configured locale order`() {
+        assertEquals(
+            listOf(
+                "en", "ar", "de", "nl", "tr", "fr", "ru", "uk", "be", "es", "pt-BR", "it", "pl",
+                "id", "vi", "ja", "ko", "hi", "zh-CN", "et"
+            ),
+            supportedAppLanguageOptions.mapNotNull { it.tag }
+        )
+        assertEquals(R.string.language_estonian, supportedAppLanguageOptions.last().labelRes)
+    }
+
+    @Test
+    fun `app language selection defaults to system before explicit overrides`() {
+        assertEquals(null, appLanguageSelectionOptions.first().tag)
+        assertEquals(R.string.language_system_default, appLanguageSelectionOptions.first().labelRes)
+        assertEquals(supportedAppLanguageOptions, appLanguageSelectionOptions.drop(1))
+    }
+
+    @Test
+    fun `app language search matches labels tags and aliases`() {
+        val chinese = supportedAppLanguageOptions.first { it.tag == "zh-CN" }
+
+        assertTrue(chinese.matchesLanguageSearch(label = "简体中文（简体中文）", query = "zh cn"))
+        assertTrue(chinese.matchesLanguageSearch(label = "简体中文（简体中文）", query = "mandarin"))
+        assertTrue(chinese.matchesLanguageSearch(label = "简体中文（简体中文）", query = "简体"))
+        assertTrue(systemAppLanguageOption.matchesLanguageSearch(label = "System default", query = "device"))
+        assertFalse(chinese.matchesLanguageSearch(label = "简体中文（简体中文）", query = "korean"))
+    }
+
+    @Test
+    fun `app language search normalizes accents`() {
+        val turkish = supportedAppLanguageOptions.first { it.tag == "tr" }
+        val dutch = supportedAppLanguageOptions.first { it.tag == "nl" }
+        val ukrainian = supportedAppLanguageOptions.first { it.tag == "uk" }
+        val belarusian = supportedAppLanguageOptions.first { it.tag == "be" }
+        val portugueseBrazilian = supportedAppLanguageOptions.first { it.tag == "pt-BR" }
+        val indonesian = supportedAppLanguageOptions.first { it.tag == "id" }
+        val vietnamese = supportedAppLanguageOptions.first { it.tag == "vi" }
+        val japanese = supportedAppLanguageOptions.first { it.tag == "ja" }
+        val korean = supportedAppLanguageOptions.first { it.tag == "ko" }
+        val estonian = supportedAppLanguageOptions.first { it.tag == "et" }
+
+        assertTrue(turkish.matchesLanguageSearch(label = "Türkçe (Turkish)", query = "turkce"))
+        assertTrue(dutch.matchesLanguageSearch(label = "Nederlands", query = "dutch"))
+        assertTrue(ukrainian.matchesLanguageSearch(label = "Українська", query = "ukrayinska"))
+        assertTrue(belarusian.matchesLanguageSearch(label = "Беларуская", query = "belarusian"))
+        assertTrue(
+            portugueseBrazilian.matchesLanguageSearch(
+                label = "Português (Brasil)",
+                query = "portugues brasileiro"
+            )
+        )
+        assertTrue(indonesian.matchesLanguageSearch(label = "Bahasa Indonesia", query = "bahasa"))
+        assertTrue(vietnamese.matchesLanguageSearch(label = "Tiếng Việt", query = "tieng viet"))
+        assertTrue(japanese.matchesLanguageSearch(label = "日本語", query = "nihongo"))
+        assertTrue(korean.matchesLanguageSearch(label = "한국어", query = "hangul"))
+        assertTrue(estonian.matchesLanguageSearch(label = "Eesti", query = "eesti"))
+    }
+
+    @Test
+    fun `android options mirror the shared language catalog`() {
+        // The shared list owns tags, label keys, aliases and the search rules so
+        // iOS renders the same catalog. `getValue` in UiLabelResources throws if a
+        // label key has no resource, so building the list already proves every
+        // key resolves; this pins the tags and the order on top of that.
+        assertEquals(
+            sharedAppLanguageOptions.map { it.tag },
+            appLanguageSelectionOptions.map { it.tag }
+        )
+        assertEquals(
+            sharedAppLanguageOptions.map { it.labelKey },
+            listOf(
+                "language_system_default", "language_english", "language_arabic", "language_german",
+                "language_dutch", "language_turkish", "language_french", "language_russian",
+                "language_ukrainian", "language_belarusian", "language_spanish",
+                "language_portuguese_brazilian", "language_italian", "language_polish",
+                "language_indonesian", "language_vietnamese", "language_japanese", "language_korean",
+                "language_hindi", "language_chinese_simplified", "language_estonian"
+            )
+        )
+    }
+
+    @Test
+    fun `supported app language tags are unique`() {
+        val tags = supportedAppLanguageOptions.mapNotNull { it.tag }
+
+        assertEquals(tags.distinct(), tags)
+    }
+
+    @Test
+    fun `supported app languages match Android locale config`() {
+        assertEquals(readLocaleConfigTags(), supportedAppLanguageOptions.map { it.tag })
+    }
+
+    @Test
+    fun `android manifest enables AppCompat language persistence`() {
+        val manifest = readAndroidManifest()
+        val service = manifest.getElementsByTagName("service").asElements()
+            .singleOrNull {
+                it.androidAttribute("name") == "androidx.appcompat.app.AppLocalesMetadataHolderService"
+            }
+
+        assertTrue(service != null)
+        assertEquals("false", service!!.androidAttribute("enabled"))
+        assertEquals("false", service.androidAttribute("exported"))
+
+        val autoStoreLocales = service.getElementsByTagName("meta-data").asElements()
+            .singleOrNull { it.androidAttribute("name") == "autoStoreLocales" }
+
+        assertTrue(autoStoreLocales != null)
+        assertEquals("true", autoStoreLocales!!.androidAttribute("value"))
+    }
+
+    @Test
+    fun `android manifest exposes cbt comic archive mime types`() {
+        val mimeTypes = readAndroidManifest()
+            .getElementsByTagName("data")
+            .asElements()
+            .mapNotNull { it.androidAttribute("mimeType") }
+
+        assertTrue("application/x-cbt" in mimeTypes)
+        assertTrue("application/vnd.comicbook+tar" in mimeTypes)
+        assertTrue("application/x-tar" in mimeTypes)
+        assertTrue("application/tar" in mimeTypes)
+    }
+
+    @Test
+    fun `pro manifest does not declare reserved Play installer check activity`() {
+        val reservedActivity = readProAndroidManifest()
+            .getElementsByTagName("activity")
+            .asElements()
+            .singleOrNull {
+                it.androidAttribute("name") == "com.pairip.licensecheck.LicenseActivity"
+            }
+
+        assertEquals(null, reservedActivity)
+    }
+
+    private fun readLocaleConfigTags(): List<String> {
+        val localeConfig = listOf(
+            File("src/main/res/xml/locales_config.xml"),
+            File("app/src/main/res/xml/locales_config.xml")
+        ).first { it.isFile }
+        val document = DocumentBuilderFactory.newInstance()
+            .apply { isNamespaceAware = true }
+            .newDocumentBuilder()
+            .parse(localeConfig)
+        val localeNodes = document.getElementsByTagName("locale")
+
+        return buildList {
+            for (index in 0 until localeNodes.length) {
+                add(
+                    localeNodes.item(index)
+                        .attributes
+                        .getNamedItemNS("http://schemas.android.com/apk/res/android", "name")
+                        .nodeValue
+                )
+            }
+        }
+    }
+
+    private fun readProAndroidManifest(): org.w3c.dom.Document {
+        val manifest = listOf(
+            File("src/pro/AndroidManifest.xml"),
+            File("app/src/pro/AndroidManifest.xml")
+        ).first { it.isFile }
+        return DocumentBuilderFactory.newInstance()
+            .apply { isNamespaceAware = true }
+            .newDocumentBuilder()
+            .parse(manifest)
+    }
+
+    private fun readAndroidManifest(): org.w3c.dom.Document {
+        val manifest = listOf(
+            File("src/main/AndroidManifest.xml"),
+            File("app/src/main/AndroidManifest.xml")
+        ).first { it.isFile }
+        return DocumentBuilderFactory.newInstance()
+            .apply { isNamespaceAware = true }
+            .newDocumentBuilder()
+            .parse(manifest)
+    }
+
+    private fun org.w3c.dom.NodeList.asElements(): List<Element> =
+        buildList {
+            for (index in 0 until length) {
+                val element = item(index) as? Element
+                if (element != null) add(element)
+            }
+        }
+
+    private fun Element.androidAttribute(name: String): String? =
+        attributes
+            ?.getNamedItemNS("http://schemas.android.com/apk/res/android", name)
+            ?.nodeValue
+}

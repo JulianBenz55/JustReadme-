@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="book_count">
+        <item quantity="one">%1$d किताब</item>
+        <item quantity="other">%1$d किताबें</item>
+    </plurals>
+    <plurals name="book_word">
+        <item quantity="one">किताब</item>
+        <item quantity="other">किताबें</item>
+    </plurals>
+    <plurals name="shelf_count">
+        <item quantity="one">%1$d शेल्फ़</item>
+        <item quantity="other">%1$d शेल्फ़</item>
+    </plurals>
+    <plurals name="search_results_count">
+        <item quantity="one">%1$d परिणाम मिला</item>
+        <item quantity="other">%1$d परिणाम मिले</item>
+    </plurals>
+    <plurals name="search_matches_count">
+        <item quantity="one">%1$d मिलान मिला</item>
+        <item quantity="other">%1$d मिलान मिले</item>
+    </plurals>
+    <plurals name="dialog_delete_permanently">
+        <item quantity="one">फ़ाइल स्थायी रूप से हटाएं</item>
+        <item quantity="other">फ़ाइलें स्थायी रूप से हटाएं</item>
+    </plurals>
+    <plurals name="dialog_permanently_delete_desc">
+        <item quantity="one">क्या आप अपने डिवाइस से %1$d चयनित फ़ाइल स्थायी रूप से हटाना चाहते हैं? यह कार्रवाई वापस नहीं की जा सकती।</item>
+        <item quantity="other">क्या आप अपने डिवाइस से %1$d चयनित फ़ाइलें स्थायी रूप से हटाना चाहते हैं? यह कार्रवाई वापस नहीं की जा सकती।</item>
+    </plurals>
+    <plurals name="dialog_remove_recents_desc">
+        <item quantity="one">क्या आप हालिया फ़ाइलों की सूची से %1$d चयनित फ़ाइल हटाना चाहते हैं? लाइब्रेरी से फिर खोलने पर यह फिर दिखाई देगी।</item>
+        <item quantity="other">क्या आप हालिया फ़ाइलों की सूची से %1$d चयनित फ़ाइलें हटाना चाहते हैं? लाइब्रेरी से फिर खोलने पर ये फिर दिखाई देंगी।</item>
+    </plurals>
+    <plurals name="dialog_remove_from_shelf_desc">
+        <item quantity="one">क्या आप वाकई \'%2$s\' शेल्फ़ से %1$d किताब हटाना चाहते हैं? किताब आपकी लाइब्रेरी में रहेगी और बिना शेल्फ़ में दिखाई देगी।</item>
+        <item quantity="other">क्या आप वाकई \'%2$s\' शेल्फ़ से %1$d किताबें हटाना चाहते हैं? किताबें आपकी लाइब्रेरी में रहेंगी और बिना शेल्फ़ में दिखाई देंगी।</item>
+    </plurals>
+    <plurals name="banner_books_removed_library">
+        <item quantity="one">%1$d किताब लाइब्रेरी से हटाई गई।</item>
+        <item quantity="other">%1$d किताबें लाइब्रेरी से हटाई गईं।</item>
+    </plurals>
+    <plurals name="folder_count">
+        <item quantity="one">%1$d फ़ोल्डर</item>
+        <item quantity="other">%1$d फ़ोल्डर</item>
+    </plurals>
+    <plurals name="tag_count">
+        <item quantity="one">%1$d टैग</item>
+        <item quantity="other">%1$d टैग</item>
+    </plurals>
+    <plurals name="tts_cache_chunk_count_parenthetical">
+        <item quantity="one">(%1$d खंड)</item>
+        <item quantity="other">(%1$d खंड)</item>
+    </plurals>
+    <plurals name="banner_importing_books_count">
+        <item quantity="one">आयात हो रहा है %1$d पुस्तक... यह शीघ्र ही आपकी लाइब्रेरी में दिखाई देगी।</item>
+        <item quantity="other">आयात हो रहा है %1$d पुस्तकें... वे शीघ्र ही आपकी लाइब्रेरी में दिखाई देंगी।</item>
+    </plurals>
+    <plurals name="banner_books_imported_library_tab">
+        <item quantity="one">आयातित %1$d किताब। आप इसे लाइब्रेरी टैब में पा सकते हैं।</item>
+        <item quantity="other">आयातित %1$d किताबें. आप उन्हें लाइब्रेरी टैब में पा सकते हैं।</item>
+    </plurals>
+    <plurals name="banner_books_added_to_shelf">
+        <item quantity="one">%1$d पुस्तक शेल्फ में जोड़ी गई.</item>
+        <item quantity="other">%1$d पुस्तकें शेल्फ में जोड़ी गईं।</item>
+    </plurals>
+    <plurals name="banner_books_tagged_with_tag">
+        <item quantity="one">%1$d पुस्तक को &quot;%2$s&quot; के साथ टैग किया गया है।</item>
+        <item quantity="other">%1$d &quot;%2$s&quot; टैग वाली पुस्तकें।</item>
+    </plurals>
+    <plurals name="banner_folder_removed_with_book_count">
+        <item quantity="one">हटाया गया फ़ोल्डर &quot;%1$s&quot; और %2$d ऐप से बुक करें.</item>
+        <item quantity="other">हटाया गया फ़ोल्डर &quot;%1$s&quot; और %2$d ऐप से किताबें।</item>
+    </plurals>
+    <plurals name="file_count">
+        <item quantity="one">%1$d फ़ाइल</item>
+        <item quantity="other">%1$d फ़ाइलें</item>
+    </plurals>
+    <plurals name="desktop_drop_import_file_count">
+        <item quantity="one">आयात करने के लिए छोड़ें %1$d फ़ाइल</item>
+        <item quantity="other">आयात करने के लिए छोड़ें %1$d फ़ाइलें</item>
+    </plurals>
+    <plurals name="desktop_unsupported_import_file_count">
+        <item quantity="one">%1$d असमर्थित फ़ाइल छोड़ दी जाएगी.</item>
+        <item quantity="other">%1$d असमर्थित फ़ाइलें छोड़ दी जाएंगी.</item>
+    </plurals>
+    <plurals name="desktop_importing_file_count">
+        <item quantity="one">आयात हो रहा है %1$d फ़ाइल...</item>
+        <item quantity="other">आयात हो रहा है %1$d फ़ाइलें...</item>
+    </plurals>
+    <plurals name="desktop_imported_file_count">
+        <item quantity="one">आयातित %1$d फ़ाइल।</item>
+        <item quantity="other">आयातित %1$d फ़ाइलें.</item>
+    </plurals>
+    <plurals name="desktop_imported_file_count_reader_support_later">
+        <item quantity="one">आयातित %1$d फ़ाइल। पाठक का समर्थन बाद में आता है।</item>
+        <item quantity="other">आयातित %1$d फ़ाइलें. पाठक का समर्थन बाद में आता है।</item>
+    </plurals>
+    <plurals name="desktop_import_failed_file_count">
+        <item quantity="one">आयात नहीं किया जा सका %1$d फ़ाइल।</item>
+        <item quantity="other">आयात नहीं किया जा सका %1$d फ़ाइलें.</item>
+    </plurals>
+    <plurals name="desktop_skipped_file_count">
+        <item quantity="one">छोड़ दिया गया %1$d फ़ाइल।</item>
+        <item quantity="other">छोड़ दिया गया %1$d फ़ाइलें.</item>
+    </plurals>
+    <plurals name="desktop_remove_folder_desc_with_book_count">
+        <item quantity="one">&quot;%1$s&quot; हटाएं और इसका %2$d ऐप से बुक करें? डिस्क पर फ़ाइलें हटाई नहीं जाएंगी.</item>
+        <item quantity="other">&quot;%1$s&quot; हटाएं और इसका %2$d ऐप से किताबें? डिस्क पर फ़ाइलें हटाई नहीं जाएंगी.</item>
+    </plurals>
+    <plurals name="desktop_folder_sync_failed_folder_count">
+        <item quantity="one">%1$d के लिए फ़ोल्डर सिंक विफल रहा फ़ोल्डर.</item>
+        <item quantity="other">%1$d के लिए फ़ोल्डर सिंक विफल रहा फ़ोल्डर्स.</item>
+    </plurals>
+    <plurals name="desktop_folder_sync_skipped_folder_count">
+        <item quantity="one">फ़ोल्डर सिंक %1$d के साथ समाप्त हुआ फ़ोल्डर छोड़ दिया गया.</item>
+        <item quantity="other">फ़ोल्डर सिंक %1$d के साथ समाप्त हुआ फ़ोल्डर्स छोड़ दिए गए.</item>
+    </plurals>
+    <plurals name="desktop_opds_removed_stream_book_count">
+        <item quantity="one">हटा दिया गया %1$d स्ट्रीम किया गया OPDS उस कैटलॉग से पुस्तक.</item>
+        <item quantity="other">हटा दिया गया %1$d स्ट्रीम किया गया OPDS उस कैटलॉग से पुस्तकें.</item>
+    </plurals>
+    <plurals name="desktop_library_tab_books_count">
+        <item quantity="one">सभी पुस्तकें %1$d</item>
+        <item quantity="other">सभी पुस्तकें %1$d</item>
+    </plurals>
+    <plurals name="desktop_library_tab_shelves_count">
+        <item quantity="one">अलमारियां %1$d</item>
+        <item quantity="other">अलमारियां %1$d</item>
+    </plurals>
+    <plurals name="desktop_library_tab_tags_count">
+        <item quantity="one">टैग %1$d</item>
+        <item quantity="other">टैग %1$d</item>
+    </plurals>
+    <plurals name="desktop_library_tab_folders_count">
+        <item quantity="one">फ़ोल्डर्स %1$d</item>
+        <item quantity="other">फ़ोल्डर्स %1$d</item>
+    </plurals>
+    <!-- Search results count label. %1$d = number of results. Example: "12 नतीजे". Hindi: one = नतीजा, other = नतीजे. -->
+    <plurals name="unified_library_search_results">
+        <item quantity="one">%1$d नतीजा</item>
+        <item quantity="other">%1$d नतीजे</item>
+    </plurals>
+    <!-- Listening-queue item count. %1$d = number of items. आइटम does not inflect. -->
+    <plurals name="listen_item_count">
+        <item quantity="one">%1$d आइटम</item>
+        <item quantity="other">%1$d आइटम</item>
+    </plurals>
+</resources>

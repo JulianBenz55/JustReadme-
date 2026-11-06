@@ -1,0 +1,988 @@
+// UniversalDocument.kt
+package com.aryan.reader.pdf
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PointF
+import android.graphics.Rect
+import android.graphics.RectF
+import android.net.Uri
+import android.os.Build
+import com.aryan.reader.COMIC_ARCHIVE_FILE_TYPES
+import com.aryan.reader.FileType
+import com.aryan.reader.R
+import com.aryan.reader.pptx.PptxDocumentWrapper
+import com.aryan.reader.shared.opds.OpdsStreamReference
+import com.aryan.reader.shared.opds.SharedOpdsStreamRequest
+import com.aryan.reader.shared.pdf.sharedPdfEmbeddedAnnotationRichText
+import io.legere.pdfiumandroid.api.Bookmark
+import io.legere.pdfiumandroid.suspend.PdfDocumentKt
+import com.aryan.reader.shared.ui.getAndroidCompatiblePdfTableOfContents
+import io.legere.pdfiumandroid.suspend.PdfPageKt
+import io.legere.pdfiumandroid.suspend.PdfTextPageKt
+import io.legere.pdfiumandroid.suspend.PdfiumCoreKt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
+import me.zhanghai.android.libarchive.Archive
+import me.zhanghai.android.libarchive.ArchiveEntry
+import me.zhanghai.android.libarchive.ArchiveException
+import okhttp3.Request
+import timber.log.Timber
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.zip.ZipFile
+import androidx.annotation.VisibleForTesting
+import androidx.core.graphics.createBitmap
+
+interface ReaderDocument : AutoCloseable {
+    suspend fun getPageCount(): Int
+    suspend fun openPage(pageIndex: Int): ReaderPage?
+    suspend fun getTableOfContents(): List<Bookmark>
+
+    /**
+     * Renders a small thumbnail of [pageIndex] scaled to [widthPx] wide, or
+     * null when the page cannot be opened or rendered.
+     *
+     * The default implementation reuses [openPage]. The PDF implementation
+     * overrides it with a single-lock render: the Pages tab used to spend one
+     * global-Pdfium-mutex acquisition per call (open, measure x2, render,
+     * close), so a fast scrollbar fling queued thousands of lock ops behind
+     * every tile and starved the main page render (blank page) and back/close.
+     */
+    suspend fun renderPageThumbnail(pageIndex: Int, widthPx: Int): Bitmap? {
+        if (widthPx <= 0 || pageIndex < 0) return null
+        openPage(pageIndex)?.use { page ->
+            val w = page.getPageWidthPoint()
+            val h = page.getPageHeightPoint()
+            if (w <= 0 || h <= 0) return null
+            val thumbH = (widthPx.toFloat() / (w.toFloat() / h.toFloat())).toInt().coerceAtLeast(1)
+            val bmp = createBitmap(widthPx, thumbH)
+            bmp.eraseColor(Color.WHITE)
+            page.renderPageBitmap(bmp, 0, 0, widthPx, thumbH, false)
+            return bmp
+        }
+        return null
+    }
+}
+
+interface ReaderPage : AutoCloseable {
+    suspend fun getPageWidthPoint(): Int
+    suspend fun getPageHeightPoint(): Int
+    suspend fun getPageRotation(): Int
+    suspend fun renderPageBitmap(bitmap: Bitmap, startX: Int, startY: Int, drawSizeX: Int, drawSizeY: Int, renderAnnot: Boolean)
+    suspend fun mapRectToDevice(startX: Int, startY: Int, sizeX: Int, sizeY: Int, rotate: Int, coords: RectF): Rect
+    suspend fun mapDeviceCoordsToPage(startX: Int, startY: Int, sizeX: Int, sizeY: Int, rotate: Int, deviceX: Int, deviceY: Int): PointF
+    suspend fun openTextPage(): ReaderTextPage
+    suspend fun getLinks(): List<ReaderLink>
+    fun getNativePointer(): Long
+}
+
+interface ReaderTextPage : AutoCloseable {
+    suspend fun textPageCountChars(): Int
+    suspend fun textPageGetText(startIndex: Int, count: Int): String?
+    suspend fun textPageGetRectsForRanges(ranges: IntArray): List<ReaderTextRect>?
+    suspend fun textPageGetCharIndexAtPos(x: Double, y: Double, xTolerance: Double, yTolerance: Double): Int
+    suspend fun textPageGetCharBox(index: Int): RectF?
+    suspend fun textPageGetUnicode(index: Int): Int
+    suspend fun loadWebLink(): ReaderWebLinks?
+}
+
+data class ReaderLink(val uri: String?, val destPageIdx: Int?, val bounds: RectF)
+data class ReaderTextRect(val rect: RectF)
+
+internal data class PdfNativePageOverlayExtraction(
+    val embeddedAnnotations: List<EmbeddedAnnotation> = emptyList(),
+    val annotationScreenRects: List<Pair<EmbeddedAnnotation, Rect>> = emptyList(),
+    val imageScreenRects: List<Rect> = emptyList(),
+    val resolvedNativePointer: Boolean = true
+)
+
+internal data class PdfNativeTapResult(
+    val linkInfo: String? = null,
+    val clickHandled: Boolean = false,
+    val resolvedNativePointer: Boolean = true
+)
+
+interface ReaderWebLinks : AutoCloseable {
+    suspend fun countWebLinks(): Int
+    suspend fun getURL(linkIndex: Int, maxLength: Int): String?
+    suspend fun countRects(linkIndex: Int): Int
+    suspend fun getRect(linkIndex: Int, rectIndex: Int): RectF
+}
+
+object DocumentFactory {
+    suspend fun loadDocument(context: Context, uri: Uri, type: FileType, password: String?, pdfiumCore: PdfiumCoreKt): ReaderDocument {
+        if (uri.scheme == "opds-pse") {
+            val bookId = uri.getQueryParameter("id") ?: UUID.randomUUID().toString()
+            val urlTemplate = uri.getQueryParameter("url") ?: ""
+            val count = uri.getQueryParameter("count")?.toIntOrNull() ?: 0
+            val catalogId = uri.getQueryParameter("catalogId")
+            return OpdsStreamDocumentWrapper(context, bookId, urlTemplate, count, catalogId)
+        }
+        return if (type == FileType.PPTX) {
+            val cacheFile = File(context.cacheDir, "temp_pptx_${System.currentTimeMillis()}.pptx")
+            try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        cacheFile.outputStream().use { output -> input.copyTo(output) }
+                    } ?: throw Exception("Failed to open PPTX")
+                }
+            } catch (e: Exception) {
+                runCatching { cacheFile.delete() }
+                throw e
+            }
+            PptxDocumentWrapper(cacheFile, deleteOnClose = true)
+        } else if (type in COMIC_ARCHIVE_FILE_TYPES) {
+            val cacheFile = File(context.cacheDir, "temp_comic_${System.currentTimeMillis()}.${type.name.lowercase()}")
+            withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    cacheFile.outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+            ArchiveDocumentWrapper(cacheFile)
+        } else {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: throw Exception("Failed to open PDF")
+            try {
+                PdfDocumentWrapper(PdfiumEngineProvider.withPdfium { pdfiumCore.newDocument(pfd, password) })
+            } catch (e: Throwable) {
+                try {
+                    pfd.close()
+                } catch (closeError: Exception) {
+                    e.addSuppressed(closeError)
+                }
+                throw e
+            }
+        }
+    }
+}
+
+// ================= PDF IMPLEMENTATION =================
+
+private inline fun closePdfiumResource(tag: String, closeBlock: () -> Unit) {
+    try {
+        closeBlock()
+    } catch (e: IllegalStateException) {
+        if (e.message == "Already closed") {
+            Timber.tag(tag).d(e, "Ignoring duplicate Pdfium close")
+        } else {
+            throw e
+        }
+    }
+}
+
+class PdfDocumentWrapper(val pdfDocument: PdfDocumentKt) : ReaderDocument {
+    private val isClosed = AtomicBoolean(false)
+
+    override suspend fun getPageCount() = PdfiumEngineProvider.withPdfium {
+        pdfDocument.getPageCount()
+    }
+
+    override suspend fun openPage(pageIndex: Int): ReaderPage? {
+        if (isClosed.get()) return null
+        val page = PdfiumEngineProvider.withPdfium {
+            if (isClosed.get()) null else pdfDocument.openPage(pageIndex)
+        } ?: return null
+        return PdfPageWrapper(page, isClosed)
+    }
+
+    override suspend fun renderPageThumbnail(pageIndex: Int, widthPx: Int): Bitmap? {
+        if (isClosed.get() || widthPx <= 0 || pageIndex < 0) return null
+        return try {
+            PdfiumEngineProvider.withPdfium {
+                if (isClosed.get()) return@withPdfium null
+                val page = try {
+                    pdfDocument.openPage(pageIndex)
+                } catch (_: Exception) {
+                    null
+                } ?: return@withPdfium null
+                try {
+                    val w = page.getPageWidthPoint()
+                    val h = page.getPageHeightPoint()
+                    if (w <= 0 || h <= 0) return@withPdfium null
+                    val thumbH = (widthPx.toFloat() / (w.toFloat() / h.toFloat())).toInt().coerceAtLeast(1)
+                    val bmp = createBitmap(widthPx, thumbH)
+                    bmp.eraseColor(Color.WHITE)
+                    page.renderPageBitmap(bmp, 0, 0, widthPx, thumbH, false)
+                    bmp
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    null
+                } finally {
+                    closePdfiumResource(PdfPagesTabLogTag) { page.close() }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override suspend fun getTableOfContents() = PdfiumEngineProvider.withPdfium {
+        pdfDocument.getAndroidCompatiblePdfTableOfContents()
+    }
+
+    internal fun getNativeDocumentPointerForLockedAccess(): Long {
+        if (isClosed.get()) return 0L
+        return try {
+            val documentField = pdfDocument.javaClass.getDeclaredField("document").apply { isAccessible = true }
+            val docUInstance = documentField.get(pdfDocument) ?: return 0L
+            val ptrField = docUInstance.javaClass.getDeclaredField("mNativeDocPtr").apply { isAccessible = true }
+            ptrField.get(docUInstance) as? Long ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    override fun close() {
+        if (!isClosed.compareAndSet(false, true)) return
+        PdfiumEngineProvider.withPdfiumBlocking {
+            closePdfiumResource("PdfDocumentWrapper") { pdfDocument.close() }
+        }
+    }
+}
+
+class PdfPageWrapper(
+    val pdfPage: PdfPageKt,
+    private val ownerClosed: AtomicBoolean = AtomicBoolean(false)
+) : ReaderPage {
+    private val isClosed = AtomicBoolean(false)
+    private fun isUnavailable(): Boolean = isClosed.get() || ownerClosed.get()
+
+    override suspend fun getPageWidthPoint() = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) 0 else pdfPage.getPageWidthPoint()
+    }
+
+    override suspend fun getPageHeightPoint() = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) 0 else pdfPage.getPageHeightPoint()
+    }
+
+    override suspend fun getPageRotation() = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) 0 else pdfPage.getPageRotation()
+    }
+
+    override suspend fun renderPageBitmap(bitmap: Bitmap, startX: Int, startY: Int, drawSizeX: Int, drawSizeY: Int, renderAnnot: Boolean) {
+        PdfiumEngineProvider.withPdfium {
+            if (!isUnavailable()) {
+                pdfPage.renderPageBitmap(bitmap, startX, startY, drawSizeX, drawSizeY, renderAnnot)
+            }
+        }
+    }
+
+    override suspend fun mapRectToDevice(startX: Int, startY: Int, sizeX: Int, sizeY: Int, rotate: Int, coords: RectF) =
+        PdfiumEngineProvider.withPdfium {
+            if (isUnavailable()) Rect() else pdfPage.mapRectToDevice(startX, startY, sizeX, sizeY, rotate, coords)
+        }
+
+    override suspend fun mapDeviceCoordsToPage(startX: Int, startY: Int, sizeX: Int, sizeY: Int, rotate: Int, deviceX: Int, deviceY: Int) =
+        PdfiumEngineProvider.withPdfium {
+            if (isUnavailable()) PointF() else pdfPage.mapDeviceCoordsToPage(startX, startY, sizeX, sizeY, rotate, deviceX, deviceY)
+        }
+
+    override suspend fun openTextPage(): ReaderTextPage = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) DummyTextPage() else PdfTextPageWrapper(pdfPage.openTextPage(), ownerClosed, isClosed)
+    }
+
+    override suspend fun getLinks(): List<ReaderLink> {
+        return PdfiumEngineProvider.withPdfium {
+            if (isUnavailable()) {
+                emptyList()
+            } else {
+                pdfPage.getPageLinks().map { ReaderLink(it.uri, it.destPageIdx, it.bounds) }
+            }
+        }
+    }
+
+    override fun getNativePointer(): Long {
+        if (isUnavailable()) return 0L
+        return extractNativePointer(pdfPage)
+    }
+
+    internal suspend fun extractNativePageOverlays(
+        bitmapWidthPx: Int,
+        bitmapHeightPx: Int,
+        pageRotation: Int,
+        pageIndex: Int,
+        linkAnnotationSubtype: Int
+    ): PdfNativePageOverlayExtraction = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable() || bitmapWidthPx <= 0 || bitmapHeightPx <= 0 || !NativePdfiumBridge.ensureLoaded()) {
+            return@withPdfium PdfNativePageOverlayExtraction()
+        }
+
+        val pagePtr = extractNativePointer(pdfPage)
+        if (pagePtr == 0L) {
+            return@withPdfium PdfNativePageOverlayExtraction(resolvedNativePointer = false)
+        }
+
+        val imageRects = extractImageScreenRectsLocked(pagePtr, bitmapWidthPx, bitmapHeightPx, pageRotation)
+        val embeddedAnnotations = extractEmbeddedAnnotationsLocked(pagePtr, pageIndex, linkAnnotationSubtype)
+        val mappedAnnots = embeddedAnnotations.mapNotNull { annotation ->
+            val screenRect = pdfPage.mapRectToDevice(
+                0,
+                0,
+                bitmapWidthPx,
+                bitmapHeightPx,
+                pageRotation,
+                annotation.rect
+            )
+            if (screenRect.width() > 0 && screenRect.height() > 0) {
+                annotation to screenRect
+            } else {
+                null
+            }
+        }
+
+        PdfNativePageOverlayExtraction(
+            embeddedAnnotations = embeddedAnnotations,
+            annotationScreenRects = mappedAnnots,
+            imageScreenRects = imageRects
+        )
+    }
+
+    internal suspend fun resolveNativeTap(
+        documentWrapper: PdfDocumentWrapper?,
+        bitmapWidthPx: Int,
+        bitmapHeightPx: Int,
+        pageRotation: Int,
+        deviceX: Int,
+        deviceY: Int
+    ): PdfNativeTapResult = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable() || bitmapWidthPx <= 0 || bitmapHeightPx <= 0 || !NativePdfiumBridge.ensureLoaded()) {
+            return@withPdfium PdfNativeTapResult()
+        }
+
+        val pagePtr = extractNativePointer(pdfPage)
+        if (pagePtr == 0L) {
+            return@withPdfium PdfNativeTapResult(resolvedNativePointer = false)
+        }
+
+        val pdfCoords = pdfPage.mapDeviceCoordsToPage(
+            0,
+            0,
+            bitmapWidthPx,
+            bitmapHeightPx,
+            pageRotation,
+            deviceX,
+            deviceY
+        )
+        val docPtr = documentWrapper?.getNativeDocumentPointerForLockedAccess() ?: 0L
+
+        Timber.tag("PdfLinkDiagnostic").i("Extracted docPtr: $docPtr | pagePtr: $pagePtr")
+
+        val linkInfo = NativePdfiumBridge.getLinkInfoAtPoint(
+            docPtr,
+            pagePtr,
+            pdfCoords.x.toDouble(),
+            pdfCoords.y.toDouble()
+        )
+        if (linkInfo != null) {
+            return@withPdfium PdfNativeTapResult(linkInfo = linkInfo)
+        }
+
+        PdfNativeTapResult(
+            clickHandled = NativePdfiumBridge.performClick(
+                pagePtr,
+                pdfCoords.x.toDouble(),
+                pdfCoords.y.toDouble()
+            )
+        )
+    }
+
+    private suspend fun extractImageScreenRectsLocked(
+        pagePtr: Long,
+        bitmapWidthPx: Int,
+        bitmapHeightPx: Int,
+        pageRotation: Int
+    ): List<Rect> {
+        return try {
+            val objectCount = NativePdfiumBridge.getPageObjectCount(pagePtr)
+            if (objectCount <= 0) return emptyList()
+
+            val rects = mutableListOf<Rect>()
+            val outRect = FloatArray(4)
+            for (index in 0 until objectCount) {
+                if (NativePdfiumBridge.getPageObjectType(pagePtr, index) != 3) continue
+                if (!NativePdfiumBridge.getPageObjectBoundingBox(pagePtr, index, outRect)) continue
+
+                val pdfRect = RectF(
+                    minOf(outRect[0], outRect[2]),
+                    maxOf(outRect[1], outRect[3]),
+                    maxOf(outRect[0], outRect[2]),
+                    minOf(outRect[1], outRect[3])
+                )
+                val deviceRect = pdfPage.mapRectToDevice(
+                    0,
+                    0,
+                    bitmapWidthPx,
+                    bitmapHeightPx,
+                    pageRotation,
+                    pdfRect
+                )
+                if (deviceRect.width() > 0 && deviceRect.height() > 0) {
+                    rects += Rect(deviceRect.left, deviceRect.top, deviceRect.right, deviceRect.bottom)
+                }
+            }
+            rects
+        } catch (e: Throwable) {
+            Timber.tag("PdfImageDebug").e(e, "Error extracting image rects")
+            emptyList()
+        }
+    }
+
+    private fun extractEmbeddedAnnotationsLocked(
+        pagePtr: Long,
+        pageIndex: Int,
+        linkAnnotationSubtype: Int
+    ): List<EmbeddedAnnotation> {
+        return try {
+            val count = NativePdfiumBridge.getAnnotCount(pagePtr)
+            Timber.tag("PdfCommentDebug").d("Page $pageIndex: Total Annotations found = $count")
+            if (count <= 0) return emptyList()
+
+            val annotations = mutableListOf<EmbeddedAnnotation>()
+            for (index in 0 until count) {
+                val subtype = NativePdfiumBridge.getAnnotSubtype(pagePtr, index)
+                if (subtype == linkAnnotationSubtype) continue
+
+                var contents = NativePdfiumBridge.getAnnotString(pagePtr, index, "Contents")
+                if (contents.isNullOrBlank()) {
+                    // The /RC rich-content fallback is XHTML markup (often
+                    // including an XML declaration) and must never surface
+                    // raw. Strip it to plain text and keep it only when real
+                    // text remains.
+                    contents = NativePdfiumBridge.getAnnotString(pagePtr, index, "RC")
+                        ?.let(::sharedPdfEmbeddedAnnotationRichText)
+                        ?.takeIf(String::isNotBlank)
+                }
+
+                val pdfRectArray = NativePdfiumBridge.getAnnotRect(pagePtr, index)
+                val pdfRect = if (pdfRectArray != null) {
+                    RectF(
+                        minOf(pdfRectArray[0], pdfRectArray[2]),
+                        maxOf(pdfRectArray[1], pdfRectArray[3]),
+                        maxOf(pdfRectArray[0], pdfRectArray[2]),
+                        minOf(pdfRectArray[1], pdfRectArray[3])
+                    )
+                } else {
+                    RectF()
+                }
+
+                annotations += EmbeddedAnnotation(
+                    index = index,
+                    subtype = subtype,
+                    rect = pdfRect,
+                    contents = contents,
+                    author = NativePdfiumBridge.getAnnotString(pagePtr, index, "T"),
+                    name = NativePdfiumBridge.getAnnotString(pagePtr, index, "NM"),
+                    inReplyTo = NativePdfiumBridge.getAnnotString(pagePtr, index, "IRT")
+                )
+            }
+
+            groupEmbeddedAnnotationsForDisplay(annotations)
+        } catch (e: Throwable) {
+            Timber.tag("PdfCommentDebug").e(e, "Error extracting annotations")
+            emptyList()
+        }
+    }
+
+    private fun extractNativePointer(obj: Any): Long {
+        val priorityFields = listOf("page", "mNativePagePtr", "pagePtr", "mNativePage")
+
+        for (name in priorityFields) {
+            try {
+                val field = obj.javaClass.getDeclaredField(name)
+                field.isAccessible = true
+                val value = field.get(obj)
+                if (value is Long && value != 0L) return value
+                if (value != null && value !is Long) {
+                    val nestedPtr = extractNativePointer(value)
+                    if (nestedPtr != 0L) return nestedPtr
+                }
+            } catch (_: Exception) {}
+        }
+
+        try {
+            for (field in obj.javaClass.declaredFields) {
+                if (field.type == Long::class.java || field.type == Long::class.javaPrimitiveType) {
+                    field.isAccessible = true
+                    val value = field.get(obj) as Long
+                    if (value > 0xFFFFFFFFL) return value
+                }
+            }
+        } catch (_: Exception) {}
+
+        return 0L
+    }
+
+    override fun close() {
+        if (!isClosed.compareAndSet(false, true)) return
+        if (ownerClosed.get()) return
+        PdfiumEngineProvider.withPdfiumBlocking {
+            closePdfiumResource("PdfPageWrapper") { pdfPage.close() }
+        }
+    }
+}
+
+class PdfTextPageWrapper(
+    private val textPage: PdfTextPageKt,
+    private val ownerClosed: AtomicBoolean = AtomicBoolean(false),
+    private val pageClosed: AtomicBoolean = AtomicBoolean(false)
+) : ReaderTextPage {
+    private val isClosed = AtomicBoolean(false)
+    private fun isUnavailable(): Boolean = isClosed.get() || ownerClosed.get() || pageClosed.get()
+
+    override suspend fun textPageCountChars() = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) 0 else textPage.textPageCountChars()
+    }
+
+    override suspend fun textPageGetText(startIndex: Int, count: Int) = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) null else textPage.textPageGetText(startIndex, count)
+    }
+
+    override suspend fun textPageGetRectsForRanges(ranges: IntArray) = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) null else textPage.textPageGetRectsForRanges(ranges)?.map { ReaderTextRect(it.rect) }
+    }
+
+    override suspend fun textPageGetCharIndexAtPos(x: Double, y: Double, xTolerance: Double, yTolerance: Double) = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) -1 else textPage.textPageGetCharIndexAtPos(x, y, xTolerance, yTolerance)
+    }
+
+    override suspend fun textPageGetCharBox(index: Int) = PdfiumEngineProvider.withPdfium {
+        if (isUnavailable()) null else textPage.textPageGetCharBox(index)
+    }
+
+    override suspend fun textPageGetUnicode(index: Int): Int {
+        return PdfiumEngineProvider.withPdfium {
+            if (isUnavailable()) 0 else textPage.textPageGetUnicode(index).code
+        }
+    }
+
+    override suspend fun loadWebLink(): ReaderWebLinks? {
+        val links = PdfiumEngineProvider.withPdfium {
+            if (isUnavailable()) null else textPage.loadWebLink()
+        } ?: return null
+        return object : ReaderWebLinks {
+            private val isClosed = AtomicBoolean(false)
+            private fun isUnavailable(): Boolean = isClosed.get() || ownerClosed.get() || pageClosed.get()
+
+            override suspend fun countWebLinks() = PdfiumEngineProvider.withPdfium {
+                if (isUnavailable()) 0 else links.countWebLinks()
+            }
+
+            override suspend fun getURL(linkIndex: Int, maxLength: Int) = PdfiumEngineProvider.withPdfium {
+                if (isUnavailable()) null else links.getURL(linkIndex, maxLength)
+            }
+
+            override suspend fun countRects(linkIndex: Int) = PdfiumEngineProvider.withPdfium {
+                if (isUnavailable()) 0 else links.countRects(linkIndex)
+            }
+
+            override suspend fun getRect(linkIndex: Int, rectIndex: Int) = PdfiumEngineProvider.withPdfium {
+                if (isUnavailable()) RectF() else links.getRect(linkIndex, rectIndex)
+            }
+
+            override fun close() {
+                if (!isClosed.compareAndSet(false, true)) return
+                if (ownerClosed.get() || pageClosed.get()) return
+                PdfiumEngineProvider.withPdfiumBlocking {
+                    closePdfiumResource("PdfWebLinksWrapper") { links.close() }
+                }
+            }
+        }
+    }
+    override fun close() {
+        if (!isClosed.compareAndSet(false, true)) return
+        if (ownerClosed.get() || pageClosed.get()) return
+        PdfiumEngineProvider.withPdfiumBlocking {
+            closePdfiumResource("PdfTextPageWrapper") { textPage.close() }
+        }
+    }
+}
+
+// ================= CBZ, CBR, CB7, CBT IMPLEMENTATION =================
+
+class DummyTextPage : ReaderTextPage {
+    override suspend fun textPageCountChars() = 0
+    override suspend fun textPageGetText(startIndex: Int, count: Int) = null
+    override suspend fun textPageGetRectsForRanges(ranges: IntArray) = null
+    override suspend fun textPageGetCharIndexAtPos(x: Double, y: Double, xTolerance: Double, yTolerance: Double) = -1
+    override suspend fun textPageGetCharBox(index: Int) = null
+    override suspend fun textPageGetUnicode(index: Int) = 0
+    override suspend fun loadWebLink() = null
+    override fun close() {}
+}
+
+class ArchiveDocumentWrapper(private val file: File) : ReaderDocument {
+    private val imageEntries = mutableListOf<String>()
+    private var zipFile: ZipFile? = null
+    private var extractedDir: File? = null
+
+    init {
+        // Try reading as ZIP first for instant O(1) random access (Handles .cbz efficiently)
+        try {
+            val zf = ZipFile(file)
+            val entries = zf.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                if (!entry.isDirectory && entry.name.matches(Regex(".*\\.(jpg|jpeg|png|webp|bmp)$", RegexOption.IGNORE_CASE))) {
+                    imageEntries.add(entry.name)
+                }
+            }
+            if (imageEntries.isNotEmpty()) {
+                zipFile = zf
+                imageEntries.sort()
+            } else {
+                zf.close()
+            }
+        } catch (_: Exception) {
+            zipFile = null
+        }
+
+        if (zipFile == null) {
+            imageEntries.clear()
+            extractedDir = File(file.parentFile, "extracted_${file.name}_${System.currentTimeMillis()}")
+            extractedDir?.mkdirs()
+
+            var archive = 0L
+            try {
+                archive = Archive.readNew()
+                Archive.readSupportFilterAll(archive)
+                Archive.readSupportFormatAll(archive)
+                Archive.readOpenFileName(archive, file.absolutePath.toByteArray(), 10240)
+
+                val tempEntries = mutableListOf<Pair<String, File>>()
+
+                while (true) {
+                    val entry = try {
+                        Archive.readNextHeader(archive)
+                    } catch (e: ArchiveException) {
+                        if (e.code == Archive.ERRNO_EOF) break
+                        throw e
+                    }
+                    if (entry == 0L) break
+
+                    val path = ArchiveEntry.pathnameUtf8(entry)
+                    if (path != null && path.matches(Regex(".*\\.(jpg|jpeg|png|webp|bmp)$", RegexOption.IGNORE_CASE))) {
+                        val extractedFile = File(extractedDir, UUID.randomUUID().toString() + ".img")
+                        tempEntries.add(Pair(path, extractedFile))
+
+                        var pfd: android.os.ParcelFileDescriptor? = null
+                        @Suppress("ConvertTryFinallyToUseCall") try {
+                            pfd = android.os.ParcelFileDescriptor.open(extractedFile, android.os.ParcelFileDescriptor.MODE_READ_WRITE or android.os.ParcelFileDescriptor.MODE_CREATE)
+                            Archive.readDataIntoFd(archive, pfd.fd)
+                        } finally {
+                            pfd?.close()
+                        }
+                    } else {
+                        Archive.readDataSkip(archive)
+                    }
+                }
+
+                tempEntries.sortBy { it.first }
+                tempEntries.forEach { imageEntries.add(it.second.absolutePath) }
+
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to extract archive entries")
+            } catch (e: LinkageError) {
+                // libarchive-jni.so is missing from this install (broken/partial
+                // split APK), so `Archive`'s static initializer fails with
+                // UnsatisfiedLinkError and every later access throws
+                // NoClassDefFoundError. Both are LinkageErrors, so the
+                // `catch (e: Exception)` above does NOT contain them and the
+                // error escapes the constructor, crashing add-to-recent and
+                // thumbnail generation. Degrade to "no readable pages" instead:
+                // the comic cannot be opened on this install either way, but the
+                // library must stay usable and the file must stay addable.
+                ArchiveSupport.reportUnavailable(e)
+            } finally {
+                if (archive != 0L) Archive.readFree(archive)
+            }
+        }
+    }
+
+    override suspend fun getPageCount() = imageEntries.size
+
+    override suspend fun openPage(pageIndex: Int): ReaderPage? = withContext(Dispatchers.IO) {
+        if (pageIndex !in imageEntries.indices) return@withContext null
+        val targetPath = imageEntries[pageIndex]
+
+        var imageBytes: ByteArray? = null
+
+        if (zipFile != null) {
+            try {
+                val entry = zipFile!!.getEntry(targetPath)
+                if (entry != null) {
+                    zipFile!!.getInputStream(entry).use { imageBytes = it.readBytes() }
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to extract page from ZIP")
+            }
+        } else {
+            try {
+                val extractedFile = File(targetPath)
+                if (extractedFile.exists()) {
+                    imageBytes = extractedFile.readBytes()
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to read extracted page")
+            }
+        }
+
+        if (imageBytes != null && imageBytes!!.isNotEmpty()) ArchivePageWrapper(imageBytes!!) else null
+    }
+
+    override suspend fun getTableOfContents() = emptyList<Bookmark>()
+
+    override fun close() {
+        try { zipFile?.close() } catch (_: Exception) {}
+        try { extractedDir?.deleteRecursively() } catch (_: Exception) {}
+        try { file.delete() } catch (_: Exception) {}
+    }
+}
+
+/**
+ * Tracks whether the `libarchive-jni` native library could be loaded.
+ *
+ * The library comes from `me.zhanghai.android.libarchive:library`, which ships
+ * `arm64-v8a`/`armeabi-v7a`/`x86`/`x86_64` and is packaged into the ABI split.
+ * On a broken or partial install (base APK present, ABI split missing or
+ * corrupt) `Archive`'s static initializer throws `UnsatisfiedLinkError` and
+ * every subsequent reference throws `NoClassDefFoundError` — both
+ * `LinkageError`s, which `catch (e: Exception)` does not catch.
+ *
+ * This is reported once rather than per attempt: the condition is permanent for
+ * a given install, and the archive path is retried on every comic cover
+ * generation and add-to-recent.
+ */
+internal object ArchiveSupport {
+    private val unavailable = AtomicBoolean(false)
+
+    /** True once a load failure has been observed in this process. */
+    val isUnavailable: Boolean get() = unavailable.get()
+
+    /** Records a native-load failure. Returns true only for the first one. */
+    fun reportUnavailable(error: LinkageError): Boolean {
+        if (!unavailable.compareAndSet(false, true)) return false
+        Timber.e(
+            error,
+            "libarchive-jni unavailable (missing native split?); comic archives " +
+                "that are not plain ZIP will not open"
+        )
+        return true
+    }
+
+    @VisibleForTesting
+    fun resetForTests() {
+        unavailable.set(false)
+    }
+}
+
+class ArchivePageWrapper(imageBytes: ByteArray) : ReaderPage {
+    private val decoder = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            BitmapRegionDecoder.newInstance(imageBytes, 0, imageBytes.size)
+        } else {
+            @Suppress("DEPRECATION")
+            BitmapRegionDecoder.newInstance(imageBytes, 0, imageBytes.size, false)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private val originalWidth = decoder?.width ?: 1
+    private val originalHeight = decoder?.height ?: 1
+
+    override suspend fun getPageWidthPoint() = originalWidth
+    override suspend fun getPageHeightPoint() = originalHeight
+    override suspend fun getPageRotation() = 0
+
+    override suspend fun renderPageBitmap(bitmap: Bitmap, startX: Int, startY: Int, drawSizeX: Int, drawSizeY: Int, renderAnnot: Boolean) {
+        if (decoder == null || decoder.isRecycled) return
+        val scaleX = drawSizeX.toFloat() / originalWidth
+        val scaleY = drawSizeY.toFloat() / originalHeight
+
+        val pageOffsetX = -startX.toFloat()
+        val pageOffsetY = -startY.toFloat()
+
+        val exactSrcLeft = pageOffsetX / scaleX
+        val exactSrcTop = pageOffsetY / scaleY
+        val exactSrcRight = (pageOffsetX + bitmap.width) / scaleX
+        val exactSrcBottom = (pageOffsetY + bitmap.height) / scaleY
+
+        val srcLeft = kotlin.math.floor(exactSrcLeft).toInt().coerceAtLeast(0)
+        val srcTop = kotlin.math.floor(exactSrcTop).toInt().coerceAtLeast(0)
+        val srcRight = kotlin.math.ceil(exactSrcRight).toInt().coerceAtMost(originalWidth)
+        val srcBottom = kotlin.math.ceil(exactSrcBottom).toInt().coerceAtMost(originalHeight)
+
+        val rect = Rect(srcLeft, srcTop, srcRight, srcBottom)
+        if (rect.width() <= 0 || rect.height() <= 0) return
+
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inScaled = false
+            @Suppress("DEPRECATION")
+            inDither = true
+
+            var sampleSize = 1
+            val srcWidth = rect.width()
+            val srcHeight = rect.height()
+
+            if (srcHeight > bitmap.height || srcWidth > bitmap.width) {
+                val halfHeight = srcHeight / 2
+                val halfWidth = srcWidth / 2
+                while (halfHeight / sampleSize >= bitmap.height && halfWidth / sampleSize >= bitmap.width) {
+                    sampleSize *= 2
+                }
+            }
+            inSampleSize = sampleSize
+        }
+
+        val region = try {
+            decoder.decodeRegion(rect, options)
+        } catch (_: Exception) {
+            null
+        }
+
+        if (region != null) {
+            val canvas = Canvas(bitmap)
+
+            val destLeft = (srcLeft * scaleX) - pageOffsetX
+            val destTop = (srcTop * scaleY) - pageOffsetY
+            val destRight = (srcRight * scaleX) - pageOffsetX
+            val destBottom = (srcBottom * scaleY) - pageOffsetY
+
+            val destRect = RectF(destLeft, destTop, destRight, destBottom)
+
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG)
+
+            canvas.drawBitmap(region, null, destRect, paint)
+            region.recycle()
+        }
+    }
+
+    override suspend fun mapRectToDevice(startX: Int, startY: Int, sizeX: Int, sizeY: Int, rotate: Int, coords: RectF): Rect {
+        val scaleX = sizeX.toFloat() / originalWidth
+        val scaleY = sizeY.toFloat() / originalHeight
+        return Rect(
+            (startX + coords.left * scaleX).toInt(),
+            (startY + coords.top * scaleY).toInt(),
+            (startX + coords.right * scaleX).toInt(),
+            (startY + coords.bottom * scaleY).toInt()
+        )
+    }
+
+    override suspend fun mapDeviceCoordsToPage(startX: Int, startY: Int, sizeX: Int, sizeY: Int, rotate: Int, deviceX: Int, deviceY: Int): PointF {
+        val scaleX = sizeX.toFloat() / originalWidth
+        val scaleY = sizeY.toFloat() / originalHeight
+        return PointF((deviceX - startX) / scaleX, (deviceY - startY) / scaleY)
+    }
+
+    override suspend fun openTextPage() = DummyTextPage()
+    override suspend fun getLinks() = emptyList<ReaderLink>()
+    override fun getNativePointer() = 0L
+
+    override fun close() {
+        decoder?.recycle()
+    }
+}
+
+class OpdsStreamDocumentWrapper(
+    private val context: Context,
+    private val bookId: String,
+    private val urlTemplate: String,
+    private val pageCount: Int,
+    private val catalogId: String?
+) : ReaderDocument {
+    private val cacheDir = File(context.cacheDir, "opds_stream_${bookId.hashCode()}").apply { mkdirs() }
+
+    private val repository = com.aryan.reader.opds.OpdsRepository(context)
+
+    /**
+     * Credentials are resolved per request (not cached at construction) so
+     * catalog edits and re-added catalogs keep working for open streams.
+     */
+    private fun currentCatalog() = catalogId?.let { id ->
+        repository.getCatalogs().find { c -> c.id == id }
+    }
+
+    private fun createErrorPageBytes(): ByteArray {
+        val bitmap = createBitmap(800, 1200)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.DKGRAY)
+        val paint = Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText(context.getString(R.string.msg_page_unavailable), 400f, 600f, paint)
+        val stream = java.io.ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+        return stream.toByteArray()
+    }
+
+    override suspend fun getPageCount() = pageCount
+
+    override suspend fun openPage(pageIndex: Int): ReaderPage? = withContext(Dispatchers.IO) {
+        if (pageIndex !in 0 until pageCount) return@withContext null
+
+        val cachedFile = File(cacheDir, "page_$pageIndex.jpg")
+        if (cachedFile.exists() && cachedFile.length() > 0) {
+            try {
+                return@withContext ArchivePageWrapper(cachedFile.readBytes())
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to read cached stream page")
+            }
+        }
+
+        val streamCatalog = currentCatalog()
+        val username = streamCatalog?.username
+        val password = streamCatalog?.password
+        val url = SharedOpdsStreamRequest.buildPageUrl(
+            reference = OpdsStreamReference(
+                id = bookId,
+                count = pageCount,
+                urlTemplate = urlTemplate,
+                catalogId = catalogId,
+            ),
+            pageIndex = pageIndex,
+        )
+
+        // Stream pages must carry credentials on the first request: unlike
+        // feeds/downloads, a missing preemptive Authorization shows up as a
+        // server-side auth failure with no successful retry. The reactive
+        // authenticator below stays as a fallback (e.g. Digest).
+        val client = repository.getAuthenticatedClient(username, password)
+        val request = Request.Builder().url(url).apply {
+            com.aryan.reader.opds.OpdsRepository.preemptiveBasicAuthHeader(username, password)?.let {
+                header("Authorization", it)
+            }
+        }.build()
+        try {
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val bytes = response.body?.bytes()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    cachedFile.writeBytes(bytes)
+                    return@withContext ArchivePageWrapper(bytes)
+                }
+            } else {
+                Timber.e("Stream page failed with HTTP ${response.code}")
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to fetch stream page $pageIndex")
+        }
+
+        return@withContext ArchivePageWrapper(createErrorPageBytes())
+    }
+
+    override suspend fun getTableOfContents() = emptyList<Bookmark>()
+
+    override fun close() {}
+}

@@ -1,0 +1,704 @@
+package com.aryan.reader.shared.ui
+
+import com.aryan.reader.shared.BookItem
+import com.aryan.reader.shared.FileType
+import com.aryan.reader.shared.LibraryFilters
+import com.aryan.reader.shared.ReadStatusFilter
+import com.aryan.reader.shared.ReaderPlatform
+import com.aryan.reader.shared.SharedFeaturePolicy
+import com.aryan.reader.shared.SharedFileCapabilities
+import com.aryan.reader.shared.SharedReaderScreenState
+import com.aryan.reader.shared.Shelf
+import com.aryan.reader.shared.ShelfType
+import com.aryan.reader.shared.SortOrder
+import com.aryan.reader.shared.SyncedFolder
+import com.aryan.reader.shared.isOpdsStream
+import com.aryan.reader.shared.applyLibraryFilters
+import com.aryan.reader.shared.filterBySearch
+import com.aryan.reader.shared.progressPercentValue
+import com.aryan.reader.shared.sortBooks
+import com.aryan.reader.shared.toHomeScreenModel
+
+enum class SharedAppToolAction {
+    SETTINGS,
+    IMPORT_FILES,
+    IMPORT_FOLDER,
+    SYNC,
+    APP_THEME,
+    DEV_TOOLS,
+    PRO,
+    AI_SETTINGS,
+    CUSTOM_FONTS,
+    HELP_FEEDBACK,
+    SUPPORT,
+    ABOUT,
+    TABS_TOGGLE
+}
+
+internal enum class SharedMobileBookTapIntent {
+    OPEN,
+    TOGGLE_SELECTION,
+}
+
+internal fun mobileBookTapIntent(selectedBookIds: Set<String>): SharedMobileBookTapIntent =
+    if (selectedBookIds.isEmpty()) SharedMobileBookTapIntent.OPEN else SharedMobileBookTapIntent.TOGGLE_SELECTION
+
+/**
+ * Android long-press only enters/adds to book selection. Repeating a
+ * long-press on an already selected book is intentionally a no-op.
+ */
+internal fun shouldSelectBookOnLongPress(
+    bookId: String,
+    selectedBookIds: Set<String>,
+): Boolean = bookId !in selectedBookIds
+
+internal enum class SharedMobileBookStatusBadge {
+    PINNED,
+    FOLDER,
+    CATALOG,
+}
+
+/** Matches the status indicators Android places on book cards. */
+internal fun mobileBookStatusBadges(
+    book: BookItem,
+    pinned: Boolean,
+): List<SharedMobileBookStatusBadge> = buildList {
+    if (book.sourceFolder != null) add(SharedMobileBookStatusBadge.FOLDER)
+    if (book.isOpdsStream()) add(SharedMobileBookStatusBadge.CATALOG)
+    if (pinned) add(SharedMobileBookStatusBadge.PINNED)
+}
+
+internal enum class SharedMobileLibraryBooksState {
+    CONTENT,
+    SEARCH_NO_RESULTS,
+    EMPTY_LIBRARY,
+}
+
+/** Android reserves its import empty state for a blank search query. */
+internal fun mobileLibraryBooksState(
+    visibleBookCount: Int,
+    searchQuery: String,
+): SharedMobileLibraryBooksState = when {
+    visibleBookCount > 0 -> SharedMobileLibraryBooksState.CONTENT
+    searchQuery.isNotBlank() -> SharedMobileLibraryBooksState.SEARCH_NO_RESULTS
+    else -> SharedMobileLibraryBooksState.EMPTY_LIBRARY
+}
+
+/**
+ * Canonical folder-filter identity for a synced folder.
+ *
+ * Android is the benchmark: its `SharedMobileLibraryFilterDialog` stores
+ * `folder.uriString`, and Android books carry that same string in
+ * `BookItem.sourceFolder`. So `uriString` is what gets written.
+ *
+ * The alias exists because iOS native folder scans record a book's
+ * `sourceFolder` as the folder *name*, so a selection written by one platform
+ * must still match books produced by the other. Rather than keep two dialogs
+ * with two storage models, matching accepts either spelling (see
+ * `LibraryFilters.matchesFolderSelection`) and legacy name-based selections
+ * are normalized on the way in.
+ */
+internal fun SyncedFolder.filterAliases(): Set<String> =
+    setOf(uriString, name)
+
+/**
+ * Folder-filter selections, with legacy name-based entries rewritten to the
+ * canonical `uriString` so a stored selection survives a platform change.
+ */
+internal fun LibraryFilters.withCanonicalFolderFilterIdentities(
+    folders: List<SyncedFolder>,
+): LibraryFilters {
+    if (sourceFolders.isEmpty()) return this
+    val uriByName = folders.associate { it.name to it.uriString }
+    return copy(sourceFolders = sourceFolders.mapTo(linkedSetOf()) { uriByName[it] ?: it })
+}
+
+/** Selects [folder] if absent, deselects it if already selected under either spelling. */
+internal fun LibraryFilters.toggleFolderFilter(
+    folder: SyncedFolder,
+): LibraryFilters {
+    val aliases = folder.filterAliases()
+    val selected = sourceFolders.any { it in aliases }
+    return copy(
+        sourceFolders = if (selected) {
+            sourceFolders - aliases
+        } else {
+            (sourceFolders - aliases) + folder.uriString
+        }
+    )
+}
+
+/** Clears either persisted representation of a filter when that folder is removed. */
+internal fun LibraryFilters.withoutFolderFilter(folder: SyncedFolder): LibraryFilters {
+    return copy(sourceFolders = sourceFolders - folder.filterAliases())
+}
+
+/** Android-style source presentation without exposing an iOS app-container path. */
+internal fun mobileBookInfoDisplayLocation(
+    book: BookItem,
+    opdsLabel: String,
+    inAppLabel: String,
+): String = when {
+    book.isOpdsStream() -> opdsLabel
+    book.sourceFolder.isNullOrBlank() -> inAppLabel
+    else -> "${book.sourceFolder.orEmpty().trimEnd('/', '\\')}/${book.displayName}"
+}
+
+/** Rebuilds iOS Library results from raw books using Android's projection order. */
+internal fun SharedReaderScreenState.visibleIosLibraryBooks(): List<BookItem> {
+    // Selections are stored as Android's uriString; iOS books carry the folder
+    // name, so the alias map lets one selection match both. Normalizing on the
+    // way in rewrites any legacy name-based selection to the canonical uriString.
+    val effectiveFilters = libraryFilters.withCanonicalFolderFilterIdentities(syncedFolders)
+    val sorted = sortBooks(
+        applyLibraryFilters(
+            books = filterBySearch(rawLibraryBooks, searchQuery),
+            filters = effectiveFilters,
+            folderAliases = syncedFolders.associate { it.name to it.uriString },
+        ),
+        sortOrder,
+    )
+    if (pinnedLibraryBookIds.isEmpty()) return sorted
+    return sorted.withIndex()
+        .sortedWith(
+            compareByDescending<IndexedValue<BookItem>> { it.value.id in pinnedLibraryBookIds }
+                .thenBy { it.index }
+        )
+        .map { it.value }
+}
+
+/** Android's shelves landing page contains manual shelves and root folders only. */
+internal fun topLevelMobileShelves(shelves: List<Shelf>): List<Shelf> = shelves.filter { shelf ->
+    shelf.type != ShelfType.TAG && shelf.parentShelfId == null
+}
+
+/**
+ * File-manager style breadcrumb entry for shelf navigation.
+ * A null [id] represents the shelves root (rendered as a home icon).
+ */
+data class SharedShelfBreadcrumbEntry(
+    val id: String?,
+    val name: String,
+)
+
+/**
+ * Builds the root-to-current breadcrumb path for [currentShelfId] by walking
+ * [parentShelfId] links. Android benchmark: the same walk drives both the
+ * legacy shelf detail back stack and the unified shelves section.
+ *
+ * Missing parents terminate the walk at the deepest resolvable ancestor so a
+ * stale selection never hides the current shelf. Cycles are guarded by visited
+ * tracking. A null/blank/missing [currentShelfId] resolves to root only.
+ */
+fun shelfBreadcrumbPath(
+    shelves: List<Shelf>,
+    currentShelfId: String?,
+    rootName: String = "",
+): List<SharedShelfBreadcrumbEntry> = genericShelfBreadcrumbPath(
+    currentShelfId = currentShelfId,
+    lookup = { id -> shelves.firstOrNull { it.id == id } },
+    idOf = { it.id },
+    nameOf = { it.name },
+    parentIdOf = { it.parentShelfId },
+    rootName = rootName,
+)
+
+/**
+ * Generic breadcrumb path builder for platform shelf models (e.g. Android's
+ * [com.aryan.reader.Shelf]) that mirror the shared parent-link structure.
+ */
+fun <S> genericShelfBreadcrumbPath(
+    currentShelfId: String?,
+    lookup: (String) -> S?,
+    idOf: (S) -> String,
+    nameOf: (S) -> String,
+    parentIdOf: (S) -> String?,
+    rootName: String = "",
+): List<SharedShelfBreadcrumbEntry> {
+    val ancestors = ArrayDeque<SharedShelfBreadcrumbEntry>()
+    val visited = mutableSetOf<String>()
+    var cursor = currentShelfId?.takeIf { it.isNotBlank() }?.let(lookup)
+    while (cursor != null) {
+        val id = idOf(cursor)
+        if (!visited.add(id)) break
+        ancestors.addFirst(SharedShelfBreadcrumbEntry(id = id, name = nameOf(cursor)))
+        val parentId = parentIdOf(cursor)?.takeIf { it.isNotBlank() } ?: break
+        if (parentId in visited) break
+        cursor = lookup(parentId)
+        if (cursor == null) break
+    }
+    return buildList {
+        add(SharedShelfBreadcrumbEntry(id = null, name = rootName))
+        addAll(ancestors)
+    }
+}
+
+internal enum class SharedMobileShelfTapIntent {
+    OPEN,
+    TOGGLE_SELECTION,
+}
+
+/**
+ * Android keeps shelf taps inside contextual mode once any shelf is selected.
+ * This also prevents non-selectable shelves from unexpectedly opening while a
+ * manual-shelf selection is active.
+ */
+internal fun mobileShelfTapIntent(selectedShelfIds: Set<String>): SharedMobileShelfTapIntent =
+    if (selectedShelfIds.isEmpty()) SharedMobileShelfTapIntent.OPEN else SharedMobileShelfTapIntent.TOGGLE_SELECTION
+
+/**
+ * Android long-press only enters/adds to shelf selection. Repeating a
+ * long-press on an already selected shelf is intentionally a no-op.
+ */
+internal fun shouldSelectShelfOnLongPress(
+    shelfId: String,
+    selectedShelfIds: Set<String>,
+): Boolean = shelfId !in selectedShelfIds
+
+/**
+ * Android treats the source chips as alternate views of one pending add
+ * operation. Selections therefore remain pending when the user switches
+ * between Unshelved and All books.
+ */
+internal fun mobileAddBooksSelectionAfterSourceChange(
+    selectedBookIds: Set<String>,
+): Set<String> = selectedBookIds
+
+enum class SharedAppMoreGroup {
+    LIBRARY,
+    ACCOUNT,
+    PREFERENCES,
+    DEV_TOOLS,
+    HELP
+}
+
+data class SharedAppMoreSection(
+    val group: SharedAppMoreGroup,
+    val actions: List<SharedAppToolAction>
+)
+
+data class SharedAppShellModel(
+    val primaryTabs: List<SharedAppTab>,
+    val primaryActions: List<SharedAppToolAction>,
+    val selectedPrimaryTab: SharedAppTab,
+    val toolActions: List<SharedAppToolAction>,
+    val moreSections: List<SharedAppMoreSection>,
+    val showPrimaryNavigation: Boolean
+)
+
+data class SharedSidebarSyncToggleModel(
+    val visible: Boolean,
+    val enabled: Boolean,
+    val checked: Boolean
+)
+
+fun sharedAppShellModel(
+    selectedTab: SharedAppTab,
+    aiSettingsAvailable: Boolean,
+    featurePolicy: SharedFeaturePolicy = SharedFeaturePolicy.Standard
+): SharedAppShellModel {
+    val primaryTabs = buildList {
+        add(SharedAppTab.LIBRARY)
+        if (featurePolicy.opdsCatalogs) add(SharedAppTab.CATALOGS)
+        if (featurePolicy.aiAndCloud) add(SharedAppTab.PRO)
+    }
+    val primaryActions = buildList {
+        if (aiSettingsAvailable && featurePolicy.aiAndCloud && !featurePolicy.byokAi) {
+            add(SharedAppToolAction.AI_SETTINGS)
+        }
+    }
+    val selectedPrimaryTab = when (selectedTab) {
+        SharedAppTab.SHELVES -> SharedAppTab.LIBRARY
+        SharedAppTab.SETTINGS,
+        SharedAppTab.CUSTOM_FONTS,
+        SharedAppTab.SUPPORT,
+        SharedAppTab.FEEDBACK,
+        SharedAppTab.ABOUT -> SharedAppTab.LIBRARY
+        else -> selectedTab
+    }.takeIf { it in primaryTabs } ?: SharedAppTab.LIBRARY
+    val toolActions = buildList {
+        add(SharedAppToolAction.SETTINGS)
+        add(SharedAppToolAction.APP_THEME)
+        if (aiSettingsAvailable && featurePolicy.aiAndCloud) add(SharedAppToolAction.AI_SETTINGS)
+        add(SharedAppToolAction.CUSTOM_FONTS)
+        if (featurePolicy.projectLinks) {
+            add(SharedAppToolAction.HELP_FEEDBACK)
+            add(SharedAppToolAction.SUPPORT)
+        }
+        add(SharedAppToolAction.ABOUT)
+    }
+    return SharedAppShellModel(
+        primaryTabs = primaryTabs,
+        primaryActions = primaryActions,
+        selectedPrimaryTab = selectedPrimaryTab,
+        toolActions = toolActions,
+        moreSections = sharedAppMoreSections(toolActions),
+        showPrimaryNavigation = selectedTab != SharedAppTab.READER
+    )
+}
+
+fun sharedAppMoreSections(actions: List<SharedAppToolAction>): List<SharedAppMoreSection> {
+    return listOf(
+        SharedAppMoreSection(
+            group = SharedAppMoreGroup.PREFERENCES,
+            actions = actions.filter {
+                it == SharedAppToolAction.SETTINGS ||
+                    it == SharedAppToolAction.APP_THEME ||
+                    it == SharedAppToolAction.AI_SETTINGS ||
+                    it == SharedAppToolAction.CUSTOM_FONTS
+            }
+        ),
+        SharedAppMoreSection(
+            group = SharedAppMoreGroup.DEV_TOOLS,
+            actions = actions.filter {
+                it == SharedAppToolAction.DEV_TOOLS
+            }
+        ),
+        SharedAppMoreSection(
+            group = SharedAppMoreGroup.HELP,
+            actions = actions.filter {
+                it == SharedAppToolAction.HELP_FEEDBACK ||
+                    it == SharedAppToolAction.SUPPORT ||
+                    it == SharedAppToolAction.ABOUT
+            }
+        )
+    ).filter { it.actions.isNotEmpty() }
+}
+
+fun sharedSidebarSyncToggleModel(
+    isSignedIn: Boolean,
+    accountAvailable: Boolean,
+    syncAvailable: Boolean,
+    isProUser: Boolean,
+    isSyncEnabled: Boolean,
+    featurePolicy: SharedFeaturePolicy = SharedFeaturePolicy.Standard
+): SharedSidebarSyncToggleModel {
+    val visible = isSignedIn &&
+        accountAvailable &&
+        syncAvailable &&
+        featurePolicy.aiAndCloud
+    return SharedSidebarSyncToggleModel(
+        visible = visible,
+        enabled = visible && isProUser,
+        checked = visible && isSyncEnabled
+    )
+}
+
+data class NonReaderHomeLayoutModel(
+    val continueBook: BookItem?,
+    val activeTabs: List<BookItem>,
+    val pinnedBooks: List<BookItem>,
+    val recentBooks: List<BookItem>,
+    val selectedBooks: List<BookItem>,
+    val isContextualModeActive: Boolean,
+    val isEmpty: Boolean,
+    val isLibraryEmpty: Boolean
+)
+
+internal fun SharedReaderScreenState.mobileRecentBooks(): List<BookItem> {
+    val sorted = sortBooks(rawLibraryBooks.filter { it.isRecent }, SortOrder.RECENT)
+    val pinned = sorted.filter { it.id in pinnedHomeBookIds }
+    val unpinned = sorted.filterNot { it.id in pinnedHomeBookIds }
+    return (pinned + unpinned)
+        .take(if (recentFilesLimit > 0) recentFilesLimit else Int.MAX_VALUE)
+}
+
+fun SharedReaderScreenState.toNonReaderHomeLayoutModel(): NonReaderHomeLayoutModel {
+    val model = toHomeScreenModel()
+    val activeTabs = if (isTabsEnabled) model.openTabs else emptyList()
+    val continueBook = activeTabs.firstOrNull { it.id == activeTabBookId }
+        ?: model.recentBooks.firstOrNull { progressPercentValue(it.progressPercentage) in 1..99 }
+        ?: model.recentBooks.firstOrNull()
+    val continueId = continueBook?.id
+    val pinnedBooks = model.recentBooks
+        .filter { it.id in pinnedHomeBookIds && it.id != continueId }
+    val recentBooks = model.recentBooks
+        .filter { it.id !in pinnedHomeBookIds && it.id != continueId }
+    return NonReaderHomeLayoutModel(
+        continueBook = continueBook,
+        activeTabs = activeTabs,
+        pinnedBooks = pinnedBooks,
+        recentBooks = recentBooks,
+        selectedBooks = model.selectedBooks,
+        isContextualModeActive = model.isContextualModeActive,
+        isEmpty = continueBook == null && pinnedBooks.isEmpty() && recentBooks.isEmpty() && activeTabs.isEmpty(),
+        isLibraryEmpty = model.isLibraryEmpty
+    )
+}
+
+data class NonReaderLibraryOrganizationModel(
+    val allBooksCount: Int,
+    val shelfCount: Int,
+    val smartShelfCount: Int,
+    val tagCount: Int,
+    val folderCount: Int,
+    val unreadCount: Int,
+    val inProgressCount: Int,
+    val completedCount: Int,
+    val activeFilterCount: Int,
+    val availableFileTypes: List<FileType>,
+    val hasInAppBooks: Boolean,
+    val hasOpdsStreams: Boolean
+)
+
+internal data class NonReaderLibraryFileTypeGroup(
+    val titleKey: String,
+    val titleFallback: String,
+    val fileTypes: List<FileType>
+)
+
+private val LibraryFileTypeGroupTemplates = listOf(
+    NonReaderLibraryFileTypeGroup(
+        titleKey = "desktop_file_type_group_books",
+        titleFallback = "Books",
+        fileTypes = listOf(FileType.EPUB, FileType.MOBI, FileType.FB2)
+    ),
+    NonReaderLibraryFileTypeGroup(
+        titleKey = "desktop_file_type_group_documents",
+        titleFallback = "Documents",
+        fileTypes = listOf(FileType.PDF, FileType.PPTX, FileType.DOCX, FileType.ODT, FileType.FODT)
+    ),
+    NonReaderLibraryFileTypeGroup(
+        titleKey = "desktop_file_type_group_text_web",
+        titleFallback = "Text and web",
+        fileTypes = listOf(FileType.MD, FileType.TXT, FileType.HTML)
+    ),
+    NonReaderLibraryFileTypeGroup(
+        titleKey = "desktop_file_type_group_comics",
+        titleFallback = "Comics",
+        fileTypes = listOf(FileType.CBZ, FileType.CBR, FileType.CB7, FileType.CBT)
+    )
+)
+
+private val AndroidLibraryTabs = listOf(
+    NonReaderLibraryTab.BOOKS,
+    NonReaderLibraryTab.SHELVES,
+    NonReaderLibraryTab.FOLDERS
+)
+
+private val DesktopLibraryTabs = listOf(
+    NonReaderLibraryTab.BOOKS,
+    NonReaderLibraryTab.SHELVES,
+    NonReaderLibraryTab.FOLDERS,
+    NonReaderLibraryTab.UNREAD,
+    NonReaderLibraryTab.IN_PROGRESS,
+    NonReaderLibraryTab.COMPLETED
+)
+
+internal enum class NonReaderLibraryPrimaryAction {
+    NEW_SHELF
+}
+
+internal enum class NonReaderBookOverflowAction {
+    ADD_TO_SHELF,
+    SAVE_ORIGINAL,
+    SHARE_ORIGINAL
+}
+
+internal fun visibleNonReaderLibraryTabs(
+    platform: ReaderPlatform = ReaderPlatform.ANDROID
+): List<NonReaderLibraryTab> {
+    return when (platform) {
+        ReaderPlatform.ANDROID -> AndroidLibraryTabs
+        ReaderPlatform.DESKTOP -> DesktopLibraryTabs
+        ReaderPlatform.IOS -> AndroidLibraryTabs
+    }
+}
+
+internal fun primaryLibraryActionsForTab(
+    tab: NonReaderLibraryTab,
+    platform: ReaderPlatform = ReaderPlatform.ANDROID
+): List<NonReaderLibraryPrimaryAction> {
+    return if (platform == ReaderPlatform.DESKTOP && tab.visibleLibraryTab(platform) == NonReaderLibraryTab.SHELVES) {
+        listOf(NonReaderLibraryPrimaryAction.NEW_SHELF)
+    } else {
+        emptyList()
+    }
+}
+
+internal fun bookOverflowActionsForPlatform(
+    platform: ReaderPlatform = ReaderPlatform.ANDROID
+): Set<NonReaderBookOverflowAction> {
+    return when (platform) {
+        ReaderPlatform.DESKTOP -> setOf(
+            NonReaderBookOverflowAction.ADD_TO_SHELF,
+            NonReaderBookOverflowAction.SAVE_ORIGINAL
+        )
+        ReaderPlatform.ANDROID,
+        ReaderPlatform.IOS -> setOf(
+            NonReaderBookOverflowAction.SAVE_ORIGINAL,
+            NonReaderBookOverflowAction.SHARE_ORIGINAL
+        )
+    }
+}
+
+internal enum class LibraryCommandBarLayout {
+    INLINE,
+    STACKED
+}
+
+internal fun libraryCommandBarLayoutForWidth(
+    widthDp: Float,
+    platform: ReaderPlatform = ReaderPlatform.DESKTOP
+): LibraryCommandBarLayout {
+    return if (platform == ReaderPlatform.DESKTOP && widthDp >= 980f) {
+        LibraryCommandBarLayout.INLINE
+    } else {
+        LibraryCommandBarLayout.STACKED
+    }
+}
+
+internal fun NonReaderLibraryTab.visibleLibraryTab(
+    platform: ReaderPlatform = ReaderPlatform.ANDROID
+): NonReaderLibraryTab {
+    return takeIf { it in visibleNonReaderLibraryTabs(platform) } ?: NonReaderLibraryTab.BOOKS
+}
+
+internal fun SharedReaderScreenState.booksForNonReaderLibraryTab(
+    tab: NonReaderLibraryTab,
+    platform: ReaderPlatform = ReaderPlatform.ANDROID
+): List<BookItem> {
+    return when (tab.visibleLibraryTab(platform)) {
+        NonReaderLibraryTab.UNREAD -> libraryBooks.filter { progressPercentValue(it.progressPercentage) == 0 }
+        NonReaderLibraryTab.IN_PROGRESS -> libraryBooks.filter { progressPercentValue(it.progressPercentage) in 1..99 }
+        NonReaderLibraryTab.COMPLETED -> libraryBooks.filter { progressPercentValue(it.progressPercentage) >= 100 }
+        else -> libraryBooks
+    }
+}
+
+internal fun nonReaderLibraryFileTypeGroups(
+    platform: ReaderPlatform = ReaderPlatform.DESKTOP
+): List<NonReaderLibraryFileTypeGroup> {
+    val readableTypes = SharedFileCapabilities.readableTypesFor(platform)
+    val knownGroupedTypes = LibraryFileTypeGroupTemplates.flatMapTo(mutableSetOf()) { it.fileTypes }
+    val grouped = LibraryFileTypeGroupTemplates.mapNotNull { group ->
+        val visibleTypes = group.fileTypes.filter { it in readableTypes }
+        group.copy(fileTypes = visibleTypes).takeIf { visibleTypes.isNotEmpty() }
+    }
+    val otherTypes = readableTypes
+        .filterNot { it in knownGroupedTypes }
+        .sortedBy { it.ordinal }
+
+    return if (otherTypes.isEmpty()) {
+        grouped
+    } else {
+        grouped + NonReaderLibraryFileTypeGroup(
+            titleKey = "desktop_file_type_group_other",
+            titleFallback = "Other",
+            fileTypes = otherTypes
+        )
+    }
+}
+
+fun SharedReaderScreenState.toNonReaderLibraryOrganizationModel(): NonReaderLibraryOrganizationModel {
+    val books = organizationBooks()
+    val rootFolderCount = shelves.count { it.type == ShelfType.FOLDER && it.parentShelfId == null }
+    val tagIds = (allTags.map { it.id } + books.flatMap { book -> book.tags.map { it.id } }).toSet()
+    return NonReaderLibraryOrganizationModel(
+        allBooksCount = books.size,
+        shelfCount = shelves.count { it.type != ShelfType.FOLDER && it.type != ShelfType.TAG && it.type != ShelfType.SMART },
+        smartShelfCount = shelves.count { it.type == ShelfType.SMART },
+        tagCount = tagIds.size,
+        folderCount = maxOf(rootFolderCount, syncedFolders.size),
+        unreadCount = books.count { progressPercentValue(it.progressPercentage) == 0 },
+        inProgressCount = books.count { progressPercentValue(it.progressPercentage) in 1..99 },
+        completedCount = books.count { progressPercentValue(it.progressPercentage) >= 100 },
+        activeFilterCount = libraryFilters.activeFilterCount(),
+        availableFileTypes = books
+            .map { it.type }
+            .filterNot { it == FileType.UNKNOWN }
+            .distinct()
+            .sortedBy { it.ordinal },
+        hasInAppBooks = books.any { it.sourceFolder == null && !it.isOpdsStream() },
+        hasOpdsStreams = books.any { it.isOpdsStream() }
+    )
+}
+
+private fun SharedReaderScreenState.organizationBooks(): List<BookItem> {
+    if (shelves.isEmpty()) return rawLibraryBooks
+    return shelves
+        .flatMap { it.books }
+        .distinctBy { it.id }
+}
+
+/**
+ * Number of advanced-filter facets the user has actively set, for the
+ * "filters (N)" badge. Android parity (`UnifiedLibraryScreen.kt`).
+ */
+fun LibraryFilters.activeFilterCount(): Int {
+    return fileTypes.size +
+        sourceFolders.size +
+        tagIds.size +
+        if (readStatus == ReadStatusFilter.ALL) 0 else 1
+}
+
+/**
+ * Matches a single [BookItem] against the unified-library progress filter and a
+ * free-text query, ignoring the advanced-filter facets and sort order.
+ *
+ * Split out of [mobileUnifiedLibraryBooks] so hosts that apply
+ * `applyLibraryFilters` / `sortBooks` themselves reuse one predicate instead of
+ * re-implementing it (Android `UnifiedLibraryScreen.kt`).
+ */
+fun BookItem.matchesMobileUnifiedLibraryFilter(
+    filter: MobileUnifiedLibraryFilter,
+    normalizedQuery: String
+): Boolean {
+    // Deliberately the raw float, not progressPercentValue(): rounding would
+    // move the 0.01f..<100f reading band and the >=100f finished edge.
+    val progress = progressPercentage ?: 0f
+    val matchesFilter = when (filter) {
+        MobileUnifiedLibraryFilter.ALL -> true
+        MobileUnifiedLibraryFilter.READING -> progress in 0.01f..<100f
+        MobileUnifiedLibraryFilter.FINISHED -> progress >= 100f
+        MobileUnifiedLibraryFilter.UNREAD -> progress <= 0f
+    }
+    return matchesFilter && (
+        normalizedQuery.isBlank() ||
+            listOf(displayName, title, author).any {
+                it?.contains(normalizedQuery, ignoreCase = true) == true
+            }
+        )
+}
+enum class MobileUnifiedLibraryFilter {
+    ALL,
+    READING,
+    FINISHED,
+    UNREAD,
+}
+
+enum class MobileUnifiedLibrarySection(val persistedValue: Int) {
+    HOME(0),
+    SHELVES(1),
+    FOLDERS(2),
+    CATALOGS(3),
+    AUDIOBOOKS(4);
+
+    companion object {
+        fun fromPersisted(value: Int): MobileUnifiedLibrarySection =
+            entries.firstOrNull { it.persistedValue == value } ?: HOME
+    }
+}
+
+internal fun mobileUnifiedLibraryBooks(
+    books: List<BookItem>,
+    filter: MobileUnifiedLibraryFilter,
+    query: String,
+    libraryFilters: LibraryFilters = LibraryFilters(),
+    sortOrder: SortOrder = SortOrder.RECENT,
+    folderAliases: Map<String, String> = emptyMap(),
+): List<BookItem> {
+    val normalizedQuery = query.trim()
+    val filteredBooks = applyLibraryFilters(books, libraryFilters, folderAliases)
+        .filter { it.matchesMobileUnifiedLibraryFilter(filter, normalizedQuery) }
+    return sortBooks(filteredBooks, sortOrder)
+}
+
+/**
+ * Picks the "Continue reading" card: the most recently touched book that is
+ * partway through, else the newest book overall.
+ */
+fun mobileUnifiedContinueReadingBook(books: List<BookItem>): BookItem? =
+    books.filter { (it.progressPercentage ?: 0f) in 0.01f..<100f }
+        .maxByOrNull { maxOf(it.readingPositionModifiedTimestamp, it.timestamp) }
+        ?: books.maxByOrNull { it.timestamp }

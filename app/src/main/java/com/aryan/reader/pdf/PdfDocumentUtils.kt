@@ -1,0 +1,333 @@
+package com.aryan.reader.pdf
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.print.PageRange
+import android.print.PrintAttributes
+import android.print.PrintDocumentAdapter
+import android.print.PrintDocumentInfo
+import android.provider.OpenableColumns
+import android.util.LruCache
+import androidx.core.graphics.createBitmap
+import com.aryan.reader.pdf.data.PdfAnnotation
+import com.aryan.reader.pdf.data.PdfTextBox
+import io.legere.pdfiumandroid.suspend.PdfiumCoreKt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
+import java.io.ByteArrayOutputStream
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
+import kotlin.random.Random
+
+private const val PDF_PREVIEW_MAX_WIDTH_PX = 1080
+private const val PDF_PREVIEW_MAX_HEIGHT_PX = 2048
+private const val PDF_PREVIEW_MAX_BYTES = 16L * 1024L * 1024L
+private const val PDF_ENCRYPT_MARKER_TAIL_BYTES = 512 * 1024
+private val PDF_ENCRYPT_MARKER = "/Encrypt".toByteArray(Charsets.US_ASCII)
+
+object PdfiumCoreProvider {
+    val core: PdfiumCoreKt by lazy {
+        PdfiumCoreKt(Dispatchers.Default)
+    }
+}
+
+internal data class DocumentCacheItem(
+    val doc: ReaderDocument,
+    val pfd: ParcelFileDescriptor?,
+    val totalPages: Int,
+    val pageAspectRatios: List<Float>,
+    val flatTableOfContents: List<TocEntry>,
+    val isPasswordProtectedPdf: Boolean = false
+)
+
+internal class DocumentCache(val maxSize: Int = 3) {
+    val cache = object : LruCache<String, DocumentCacheItem>(maxSize) {
+        override fun entryRemoved(
+            evicted: Boolean,
+            key: String,
+            oldValue: DocumentCacheItem,
+            newValue: DocumentCacheItem?
+        ) {
+            if (evicted) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    try { oldValue.doc.close() } catch (e: Exception) { Timber.e(e) }
+                    try { oldValue.pfd?.close() } catch (e: Exception) { Timber.e(e) }
+                }
+            }
+        }
+    }
+    fun put(key: String, item: DocumentCacheItem) { cache.put(key, item) }
+    fun get(key: String): DocumentCacheItem? = cache.get(key)
+    fun evictAll() { cache.evictAll() }
+}
+
+class PdfPrintDocumentAdapter(
+    private val context: Context,
+    private val pdfUri: Uri,
+    private val fileName: String
+) : PrintDocumentAdapter() {
+
+    override fun onLayout(
+        oldAttributes: PrintAttributes?,
+        newAttributes: PrintAttributes?,
+        cancellationSignal: CancellationSignal?,
+        callback: LayoutResultCallback?,
+        extras: Bundle?
+    ) {
+        if (cancellationSignal?.isCanceled == true) {
+            callback?.onLayoutCancelled()
+            return
+        }
+
+        val info = PrintDocumentInfo.Builder(fileName)
+            .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+            .build()
+
+        callback?.onLayoutFinished(info, true)
+    }
+
+    override fun onWrite(
+        pages: Array<out PageRange>?,
+        destination: ParcelFileDescriptor?,
+        cancellationSignal: CancellationSignal?,
+        callback: WriteResultCallback?
+    ) {
+        try {
+            context.contentResolver.openFileDescriptor(pdfUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).use { input ->
+                    FileOutputStream(destination?.fileDescriptor).use { output ->
+                        val buf = ByteArray(8192)
+                        var bytesRead: Int
+                        while (input.read(buf).also { bytesRead = it } > 0) {
+                            if (cancellationSignal?.isCanceled == true) {
+                                Timber.tag("PdfPrint").d("Print job cancelled during write")
+                                callback?.onWriteCancelled()
+                                return
+                            }
+                            output.write(buf, 0, bytesRead)
+                        }
+                    }
+                }
+            }
+            Timber.tag("PdfPrint").i("PDF successfully streamed to print spooler")
+            callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+        } catch (e: Exception) {
+            Timber.tag("PdfPrint").e(e, "Error writing PDF to print spooler")
+            callback?.onWriteFailed(e.message)
+        }
+    }
+}
+
+internal fun pdfBytesContainEncryptMarker(bytes: ByteArray): Boolean {
+    for (index in 0..bytes.size - PDF_ENCRYPT_MARKER.size) {
+        var matches = true
+        for (offset in PDF_ENCRYPT_MARKER.indices) {
+            if (bytes[index + offset] != PDF_ENCRYPT_MARKER[offset]) {
+                matches = false
+                break
+            }
+        }
+        if (matches && bytes.getOrNull(index + PDF_ENCRYPT_MARKER.size)?.isPdfNameDelimiter() != false) {
+            return true
+        }
+    }
+    return false
+}
+
+internal fun isPdfLikelyEncryptedForPrint(context: Context, uri: Uri): Boolean {
+    return try {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            FileInputStream(pfd.fileDescriptor).use { input ->
+                val knownSize = pfd.statSize.takeIf { it >= 0L }
+                    ?: runCatching { input.channel.size() }.getOrNull()?.takeIf { it >= 0L }
+                val tailBytes = if (knownSize != null && knownSize > PDF_ENCRYPT_MARKER_TAIL_BYTES) {
+                    input.channel.position(knownSize - PDF_ENCRYPT_MARKER_TAIL_BYTES)
+                    input.readBytes()
+                } else if (knownSize != null) {
+                    input.readBytes()
+                } else {
+                    input.readLastBytes(PDF_ENCRYPT_MARKER_TAIL_BYTES)
+                }
+                pdfBytesContainEncryptMarker(tailBytes)
+            }
+        } ?: false
+    } catch (e: Exception) {
+        Timber.tag("PdfPrint").w(e, "Could not inspect PDF encryption marker before print")
+        false
+    }
+}
+
+private fun Byte.isPdfNameDelimiter(): Boolean {
+    return when (toInt().toChar()) {
+        '\u0000', '\t', '\n', '\u000C', '\r', ' ', '(', ')', '<', '>', '[', ']', '{', '}', '/', '%' -> true
+        else -> false
+    }
+}
+
+private fun FileInputStream.readLastBytes(maxBytes: Int): ByteArray {
+    val output = ByteArrayOutputStream(maxBytes)
+    val buffer = ByteArray(8192)
+    var bytesRead: Int
+    while (read(buffer).also { bytesRead = it } > 0) {
+        if (output.size() + bytesRead <= maxBytes) {
+            output.write(buffer, 0, bytesRead)
+        } else {
+            val combined = output.toByteArray() + buffer.copyOf(bytesRead)
+            output.reset()
+            output.write(combined, combined.size - maxBytes, maxBytes)
+        }
+    }
+    return output.toByteArray()
+}
+
+internal fun generateShortId(): String {
+    return Random.nextInt(1000, 9999).toString()
+}
+
+internal fun getSuggestedFilename(originalName: String?, isAnnotated: Boolean): String {
+    // Single source of truth lives in shared (SharedPdfExportFilenames) so iOS share/save uses
+    // the identical suggested-name logic; Android remains the benchmark behavior.
+    return com.aryan.reader.shared.pdf.suggestSharedPdfExportFilename(
+        originalName = originalName,
+        isAnnotated = isAnnotated,
+        randomSuffix = Random.nextInt(1000, 9999),
+    )
+}
+
+internal fun hasExportablePdfAnnotations(
+    annotations: Map<Int, List<PdfAnnotation>>,
+    textBoxes: List<PdfTextBox>,
+    highlights: List<PdfUserHighlight>
+): Boolean {
+    return hasExportablePdfAnnotationContent(
+        inkAnnotationCounts = annotations.values.map { it.size },
+        textBoxCount = textBoxes.size,
+        highlightCount = highlights.size,
+    )
+}
+
+internal fun shouldShowPdfAnnotationExportChoice(
+    sidecarsReady: Boolean,
+    annotations: Map<Int, List<PdfAnnotation>>,
+    textBoxes: List<PdfTextBox>,
+    highlights: List<PdfUserHighlight>
+): Boolean {
+    return shouldShowPdfAnnotationExportChoice(
+        sidecarsReady = sidecarsReady,
+        inkAnnotationCounts = annotations.values.map { it.size },
+        textBoxCount = textBoxes.size,
+        highlightCount = highlights.size,
+    )
+}
+
+internal fun getFastFileId(context: Context, uri: Uri): String {
+    var result = uri.toString()
+    Timber.tag(PDF_BLANK_PAGE_PERSISTENCE_TAG).i(
+        "id.fast.start uri=$uri scheme=${uri.scheme}"
+    )
+    try {
+        if (uri.scheme == "file") {
+            uri.path?.let {
+                val file = java.io.File(it)
+                result = "${file.name}_${file.length()}"
+                Timber.tag(PDF_BLANK_PAGE_PERSISTENCE_TAG).i(
+                    "id.fast.file uri=$uri path=${file.absolutePath} exists=${file.exists()} " +
+                        "name=${file.name} size=${file.length()} mtime=${file.lastModified()} result=$result"
+                )
+            }
+        } else {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+
+                    val size = if (sizeIndex != -1) cursor.getLong(sizeIndex) else 0L
+                    val name = if (nameIndex != -1) cursor.getString(nameIndex) else "unknown"
+
+                    result = "${name}_${size}"
+                    Timber.tag(PDF_BLANK_PAGE_PERSISTENCE_TAG).i(
+                        "id.fast.content uri=$uri name=$name size=$size result=$result"
+                    )
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Timber.tag(PDF_BLANK_PAGE_PERSISTENCE_TAG).e(e, "id.fast.failed uri=$uri fallback=$result")
+        Timber.e(e, "Failed to generate fast file ID")
+    }
+    Timber.tag(PDF_BLANK_PAGE_PERSISTENCE_TAG).i("id.fast.done uri=$uri result=$result")
+    return result
+}
+
+internal suspend fun renderPageToBitmap(doc: ReaderDocument, pageIndex: Int): Bitmap? {
+    return withContext(Dispatchers.IO) {
+        var page: ReaderPage? = null
+        try {
+            page = doc.openPage(pageIndex)
+            if (page == null) return@withContext null
+
+            val pageWidth = page.getPageWidthPoint()
+            val pageHeight = page.getPageHeightPoint()
+            if (pageWidth <= 0 || pageHeight <= 0) {
+                Timber.e("Invalid page size for page $pageIndex: ${pageWidth}x${pageHeight}")
+                return@withContext null
+            }
+
+            val aspectRatio =
+                pageWidth.toFloat() / pageHeight.toFloat()
+            if (aspectRatio.isNaN() || aspectRatio <= 0) {
+                Timber.e("Invalid aspect ratio for page $pageIndex")
+                return@withContext null
+            }
+
+            var bitmapWidth = PDF_PREVIEW_MAX_WIDTH_PX
+            var bitmapHeight = (bitmapWidth / aspectRatio).roundToInt()
+
+            if (bitmapHeight > PDF_PREVIEW_MAX_HEIGHT_PX) {
+                bitmapHeight = PDF_PREVIEW_MAX_HEIGHT_PX
+                bitmapWidth = (bitmapHeight * aspectRatio).roundToInt().coerceAtLeast(1)
+            }
+
+            val requestedBytes = bitmapWidth.toLong() * bitmapHeight.toLong() * 4L
+            if (requestedBytes > PDF_PREVIEW_MAX_BYTES) {
+                val scale = sqrt(PDF_PREVIEW_MAX_BYTES.toDouble() / requestedBytes.toDouble())
+                bitmapWidth = (bitmapWidth * scale).roundToInt().coerceAtLeast(1)
+                bitmapHeight = (bitmapHeight * scale).roundToInt().coerceAtLeast(1)
+            }
+
+            if (bitmapHeight <= 0) {
+                Timber.e("Invalid calculated bitmap height for page $pageIndex")
+                return@withContext null
+            }
+
+            val bitmap = createBitmap(bitmapWidth, bitmapHeight)
+            page.renderPageBitmap(
+                bitmap = bitmap,
+                startX = 0,
+                startY = 0,
+                drawSizeX = bitmapWidth,
+                drawSizeY = bitmapHeight,
+                renderAnnot = true
+            )
+            bitmap
+        } catch (e: Exception) {
+            Timber.e(e, "Error rendering page $pageIndex to bitmap for summarization")
+            null
+        } finally {
+            try {
+                page?.close()
+            } catch (e: Exception) {
+                Timber.w(e, "Error closing page in renderPageToBitmap")
+            }
+        }
+    }
+}

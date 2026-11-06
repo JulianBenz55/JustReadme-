@@ -1,0 +1,1376 @@
+package com.aryan.reader.shared.pdf
+
+import com.aryan.reader.shared.reader.ReaderSettings
+import com.aryan.reader.shared.PdfDisplayMode
+import com.aryan.reader.shared.SearchHighlightMode
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+data class SharedPdfSearchResult(
+    val pageIndex: Int,
+    val preview: String,
+    val matchIndex: Int,
+    val matchLength: Int = 0,
+    val boundsList: List<PdfPageBounds> = emptyList(),
+    /** Offset of the match within [preview], or -1 when unknown (snippet bolding). */
+    val matchIndexInPreview: Int = -1,
+)
+
+@Serializable
+data class SharedPdfBookmark(
+    val pageIndex: Int,
+    val label: String = "",
+    val createdAt: Long = 0L
+)
+
+/** Formats a spread-aware compact page label, mirroring Android's pdfPageRangeLabel. */
+fun sharedPdfPageRangeLabel(pageLabel: String, pageCount: Int): String {
+    val range = pageLabel.ifBlank { "1" }
+    return "$range/${pageCount.coerceAtLeast(1)}"
+}
+
+@Serializable
+data class SharedPdfBookmarkStore(
+    val version: Int = 1,
+    val bookmarks: List<SharedPdfBookmark> = emptyList()
+)
+
+@Serializable
+data class SharedPdfBlankPageInsertion(
+    val afterPdfIndex: Int,
+    val widthPx: Float = 595f,
+    val heightPx: Float = 842f,
+    val id: String = "",
+    val wasManuallyAdded: Boolean = true,
+)
+
+sealed interface SharedPdfVirtualPage {
+    data class PdfPage(val pdfIndex: Int) : SharedPdfVirtualPage
+    data class BlankPage(val insertion: SharedPdfBlankPageInsertion) : SharedPdfVirtualPage
+}
+
+/**
+ * Builds the display layout for a PDF: pdf pages in order with blank pages inserted
+ * after their target pdf page. Blank pages inserted at the same slot keep insertion order.
+ * Insertions pointing past the last page (or before the first) are clamped.
+ */
+fun buildSharedPdfVirtualPageLayout(
+    pageCount: Int,
+    insertions: List<SharedPdfBlankPageInsertion>,
+): List<SharedPdfVirtualPage> {
+    val safeCount = pageCount.coerceAtLeast(0)
+    val bySlot = HashMap<Int, MutableList<SharedPdfBlankPageInsertion>>()
+    insertions.forEach { insertion ->
+        val slot = insertion.afterPdfIndex.coerceIn(0, (safeCount - 1).coerceAtLeast(0))
+        bySlot.getOrPut(slot) { mutableListOf() }.add(insertion)
+    }
+    val layout = mutableListOf<SharedPdfVirtualPage>()
+    for (pdfIndex in 0 until safeCount) {
+        layout.add(SharedPdfVirtualPage.PdfPage(pdfIndex))
+        bySlot[pdfIndex]?.forEach { layout.add(SharedPdfVirtualPage.BlankPage(it)) }
+    }
+    return layout
+}
+
+/** The pdf page index displayed at [displayIndex], or null when that position is a blank page. */
+fun sharedPdfPdfPageIndexAt(
+    layout: List<SharedPdfVirtualPage>,
+    displayIndex: Int,
+): Int? = (layout.getOrNull(displayIndex) as? SharedPdfVirtualPage.PdfPage)?.pdfIndex
+
+/** The display position at which the pdf page [pdfIndex] appears (first match; blanks shift it). */
+fun sharedPdfDisplayIndexFor(
+    layout: List<SharedPdfVirtualPage>,
+    pdfIndex: Int,
+): Int {
+    val match = layout.indexOfFirst { it is SharedPdfVirtualPage.PdfPage && it.pdfIndex == pdfIndex }
+    return if (match >= 0) match else layout.size
+}
+
+/**
+ * The pdf page index to associate with [displayIndex]: the page itself for pdf pages,
+ * or the preceding pdf page for blank pages (blanks always follow a pdf page).
+ */
+fun sharedPdfNearestPdfPageIndex(
+    layout: List<SharedPdfVirtualPage>,
+    displayIndex: Int,
+): Int? {
+    for (index in displayIndex.coerceAtLeast(0) downTo 0) {
+        val pdfIndex = sharedPdfPdfPageIndexAt(layout, index) ?: continue
+        return pdfIndex
+    }
+    return null
+}
+
+@Serializable
+data class SharedPdfReaderStore(
+    val version: Int = 3,
+    val pageIndex: Int = 0,
+    val pageCount: Int = 0,
+    val displayMode: PdfDisplayMode = PdfDisplayMode.PAGINATION,
+    val themeId: String = "no_theme",
+    val reverseColorMode: PdfReverseColorMode = PdfReverseColorMode.RGB,
+    val preserveImageColors: Boolean = false,
+    val zoom: Float = PdfZoomSpec().default,
+    val isScrollLocked: Boolean = false,
+    val lockedZoomScale: Float = 1f,
+    val lockedZoomOffsetX: Float = 0f,
+    val lockedZoomOffsetY: Float = 0f,
+    val selectedTool: PdfInkTool = PdfInkTool.NONE,
+    val selectedColorArgb: Int = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE).colorArgb,
+    val strokeWidth: Float = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE).strokeWidth,
+    val isTextSelectionMode: Boolean = false,
+    val bookmarks: List<SharedPdfBookmark> = emptyList(),
+    val annotations: List<SharedPdfAnnotation> = emptyList(),
+    val blankPageInsertions: List<SharedPdfBlankPageInsertion> = emptyList(),
+    val penPalette: List<Int> = SharedPdfAnnotationDefaults.penPalette,
+    /** Android's five-slot PDF highlighter palette, persisted with reader state. */
+    val highlighterPalette: List<Int> = SharedPdfHighlighterPalette.defaultColors,
+    /** Whether PDF highlighter strokes should snap to a straight line. */
+    val isHighlighterSnapEnabled: Boolean = false,
+    val lastActivePenTool: PdfInkTool = PdfInkTool.PEN,
+    val lastActiveHighlighterTool: PdfInkTool = PdfInkTool.HIGHLIGHTER,
+    val richTextDocumentJson: String = ""
+)
+
+object SharedPdfBookmarkSerializer {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = true
+        encodeDefaults = true
+    }
+
+    fun encode(bookmarks: List<SharedPdfBookmark>): String {
+        return json.encodeToString(SharedPdfBookmarkStore(bookmarks = bookmarks))
+    }
+
+    fun decode(raw: String): List<SharedPdfBookmark> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString<SharedPdfBookmarkStore>(raw).bookmarks
+        }.getOrElse {
+            runCatching { json.decodeFromString<List<SharedPdfBookmark>>(raw) }.getOrDefault(emptyList())
+        }
+    }
+}
+
+object SharedPdfReaderStateSerializer {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = true
+        encodeDefaults = true
+    }
+
+    fun encode(state: SharedPdfReaderState): String {
+        return json.encodeToString(
+            SharedPdfReaderStore(
+                pageIndex = state.pageIndex,
+                pageCount = state.pageCount,
+                displayMode = state.displayMode,
+                themeId = state.themeId,
+                reverseColorMode = state.reverseColorMode,
+                preserveImageColors = state.preserveImageColors,
+                zoom = state.zoom,
+                isScrollLocked = state.isScrollLocked,
+                lockedZoomScale = state.lockedZoomScale,
+                lockedZoomOffsetX = state.lockedZoomOffsetX,
+                lockedZoomOffsetY = state.lockedZoomOffsetY,
+                selectedTool = state.selectedTool,
+                selectedColorArgb = state.selectedColorArgb,
+                strokeWidth = state.strokeWidth,
+                isTextSelectionMode = state.isTextSelectionMode,
+                bookmarks = state.bookmarks,
+                annotations = state.annotations,
+                blankPageInsertions = state.blankPageInsertions,
+                penPalette = state.penPalette,
+                highlighterPalette = state.highlighterPalette,
+                isHighlighterSnapEnabled = state.isHighlighterSnapEnabled,
+                lastActivePenTool = state.lastActivePenTool,
+                lastActiveHighlighterTool = state.lastActiveHighlighterTool,
+                richTextDocumentJson = state.richTextDocumentJson
+            )
+        )
+    }
+
+    fun decode(raw: String?, fallbackPageCount: Int = 1, fallbackPageIndex: Int = 0): SharedPdfReaderState? {
+        if (raw.isNullOrBlank()) return null
+        val store = runCatching { json.decodeFromString<SharedPdfReaderStore>(raw) }.getOrNull()
+            ?: return null
+        val restoredPageIndex = if (store.pageCount > 0) {
+            store.pageIndex
+        } else {
+            store.pageIndex.takeIf { it > 0 } ?: fallbackPageIndex
+        }.coerceAtLeast(0)
+        val restoredPageCount = store.pageCount.takeIf { it > 0 }
+            ?: maxOf(
+                fallbackPageCount,
+                restoredPageIndex + 1,
+                store.bookmarks.maxOfOrNull { it.pageIndex + 1 } ?: 1,
+                1
+            )
+        return SharedPdfReaderState(
+            pageIndex = restoredPageIndex,
+            pageCount = restoredPageCount,
+            displayMode = store.displayMode,
+            themeId = store.themeId,
+            reverseColorMode = store.reverseColorMode,
+            preserveImageColors = store.preserveImageColors,
+            zoom = store.zoom,
+            isScrollLocked = store.isScrollLocked,
+            lockedZoomScale = store.lockedZoomScale,
+            lockedZoomOffsetX = store.lockedZoomOffsetX,
+            lockedZoomOffsetY = store.lockedZoomOffsetY,
+            selectedTool = store.selectedTool,
+            selectedColorArgb = store.selectedColorArgb,
+            strokeWidth = store.strokeWidth,
+            isTextSelectionMode = store.isTextSelectionMode,
+            bookmarks = store.bookmarks,
+            annotations = store.annotations,
+            blankPageInsertions = store.blankPageInsertions,
+            penPalette = store.penPalette,
+            highlighterPalette = store.highlighterPalette,
+            isHighlighterSnapEnabled = store.isHighlighterSnapEnabled,
+            lastActivePenTool = store.lastActivePenTool,
+            lastActiveHighlighterTool = store.lastActiveHighlighterTool,
+            richTextDocumentJson = store.richTextDocumentJson
+        ).coerced()
+    }
+}
+
+data class SharedPdfJumpHistory(
+    val pages: List<Int> = emptyList(),
+    val cursor: Int = -1,
+    val maxEntries: Int = 21
+) {
+    val backPage: Int? get() = pages.getOrNull(cursor - 1)
+    val forwardPage: Int? get() = pages.getOrNull(cursor + 1)
+    val hasJumpTargets: Boolean get() = backPage != null || forwardPage != null
+
+    fun record(
+        currentPageIndex: Int,
+        targetPageIndex: Int,
+        pageCount: Int
+    ): SharedPdfJumpHistory {
+        if (
+            pageCount <= 0 ||
+            currentPageIndex !in 0 until pageCount ||
+            targetPageIndex !in 0 until pageCount ||
+            currentPageIndex == targetPageIndex
+        ) {
+            return this
+        }
+
+        val pruned = pruned(pageCount)
+        val nextPages = pruned.pages.toMutableList()
+        var nextCursor = pruned.cursor
+
+        while (nextPages.lastIndex > nextCursor) {
+            nextPages.removeAt(nextPages.lastIndex)
+        }
+
+        if (nextCursor > 0 && nextPages.getOrNull(nextCursor - 1) == currentPageIndex) {
+            nextPages[nextCursor] = targetPageIndex
+            return copy(
+                pages = nextPages,
+                cursor = nextCursor
+            ).bounded()
+        }
+
+        if (nextCursor == -1 || nextPages.getOrNull(nextCursor) != currentPageIndex) {
+            nextPages += currentPageIndex
+            nextCursor = nextPages.lastIndex
+        }
+
+        if (nextPages.lastOrNull() != targetPageIndex) {
+            nextPages += targetPageIndex
+            nextCursor = nextPages.lastIndex
+        }
+
+        return copy(
+            pages = nextPages,
+            cursor = nextCursor
+        ).bounded()
+    }
+
+    /**
+     * Refreshes the entry at the cursor with the position the reader is actually showing.
+     *
+     * Explicit navigation records a destination before the scroll starts, so a manual scroll
+     * after that navigation can leave the cursor entry stale. Updating that entry immediately
+     * before stepping back or forward keeps the history target anchored to the real position
+     * without creating a new history entry.
+     */
+    fun updateCurrentLocation(
+        currentPageIndex: Int,
+        pageCount: Int
+    ): SharedPdfJumpHistory {
+        if (pageCount <= 0 || currentPageIndex !in 0 until pageCount) return this
+
+        val pruned = pruned(pageCount)
+        val currentIndex = pruned.cursor.takeIf { it in pruned.pages.indices } ?: return pruned
+        if (pruned.pages[currentIndex] == currentPageIndex) return pruned
+
+        val nextPages = pruned.pages.toMutableList()
+        nextPages[currentIndex] = currentPageIndex
+        return pruned.copy(pages = nextPages).bounded()
+    }
+
+    fun pruned(pageCount: Int): SharedPdfJumpHistory {
+        if (pageCount <= 0) return clear()
+        val nextPages = pages.toMutableList()
+        var nextCursor = cursor
+        var index = nextPages.lastIndex
+        while (index >= 0) {
+            if (nextPages[index] !in 0 until pageCount) {
+                nextPages.removeAt(index)
+                if (nextCursor >= index) nextCursor--
+            }
+            index--
+        }
+        return copy(
+            pages = nextPages,
+            cursor = nextCursor.coerceIn(-1, nextPages.lastIndex)
+        ).bounded()
+    }
+
+    fun stepBack(): SharedPdfJumpHistory {
+        return if (backPage == null) this else copy(cursor = (cursor - 1).coerceAtLeast(0))
+    }
+
+    fun stepForward(): SharedPdfJumpHistory {
+        return if (forwardPage == null) this else copy(cursor = (cursor + 1).coerceAtMost(pages.lastIndex))
+    }
+
+    fun clear(): SharedPdfJumpHistory = copy(pages = emptyList(), cursor = -1)
+
+    private fun bounded(): SharedPdfJumpHistory {
+        val safeMaxEntries = maxEntries.coerceAtLeast(2)
+        if (pages.size <= safeMaxEntries) {
+            return copy(cursor = cursor.coerceIn(-1, pages.lastIndex))
+        }
+        val overflow = pages.size - safeMaxEntries
+        return copy(
+            pages = pages.drop(overflow),
+            cursor = (cursor - overflow).coerceIn(-1, pages.size - overflow - 1)
+        )
+    }
+}
+
+data class SharedPdfReaderViewport(
+    val pageIndex: Int = 0,
+    val displayMode: PdfDisplayMode = PdfDisplayMode.PAGINATION,
+    val zoom: Float = PdfZoomSpec().default,
+    val horizontalScrollOffset: Int = 0,
+    val paginatedVerticalScrollOffset: Int = 0,
+    val verticalFirstPageIndex: Int = pageIndex,
+    val verticalFirstPageScrollOffset: Int = 0
+) {
+    fun sanitized(
+        pageCount: Int,
+        zoomSpec: PdfZoomSpec = PdfZoomSpec()
+    ): SharedPdfReaderViewport {
+        val lastPageIndex = (pageCount.coerceAtLeast(0) - 1).coerceAtLeast(0)
+        val safeZoom = if (zoom.isFinite() && zoom > 0f) zoom else zoomSpec.default
+        return copy(
+            pageIndex = pageIndex.coerceIn(0, lastPageIndex),
+            zoom = zoomSpec.clamp(safeZoom),
+            horizontalScrollOffset = horizontalScrollOffset.coerceAtLeast(0),
+            paginatedVerticalScrollOffset = paginatedVerticalScrollOffset.coerceAtLeast(0),
+            verticalFirstPageIndex = verticalFirstPageIndex.coerceIn(0, lastPageIndex),
+            verticalFirstPageScrollOffset = verticalFirstPageScrollOffset.coerceAtLeast(0)
+        )
+    }
+}
+
+data class SharedPdfReaderState(
+    val pageIndex: Int = 0,
+    val pageCount: Int = 0,
+    val displayMode: PdfDisplayMode = PdfDisplayMode.PAGINATION,
+    val themeId: String = "no_theme",
+    /** Persisted independently so changing the reverse theme never changes the legacy RGB default. */
+    val reverseColorMode: PdfReverseColorMode = PdfReverseColorMode.RGB,
+    val preserveImageColors: Boolean = false,
+    val zoom: Float = PdfZoomSpec().default,
+    val isScrollLocked: Boolean = false,
+    val lockedZoomScale: Float = 1f,
+    val lockedZoomOffsetX: Float = 0f,
+    val lockedZoomOffsetY: Float = 0f,
+    val isSearchActive: Boolean = false,
+    val showSearchResultsPanel: Boolean = true,
+    val searchQuery: String = "",
+    val activeSearchResultIndex: Int = -1,
+    val searchHighlightMode: SearchHighlightMode = SearchHighlightMode.ALL,
+    val selectedTool: PdfInkTool = PdfInkTool.NONE,
+    val selectedColorArgb: Int = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE).colorArgb,
+    val strokeWidth: Float = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE).strokeWidth,
+    val isTextSelectionMode: Boolean = false,
+    val bookmarks: List<SharedPdfBookmark> = emptyList(),
+    val selectedAnnotationId: String? = null,
+    val annotations: List<SharedPdfAnnotation> = emptyList(),
+    val blankPageInsertions: List<SharedPdfBlankPageInsertion> = emptyList(),
+    val toolConfigs: Map<PdfInkTool, PdfToolConfig> = emptyMap(),
+    val penPalette: List<Int> = SharedPdfAnnotationDefaults.penPalette,
+    val highlighterPalette: List<Int> = SharedPdfHighlighterPalette.defaultColors,
+    val isHighlighterSnapEnabled: Boolean = false,
+    val lastActivePenTool: PdfInkTool = PdfInkTool.PEN,
+    val lastActiveHighlighterTool: PdfInkTool = PdfInkTool.HIGHLIGHTER,
+    val annotationUndoStack: List<SharedPdfAnnotationHistoryAction> = emptyList(),
+    val annotationRedoStack: List<SharedPdfAnnotationHistoryAction> = emptyList(),
+    val richTextDocumentJson: String = ""
+) {
+    val safePageCount: Int get() = pageCount.coerceAtLeast(0)
+    val displayPageCount: Int get() = safePageCount + blankPageInsertions.size.coerceAtLeast(0)
+    val lastPageIndex: Int get() = (displayPageCount - 1).coerceAtLeast(0)
+    val lastPdfPageIndex: Int get() = (safePageCount - 1).coerceAtLeast(0)
+    val canGoPrevious: Boolean get() = pageIndex > 0
+    val canGoNext: Boolean get() = pageIndex < lastPageIndex
+    val canUndoAnnotationEdit: Boolean get() = annotationUndoStack.isNotEmpty()
+    val canRedoAnnotationEdit: Boolean get() = annotationRedoStack.isNotEmpty()
+    val progressPercent: Float get() = ((pageIndex + 1).toFloat() / displayPageCount.coerceAtLeast(1)) * 100f
+    val virtualPageLayout: List<SharedPdfVirtualPage>
+        get() = buildSharedPdfVirtualPageLayout(pageCount, blankPageInsertions)
+    val currentPdfPageIndex: Int? get() = sharedPdfPdfPageIndexAt(virtualPageLayout, pageIndex)
+    val currentNearestPdfPageIndex: Int? get() = sharedPdfNearestPdfPageIndex(virtualPageLayout, pageIndex)
+
+    fun coerced(zoomSpec: PdfZoomSpec = PdfZoomSpec()): SharedPdfReaderState {
+        val safePage = pageIndex.coerceIn(0, lastPageIndex)
+        return copy(
+            pageIndex = safePage,
+            pageCount = safePageCount,
+            activeSearchResultIndex = activeSearchResultIndex.coerceAtLeast(-1),
+            zoom = zoomSpec.clamp(zoom),
+            lockedZoomScale = lockedZoomScale.takeIf { it.isFinite() }
+                ?.coerceIn(PDF_MIN_ZOOM_SCALE, PDF_MAX_ZOOM_SCALE) ?: PDF_MIN_ZOOM_SCALE,
+            lockedZoomOffsetX = lockedZoomOffsetX.takeIf { it.isFinite() } ?: 0f,
+            lockedZoomOffsetY = lockedZoomOffsetY.takeIf { it.isFinite() } ?: 0f,
+            bookmarks = bookmarks.normalizedBookmarks(lastPdfPageIndex),
+            annotations = annotations.map { it.sanitizedSharedPdfTextAnnotation() },
+            penPalette = penPalette.sanitizedSharedPdfPenPalette(),
+            highlighterPalette = SharedPdfHighlighterPalette(highlighterPalette).sanitized().colors,
+            isHighlighterSnapEnabled = isHighlighterSnapEnabled,
+            lastActivePenTool = lastActivePenTool.takeIf { it.isSharedPdfPenTool } ?: PdfInkTool.PEN,
+            lastActiveHighlighterTool = lastActiveHighlighterTool.takeIf { it.isSharedPdfHighlighterTool }
+                ?: PdfInkTool.HIGHLIGHTER,
+            selectedAnnotationId = selectedAnnotationId?.takeIf { selectedId ->
+                annotations.any { it.id == selectedId }
+            }
+        )
+    }
+
+    companion object {
+        fun initial(
+            pageCount: Int,
+            initialPageIndex: Int = 0,
+            zoomSpec: PdfZoomSpec = PdfZoomSpec()
+        ): SharedPdfReaderState {
+            val safePageCount = pageCount.coerceAtLeast(0)
+            val lastPageIndex = (safePageCount - 1).coerceAtLeast(0)
+            return SharedPdfReaderState(
+                pageIndex = initialPageIndex.coerceIn(0, lastPageIndex),
+                pageCount = safePageCount,
+                zoom = zoomSpec.clamp(zoomSpec.default)
+            )
+        }
+    }
+}
+
+fun pdfPaginationEdgeTarget(
+    currentPage: Int,
+    lastPage: Int,
+    tappedLeftEdge: Boolean,
+    rightToLeft: Boolean,
+): Int? {
+    val delta = when {
+        tappedLeftEdge && rightToLeft -> 1
+        tappedLeftEdge -> -1
+        rightToLeft -> -1
+        else -> 1
+    }
+    return (currentPage + delta).takeIf { it in 0..lastPage }
+}
+
+fun initialSharedPdfReaderState(
+    persistedState: SharedPdfReaderState?,
+    defaults: ReaderSettings,
+    initialPageIndex: Int,
+    highlighterPalette: SharedPdfHighlighterPalette = SharedPdfHighlighterPalette(),
+    isHighlighterSnapEnabled: Boolean = false,
+): SharedPdfReaderState {
+    return persistedState
+        ?.copy(
+            themeId = defaults.themeId ?: persistedState.themeId,
+            reverseColorMode = defaults.pdfReverseColorMode,
+            preserveImageColors = defaults.pdfPreserveImageColors,
+            highlighterPalette = highlighterPalette.sanitized().colors,
+            isHighlighterSnapEnabled = isHighlighterSnapEnabled,
+        )
+        ?.coerced()
+        // Opening is asynchronous. Preserve the requested restore page until the renderer reports
+        // the real page count instead of clamping every non-zero restore to page zero.
+        ?: SharedPdfReaderState.initial(
+            pageCount = (initialPageIndex.coerceAtLeast(0) + 1).coerceAtLeast(1),
+            initialPageIndex = initialPageIndex,
+        )
+            .copy(
+                displayMode = PdfDisplayMode.VERTICAL_SCROLL,
+                themeId = defaults.themeId ?: "no_theme",
+                reverseColorMode = defaults.pdfReverseColorMode,
+                preserveImageColors = defaults.pdfPreserveImageColors,
+                highlighterPalette = highlighterPalette.sanitized().colors,
+                isHighlighterSnapEnabled = isHighlighterSnapEnabled,
+            )
+}
+
+sealed interface SharedPdfAnnotationHistoryAction {
+    data class Add(val pageIndex: Int, val annotation: SharedPdfAnnotation) : SharedPdfAnnotationHistoryAction
+    /**
+     * Undoable duplicate-in-place: [annotations] were appended together, so
+     * one undo removes them all (benchmark: Android `HistoryAction.AddMany`).
+     */
+    data class AddMany(val annotations: List<SharedPdfAnnotation>) : SharedPdfAnnotationHistoryAction
+    data class Remove(val itemsByPage: Map<Int, List<SharedPdfAnnotation>>) : SharedPdfAnnotationHistoryAction
+    /**
+     * Before/after snapshot swap for one selection edit (move, scale, rotate,
+     * or style change). Benchmark: Android `HistoryAction.Transform` /
+     * `StyleChange` — kept as a single kind because every selection edit is a
+     * before→after replacement by id.
+     */
+    data class Transform(
+        val before: List<SharedPdfAnnotation>,
+        val after: List<SharedPdfAnnotation>,
+    ) : SharedPdfAnnotationHistoryAction
+}
+
+sealed interface SharedPdfReaderAction {
+    data class GoToPage(val pageIndex: Int) : SharedPdfReaderAction
+    data object PreviousPage : SharedPdfReaderAction
+    data object NextPage : SharedPdfReaderAction
+    data object FirstPage : SharedPdfReaderAction
+    data object LastPage : SharedPdfReaderAction
+    data class DisplayModeChanged(val mode: PdfDisplayMode) : SharedPdfReaderAction
+    data object DisplayModeToggled : SharedPdfReaderAction
+    data class ThemeChanged(val themeId: String) : SharedPdfReaderAction
+    data class ReverseColorModeChanged(val mode: PdfReverseColorMode) : SharedPdfReaderAction
+    data class PreserveImageColorsChanged(val enabled: Boolean) : SharedPdfReaderAction
+    data class ZoomChanged(val zoom: Float) : SharedPdfReaderAction
+    data class ZoomBy(val delta: Float) : SharedPdfReaderAction
+    data class ScrollLockChanged(
+        val locked: Boolean,
+        val zoomScale: Float,
+        val offsetX: Float,
+        val offsetY: Float
+    ) : SharedPdfReaderAction
+    data class SearchChanged(val query: String) : SharedPdfReaderAction
+    data object SearchOpened : SharedPdfReaderAction
+    data object SearchClosed : SharedPdfReaderAction
+    data object SearchResultsPanelToggled : SharedPdfReaderAction
+    data class SearchHighlightModeChanged(val mode: SearchHighlightMode) : SharedPdfReaderAction
+    data object SearchHighlightModeToggled : SharedPdfReaderAction
+    data class GoToSearchResult(
+        val resultIndex: Int,
+        val results: List<SharedPdfSearchResult>
+    ) : SharedPdfReaderAction
+    data class ToolSelected(val tool: PdfInkTool) : SharedPdfReaderAction
+    data class ColorSelected(val colorArgb: Int) : SharedPdfReaderAction
+    data class StrokeWidthChanged(val strokeWidth: Float) : SharedPdfReaderAction
+    data class PenPaletteChanged(val colors: List<Int>) : SharedPdfReaderAction
+    data class HighlighterPaletteChanged(val colors: List<Int>) : SharedPdfReaderAction
+    data class HighlighterSnapChanged(val enabled: Boolean) : SharedPdfReaderAction
+    data class TextSelectionModeChanged(val enabled: Boolean) : SharedPdfReaderAction
+    data class BookmarksLoaded(val bookmarks: List<SharedPdfBookmark>) : SharedPdfReaderAction
+    data class BookmarkToggled(
+        val pageIndex: Int,
+        val label: String = "",
+        val createdAt: Long = 0L
+    ) : SharedPdfReaderAction
+    data class BookmarkRenamed(val pageIndex: Int, val label: String) : SharedPdfReaderAction
+    data class BookmarkDeleted(val pageIndex: Int) : SharedPdfReaderAction
+    data class InsertBlankPageAt(
+        val displayIndex: Int,
+        val widthPx: Float,
+        val heightPx: Float,
+        val id: String = "",
+        val wasManuallyAdded: Boolean = true
+    ) : SharedPdfReaderAction
+    data class DeleteBlankPageAt(val displayIndex: Int) : SharedPdfReaderAction
+    data class AnnotationsLoaded(val annotations: List<SharedPdfAnnotation>) : SharedPdfReaderAction
+    data class AnnotationAdded(val annotation: SharedPdfAnnotation) : SharedPdfReaderAction
+    data class AnnotationSelected(val annotationId: String?) : SharedPdfReaderAction
+    data class AnnotationUpdated(val annotation: SharedPdfAnnotation) : SharedPdfReaderAction
+    data class AnnotationDeleted(val annotationId: String) : SharedPdfReaderAction
+    data class AnnotationsChanged(val annotations: List<SharedPdfAnnotation>) : SharedPdfReaderAction
+    data class UndoLastAnnotationOnPage(val pageIndex: Int) : SharedPdfReaderAction
+    data object UndoAnnotationEdit : SharedPdfReaderAction
+    data object RedoAnnotationEdit : SharedPdfReaderAction
+    data class ClearPageAnnotations(val pageIndex: Int) : SharedPdfReaderAction
+    /**
+     * Live eraser removal, mirroring Android's per-move `allAnnotations`
+     * updates during an erase drag (`PdfViewerScreen.onDrawStable`): drops the
+     * given annotations immediately with no history change. The stroke-end
+     * commit ([EraserStrokeCommitted]) records them as a single undoable step,
+     * so redo is only cleared once per stroke like the benchmark.
+     */
+    data class AnnotationsRemovedLive(val annotationIds: Set<String>) : SharedPdfReaderAction
+    /**
+     * Records already-live-removed [itemsByPage] as one
+     * [SharedPdfAnnotationHistoryAction.Remove] step and clears redo,
+     * mirroring Android's erase-end `HistoryAction.Remove` push. No-op when
+     * every page list is empty (a stroke that hit nothing preserves redo,
+     * exactly like the benchmark's `erasedAnnotationsFromStroke.isNotEmpty()`
+     * guard).
+     */
+    data class EraserStrokeCommitted(val itemsByPage: Map<Int, List<SharedPdfAnnotation>>) : SharedPdfReaderAction
+    /**
+     * One undoable selection edit (move/scale/rotate/style): [before] and
+     * [after] are the gesture-start and committed snapshots. No-op when they
+     * match so a tap that changes nothing preserves redo.
+     */
+    data class SelectionTransformCommitted(
+        val before: List<SharedPdfAnnotation>,
+        val after: List<SharedPdfAnnotation>,
+    ) : SharedPdfReaderAction
+    /**
+     * Undoable delete of the given selected annotations as ONE history step
+     * (benchmark: Android delete pushes a single `HistoryAction.Remove`).
+     */
+    data class SelectionDeletedCommitted(val annotations: List<SharedPdfAnnotation>) : SharedPdfReaderAction
+    /**
+     * Undoable duplicate-in-place: appends [annotations] (fresh ids, assigned
+     * by the caller) and pushes ONE [SharedPdfAnnotationHistoryAction.AddMany]
+     * step so a single undo removes all copies.
+     */
+    data class SelectionDuplicatedCommitted(val annotations: List<SharedPdfAnnotation>) : SharedPdfReaderAction
+}
+
+fun SharedPdfReaderState.reduce(
+    action: SharedPdfReaderAction,
+    zoomSpec: PdfZoomSpec = PdfZoomSpec()
+): SharedPdfReaderState {
+    fun goToPage(target: Int): SharedPdfReaderState {
+        return copy(pageIndex = target.coerceIn(0, lastPageIndex)).coerced(zoomSpec)
+    }
+
+    return when (action) {
+        is SharedPdfReaderAction.GoToPage -> goToPage(action.pageIndex)
+        SharedPdfReaderAction.PreviousPage -> goToPage(pageIndex - 1)
+        SharedPdfReaderAction.NextPage -> goToPage(pageIndex + 1)
+        SharedPdfReaderAction.FirstPage -> goToPage(0)
+        SharedPdfReaderAction.LastPage -> goToPage(lastPageIndex)
+        is SharedPdfReaderAction.DisplayModeChanged -> copy(displayMode = action.mode)
+        SharedPdfReaderAction.DisplayModeToggled -> copy(
+            displayMode = when (displayMode) {
+                PdfDisplayMode.PAGINATION -> PdfDisplayMode.VERTICAL_SCROLL
+                PdfDisplayMode.VERTICAL_SCROLL -> PdfDisplayMode.PAGINATION
+            }
+        )
+        is SharedPdfReaderAction.ThemeChanged -> copy(themeId = action.themeId.ifBlank { "no_theme" })
+        is SharedPdfReaderAction.ReverseColorModeChanged -> copy(reverseColorMode = action.mode)
+        is SharedPdfReaderAction.PreserveImageColorsChanged -> copy(preserveImageColors = action.enabled)
+        is SharedPdfReaderAction.ZoomChanged -> copy(zoom = zoomSpec.clamp(action.zoom))
+        is SharedPdfReaderAction.ZoomBy -> copy(zoom = zoomSpec.clamp(zoom + action.delta))
+        is SharedPdfReaderAction.ScrollLockChanged -> copy(
+            isScrollLocked = action.locked,
+            lockedZoomScale = action.zoomScale.takeIf { it.isFinite() }
+                ?.coerceIn(PDF_MIN_ZOOM_SCALE, PDF_MAX_ZOOM_SCALE) ?: PDF_MIN_ZOOM_SCALE,
+            lockedZoomOffsetX = action.offsetX.takeIf { it.isFinite() } ?: 0f,
+            lockedZoomOffsetY = action.offsetY.takeIf { it.isFinite() } ?: 0f
+        )
+        is SharedPdfReaderAction.SearchChanged -> {
+            val normalized = action.query.trim()
+            copy(
+                isSearchActive = isSearchActive || normalized.isNotBlank(),
+                showSearchResultsPanel = showSearchResultsPanel || normalized.isNotBlank(),
+                searchQuery = action.query,
+                activeSearchResultIndex = -1
+            )
+        }
+        SharedPdfReaderAction.SearchOpened -> copy(
+            isSearchActive = true,
+            showSearchResultsPanel = true
+        )
+        SharedPdfReaderAction.SearchClosed -> copy(
+            isSearchActive = false,
+            showSearchResultsPanel = true,
+            searchQuery = "",
+            activeSearchResultIndex = -1
+        )
+        SharedPdfReaderAction.SearchResultsPanelToggled -> copy(showSearchResultsPanel = !showSearchResultsPanel)
+        is SharedPdfReaderAction.SearchHighlightModeChanged -> copy(searchHighlightMode = action.mode)
+        SharedPdfReaderAction.SearchHighlightModeToggled -> copy(
+            searchHighlightMode = when (searchHighlightMode) {
+                SearchHighlightMode.ALL -> SearchHighlightMode.FOCUSED
+                SearchHighlightMode.FOCUSED -> SearchHighlightMode.ALL
+            }
+        )
+        is SharedPdfReaderAction.GoToSearchResult -> {
+            val result = action.results.getOrNull(action.resultIndex)
+            if (result == null) {
+                this
+            } else {
+                copy(
+                    activeSearchResultIndex = action.resultIndex,
+                    pageIndex = sharedPdfDisplayIndexFor(virtualPageLayout, result.pageIndex.coerceIn(0, lastPdfPageIndex))
+                )
+            }
+        }
+        is SharedPdfReaderAction.ToolSelected -> {
+            val config = toolConfigFor(action.tool)
+            // SELECT edits the selection's own style via the edit bar: keep
+            // the current color/width instead of recalling a config.
+            val keepStyle = action.tool == PdfInkTool.SELECT
+            copy(
+                selectedTool = action.tool,
+                selectedColorArgb = if (keepStyle) selectedColorArgb else config.colorArgb,
+                strokeWidth = if (keepStyle) strokeWidth else config.strokeWidth,
+                isTextSelectionMode = false,
+                lastActivePenTool = if (action.tool.isSharedPdfPenTool) action.tool else lastActivePenTool,
+                lastActiveHighlighterTool = if (action.tool.isSharedPdfHighlighterTool) {
+                    action.tool
+                } else {
+                    lastActiveHighlighterTool
+                }
+            )
+        }
+        is SharedPdfReaderAction.ColorSelected -> withActiveToolColor(action.colorArgb)
+        is SharedPdfReaderAction.StrokeWidthChanged -> withActiveToolStrokeWidth(action.strokeWidth.coerceAtLeast(0.0001f))
+        is SharedPdfReaderAction.PenPaletteChanged -> copy(penPalette = action.colors.sanitizedSharedPdfPenPalette())
+        is SharedPdfReaderAction.HighlighterPaletteChanged -> copy(
+            highlighterPalette = SharedPdfHighlighterPalette(action.colors).sanitized().colors,
+        )
+        is SharedPdfReaderAction.HighlighterSnapChanged -> copy(isHighlighterSnapEnabled = action.enabled)
+        is SharedPdfReaderAction.TextSelectionModeChanged -> {
+            if (action.enabled) {
+                val config = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE)
+                copy(
+                    isTextSelectionMode = true,
+                    selectedTool = PdfInkTool.NONE,
+                    selectedColorArgb = config.colorArgb,
+                    strokeWidth = config.strokeWidth
+                )
+            } else {
+                copy(isTextSelectionMode = false)
+            }
+        }
+        is SharedPdfReaderAction.BookmarksLoaded -> copy(bookmarks = action.bookmarks.normalizedBookmarks(lastPdfPageIndex))
+        is SharedPdfReaderAction.BookmarkToggled -> {
+            val page = action.pageIndex.coerceIn(0, lastPdfPageIndex)
+            val withoutPage = bookmarks.filterNot { it.pageIndex == page }
+            val nextBookmarks = if (withoutPage.size == bookmarks.size) {
+                withoutPage + SharedPdfBookmark(
+                    pageIndex = page,
+                    label = action.label.ifBlank { "Page ${page + 1}" },
+                    createdAt = action.createdAt
+                )
+            } else {
+                withoutPage
+            }
+            copy(bookmarks = nextBookmarks.normalizedBookmarks(lastPdfPageIndex))
+        }
+        is SharedPdfReaderAction.BookmarkRenamed -> {
+            val page = action.pageIndex.coerceIn(0, lastPdfPageIndex)
+            copy(
+                bookmarks = bookmarks.map { bookmark ->
+                    if (bookmark.pageIndex == page) bookmark.copy(label = action.label.trim().ifBlank { "Page ${page + 1}" }) else bookmark
+                }.normalizedBookmarks(lastPdfPageIndex)
+            )
+        }
+        is SharedPdfReaderAction.BookmarkDeleted -> {
+            val page = action.pageIndex.coerceIn(0, lastPdfPageIndex)
+            copy(bookmarks = bookmarks.filterNot { it.pageIndex == page }.normalizedBookmarks(lastPdfPageIndex))
+        }
+        is SharedPdfReaderAction.InsertBlankPageAt -> {
+            val layout = virtualPageLayout
+            val targetPdfIndex = sharedPdfNearestPdfPageIndex(layout, action.displayIndex)
+                ?.coerceIn(0, (safePageCount - 1).coerceAtLeast(0)) ?: return this
+            val insertion = SharedPdfBlankPageInsertion(
+                afterPdfIndex = targetPdfIndex,
+                widthPx = action.widthPx.coerceAtLeast(1f),
+                heightPx = action.heightPx.coerceAtLeast(1f),
+                id = action.id.ifBlank { "blank_${targetPdfIndex}_${kotlin.random.Random.nextLong()}" },
+                wasManuallyAdded = action.wasManuallyAdded
+            )
+            val nextInsertions = blankPageInsertions + insertion
+            val nextLayout = buildSharedPdfVirtualPageLayout(pageCount, nextInsertions)
+            val insertedAt = nextLayout.indexOfFirst {
+                it is SharedPdfVirtualPage.BlankPage && it.insertion.id == insertion.id
+            }
+            if (insertedAt < 0) return this
+            copy(blankPageInsertions = nextInsertions, pageIndex = insertedAt).coerced(zoomSpec)
+        }
+        is SharedPdfReaderAction.DeleteBlankPageAt -> {
+            val layout = virtualPageLayout
+            val page = layout.getOrNull(action.displayIndex) as? SharedPdfVirtualPage.BlankPage ?: return this
+            copy(
+                blankPageInsertions = blankPageInsertions.filterNot { it.id == page.insertion.id },
+                pageIndex = action.displayIndex.coerceAtMost((displayPageCount - 2).coerceAtLeast(0))
+            ).coerced(zoomSpec)
+        }
+        is SharedPdfReaderAction.AnnotationsLoaded -> copy(
+            annotations = action.annotations.toList(),
+            annotationUndoStack = emptyList(),
+            annotationRedoStack = emptyList()
+        )
+        is SharedPdfReaderAction.AnnotationAdded -> copy(
+            annotations = annotations + action.annotation,
+            selectedAnnotationId = action.annotation.id,
+            annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Add(
+                pageIndex = action.annotation.pageIndex,
+                annotation = action.annotation
+            ),
+            annotationRedoStack = emptyList()
+        )
+        is SharedPdfReaderAction.AnnotationSelected -> copy(
+            selectedAnnotationId = action.annotationId?.takeIf { id -> annotations.any { it.id == id } }
+        )
+        is SharedPdfReaderAction.AnnotationUpdated -> {
+            val index = annotations.indexOfFirst { it.id == action.annotation.id }
+            if (index < 0) {
+                this
+            } else {
+                copy(
+                    annotations = annotations.toMutableList().also { it[index] = action.annotation },
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        is SharedPdfReaderAction.AnnotationDeleted -> {
+            val removed = annotations.firstOrNull { it.id == action.annotationId }
+            if (removed == null) {
+                this
+            } else {
+                copy(
+                    annotations = annotations.filterNot { it.id == action.annotationId },
+                    selectedAnnotationId = selectedAnnotationId?.takeIf { it != action.annotationId },
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Remove(
+                        itemsByPage = mapOf(removed.pageIndex to listOf(removed))
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        is SharedPdfReaderAction.AnnotationsChanged -> copy(
+            annotations = action.annotations.toList(),
+            annotationUndoStack = emptyList(),
+            annotationRedoStack = emptyList()
+        )
+        is SharedPdfReaderAction.UndoLastAnnotationOnPage -> {
+            val index = annotations.indexOfLast { it.pageIndex == action.pageIndex }
+            if (index < 0) {
+                this
+            } else {
+                val removed = annotations[index]
+                val removedId = annotations[index].id
+                copy(
+                    annotations = annotations.toMutableList().also { it.removeAt(index) },
+                    selectedAnnotationId = selectedAnnotationId?.takeIf { it != removedId },
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Remove(
+                        itemsByPage = mapOf(removed.pageIndex to listOf(removed))
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        SharedPdfReaderAction.UndoAnnotationEdit -> undoSharedPdfAnnotationEdit()
+        SharedPdfReaderAction.RedoAnnotationEdit -> redoSharedPdfAnnotationEdit()
+        is SharedPdfReaderAction.ClearPageAnnotations -> {
+            val removed = annotations.filter { it.pageIndex == action.pageIndex }
+            if (removed.isEmpty()) {
+                this
+            } else {
+                val removedIds = removed.mapTo(mutableSetOf()) { it.id }
+                copy(
+                    annotations = annotations.filterNot { it.pageIndex == action.pageIndex },
+                    selectedAnnotationId = selectedAnnotationId?.takeIf { it !in removedIds },
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Remove(
+                        itemsByPage = mapOf(action.pageIndex to removed)
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        is SharedPdfReaderAction.AnnotationsRemovedLive -> {
+            if (action.annotationIds.isEmpty()) {
+                this
+            } else {
+                copy(
+                    annotations = annotations.filterNot { it.id in action.annotationIds },
+                    selectedAnnotationId = selectedAnnotationId?.takeIf { it !in action.annotationIds }
+                )
+            }
+        }
+        is SharedPdfReaderAction.EraserStrokeCommitted -> {
+            val nonEmpty = action.itemsByPage.mapValues { (_, items) -> items.toList() }
+                .filterValues { it.isNotEmpty() }
+            if (nonEmpty.isEmpty()) {
+                this
+            } else {
+                copy(
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Remove(
+                        itemsByPage = nonEmpty
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        is SharedPdfReaderAction.SelectionTransformCommitted -> {
+            val before = action.before.toList()
+            val after = action.after.toList()
+            if (before.isEmpty() || before == after) {
+                this
+            } else {
+                val afterById = after.associateBy { it.id }
+                copy(
+                    annotations = annotations.map { current -> afterById[current.id] ?: current },
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Transform(
+                        before = before,
+                        after = after,
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        is SharedPdfReaderAction.SelectionDeletedCommitted -> {
+            val removed = action.annotations.toList()
+            if (removed.isEmpty()) {
+                this
+            } else {
+                val removedIds = removed.mapTo(mutableSetOf()) { it.id }
+                copy(
+                    annotations = annotations.filterNot { it.id in removedIds },
+                    selectedAnnotationId = selectedAnnotationId?.takeIf { it !in removedIds },
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.Remove(
+                        itemsByPage = removed.groupBy { it.pageIndex }
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+        is SharedPdfReaderAction.SelectionDuplicatedCommitted -> {
+            val added = action.annotations.toList()
+            if (added.isEmpty()) {
+                this
+            } else {
+                copy(
+                    annotations = annotations + added,
+                    selectedAnnotationId = added.last().id,
+                    annotationUndoStack = annotationUndoStack + SharedPdfAnnotationHistoryAction.AddMany(
+                        annotations = added,
+                    ),
+                    annotationRedoStack = emptyList()
+                )
+            }
+        }
+    }.coerced(zoomSpec)
+}
+
+private fun SharedPdfReaderState.toolConfigFor(tool: PdfInkTool): PdfToolConfig {
+    return toolConfigs[tool] ?: SharedPdfAnnotationDefaults.configFor(tool).let { config ->
+        when (tool) {
+            PdfInkTool.HIGHLIGHTER -> config.copy(
+                colorArgb = highlighterPalette.getOrElse(0) { SharedPdfHighlighterPalette.defaultColors[0] },
+            )
+            PdfInkTool.HIGHLIGHTER_ROUND -> config.copy(
+                colorArgb = highlighterPalette.getOrElse(1) {
+                    SharedPdfHighlighterPalette.defaultColors.getOrElse(1) {
+                        SharedPdfHighlighterPalette.defaultColors.first()
+                    }
+                },
+            )
+            else -> config
+        }
+    }
+}
+
+private fun SharedPdfReaderState.withActiveToolColor(colorArgb: Int): SharedPdfReaderState {
+    if (!selectedTool.isSharedPdfConfigurableTool) {
+        return copy(selectedColorArgb = colorArgb)
+    }
+    val currentConfig = toolConfigFor(selectedTool)
+    return copy(
+        selectedColorArgb = colorArgb,
+        toolConfigs = toolConfigs + (selectedTool to currentConfig.copy(colorArgb = colorArgb))
+    )
+}
+
+private fun SharedPdfReaderState.withActiveToolStrokeWidth(strokeWidth: Float): SharedPdfReaderState {
+    if (!selectedTool.isSharedPdfConfigurableTool) {
+        return copy(strokeWidth = strokeWidth)
+    }
+    val currentConfig = toolConfigFor(selectedTool)
+    return copy(
+        strokeWidth = strokeWidth,
+        toolConfigs = toolConfigs + (selectedTool to currentConfig.copy(strokeWidth = strokeWidth))
+    )
+}
+
+private fun List<Int>.sanitizedSharedPdfPenPalette(): List<Int> {
+    val defaults = SharedPdfAnnotationDefaults.penPalette
+    val normalized = filter { it != 0 }.take(defaults.size)
+    val filled = if (normalized.isEmpty()) {
+        defaults
+    } else {
+        normalized + defaults.drop(normalized.size)
+    }
+    return filled.take(defaults.size)
+}
+
+private val PdfInkTool.isSharedPdfPenTool: Boolean
+    get() = this == PdfInkTool.FOUNTAIN_PEN || this == PdfInkTool.PEN || this == PdfInkTool.PENCIL
+private val PdfInkTool.isSharedPdfHighlighterTool: Boolean
+    get() = this == PdfInkTool.HIGHLIGHTER || this == PdfInkTool.HIGHLIGHTER_ROUND
+
+private val PdfInkTool.isSharedPdfConfigurableTool: Boolean
+    get() = this != PdfInkTool.NONE
+
+/**
+ * Replace every annotation in [from] with its [to] snapshot by id, preserving
+ * list order (and therefore tap-hit priority). Snapshots missing from the
+ * current list are appended so undo stays sound if the list changed since.
+ */
+private fun List<SharedPdfAnnotation>.swapSharedPdfAnnotationSnapshots(
+    from: List<SharedPdfAnnotation>,
+    to: List<SharedPdfAnnotation>,
+): List<SharedPdfAnnotation> {
+    if (from.isEmpty()) return this
+    val fromIds = from.mapTo(mutableSetOf()) { it.id }
+    val toById = to.associateBy { it.id }
+    val swapped = map { current -> toById[current.id]?.takeIf { current.id in fromIds } ?: current }
+    val presentIds = swapped.mapTo(mutableSetOf()) { it.id }
+    val missing = to.filter { it.id in fromIds && it.id !in presentIds }
+    return if (missing.isEmpty()) swapped else swapped + missing
+}
+
+private fun SharedPdfReaderState.undoSharedPdfAnnotationEdit(): SharedPdfReaderState {    val action = annotationUndoStack.lastOrNull() ?: return this
+    val nextUndoStack = annotationUndoStack.dropLast(1)
+    return when (action) {
+        is SharedPdfAnnotationHistoryAction.Add -> copy(
+            annotations = annotations.filterNot { it.id == action.annotation.id },
+            selectedAnnotationId = selectedAnnotationId?.takeIf { it != action.annotation.id },
+            annotationUndoStack = nextUndoStack,
+            annotationRedoStack = annotationRedoStack + action
+        )
+
+        is SharedPdfAnnotationHistoryAction.AddMany -> {
+            val addedIds = action.annotations.mapTo(mutableSetOf()) { it.id }
+            copy(
+                annotations = annotations.filterNot { it.id in addedIds },
+                selectedAnnotationId = selectedAnnotationId?.takeIf { it !in addedIds },
+                annotationUndoStack = nextUndoStack,
+                annotationRedoStack = annotationRedoStack + action
+            )
+        }
+
+        is SharedPdfAnnotationHistoryAction.Remove -> copy(
+            annotations = annotations + action.itemsByPage.values.flatten(),
+            annotationUndoStack = nextUndoStack,
+            annotationRedoStack = annotationRedoStack + action
+        )
+
+        is SharedPdfAnnotationHistoryAction.Transform -> copy(
+            annotations = annotations.swapSharedPdfAnnotationSnapshots(
+                from = action.after,
+                to = action.before,
+            ),
+            annotationUndoStack = nextUndoStack,
+            annotationRedoStack = annotationRedoStack + action
+        )
+    }
+}
+
+private fun SharedPdfReaderState.redoSharedPdfAnnotationEdit(): SharedPdfReaderState {
+    val action = annotationRedoStack.lastOrNull() ?: return this
+    val nextRedoStack = annotationRedoStack.dropLast(1)
+    return when (action) {
+        is SharedPdfAnnotationHistoryAction.Add -> copy(
+            annotations = annotations + action.annotation,
+            selectedAnnotationId = action.annotation.id,
+            annotationUndoStack = annotationUndoStack + action,
+            annotationRedoStack = nextRedoStack
+        )
+
+        is SharedPdfAnnotationHistoryAction.AddMany -> copy(
+            annotations = annotations + action.annotations,
+            selectedAnnotationId = action.annotations.lastOrNull()?.id,
+            annotationUndoStack = annotationUndoStack + action,
+            annotationRedoStack = nextRedoStack
+        )
+
+        is SharedPdfAnnotationHistoryAction.Remove -> {
+            val removedIds = action.itemsByPage.values.flatten().mapTo(mutableSetOf()) { it.id }
+            copy(
+                annotations = annotations.filterNot { it.id in removedIds },
+                selectedAnnotationId = selectedAnnotationId?.takeIf { it !in removedIds },
+                annotationUndoStack = annotationUndoStack + action,
+                annotationRedoStack = nextRedoStack
+            )
+        }
+
+        is SharedPdfAnnotationHistoryAction.Transform -> copy(
+            annotations = annotations.swapSharedPdfAnnotationSnapshots(
+                from = action.before,
+                to = action.after,
+            ),
+            annotationUndoStack = annotationUndoStack + action,
+            annotationRedoStack = nextRedoStack
+        )
+    }
+}
+
+object SharedPdfSearchEngine {
+    fun search(
+        pageTexts: List<String>,
+        query: String,
+        previewRadiusBefore: Int = 70,
+        previewRadiusAfter: Int = 100
+    ): List<SharedPdfSearchResult> {
+        val normalized = query.trim()
+        if (normalized.isBlank()) return emptyList()
+        return pageTexts.flatMapIndexed { pageIndex, text ->
+            val matches = mutableListOf<SharedPdfSearchResult>()
+            var startIndex = 0
+            while (startIndex < text.length) {
+                val matchIndex = text.indexOf(normalized, startIndex, ignoreCase = true)
+                if (matchIndex < 0) break
+                val (preview, matchInPreview) = text.previewAroundWithMatch(
+                    index = matchIndex,
+                    queryLength = normalized.length,
+                    before = previewRadiusBefore,
+                    after = previewRadiusAfter
+                )
+                matches += SharedPdfSearchResult(
+                    pageIndex = pageIndex,
+                    preview = preview,
+                    matchIndex = matchIndex,
+                    matchLength = normalized.length,
+                    matchIndexInPreview = matchInPreview,
+                )
+                startIndex = matchIndex + normalized.length.coerceAtLeast(1)
+            }
+            matches
+        }
+    }
+
+    fun highlightsForPage(
+        results: List<SharedPdfSearchResult>,
+        pageIndex: Int,
+        activeResultIndex: Int,
+        mode: SearchHighlightMode
+    ): List<SharedPdfSearchResult> {
+        return when (mode) {
+            SearchHighlightMode.ALL -> results.filter { it.pageIndex == pageIndex }
+            SearchHighlightMode.FOCUSED -> {
+                val active = results.getOrNull(activeResultIndex)
+                if (active?.pageIndex == pageIndex) listOf(active) else emptyList()
+            }
+        }
+    }
+}
+
+class SharedPdfSearchIndex(
+    val pageCount: Int = 0
+) {
+    private val pageTexts = LinkedHashMap<Int, String>()
+    private val tokenPages = LinkedHashMap<String, MutableSet<Int>>()
+
+    val indexedPageCount: Int
+        get() = pageTexts.size
+
+    fun hasPage(pageIndex: Int): Boolean = pageTexts.containsKey(pageIndex)
+
+    fun pageText(pageIndex: Int): String? = pageTexts[pageIndex]
+
+    fun indexedPages(): List<SharedPdfIndexedPage> {
+        return pageTexts.entries
+            .sortedBy { it.key }
+            .map { SharedPdfIndexedPage(pageIndex = it.key, text = it.value) }
+    }
+
+    fun putPage(pageIndex: Int, text: String) {
+        if (pageCount > 0 && pageIndex !in 0 until pageCount) return
+        removePageTokens(pageIndex)
+        pageTexts[pageIndex] = text
+        text.searchTokens().forEach { token ->
+            tokenPages.getOrPut(token) { linkedSetOf() } += pageIndex
+        }
+    }
+
+    fun clear() {
+        pageTexts.clear()
+        tokenPages.clear()
+    }
+
+    fun search(
+        query: String,
+        previewRadiusBefore: Int = 70,
+        previewRadiusAfter: Int = 100
+    ): List<SharedPdfSearchResult> {
+        val normalized = query.trim()
+        if (normalized.isBlank()) return emptyList()
+        val matcher = SharedPdfPhraseMatcher(normalized)
+        val candidates = candidatePages(matcher.tokens)
+        return candidates.flatMap { pageIndex ->
+            val text = pageTexts[pageIndex].orEmpty()
+            matcher.findAll(text).map { match ->
+                val (preview, matchInPreview) = text.previewAroundWithMatch(
+                    index = match.startIndex,
+                    queryLength = match.length,
+                    before = previewRadiusBefore,
+                    after = previewRadiusAfter
+                )
+                SharedPdfSearchResult(
+                    pageIndex = pageIndex,
+                    preview = preview,
+                    matchIndex = match.startIndex,
+                    matchLength = match.length,
+                    matchIndexInPreview = matchInPreview,
+                )
+            }
+        }
+    }
+
+    private fun candidatePages(tokens: List<String>): List<Int> {
+        if (tokens.isEmpty()) return pageTexts.keys.sorted()
+        val candidateSets = tokens.map { token ->
+            tokenPages.asSequence()
+                .filter { (indexedToken, _) -> indexedToken.startsWith(token) }
+                .flatMap { (_, pages) -> pages.asSequence() }
+                .toSet()
+        }
+        if (candidateSets.any { it.isEmpty() }) return emptyList()
+        return candidateSets
+            .drop(1)
+            .fold(candidateSets.first()) { acc, pages -> acc.intersect(pages) }
+            .sorted()
+    }
+
+    private fun removePageTokens(pageIndex: Int) {
+        if (!pageTexts.containsKey(pageIndex)) return
+        val emptyTokens = mutableListOf<String>()
+        tokenPages.forEach { (token, pages) ->
+            pages.remove(pageIndex)
+            if (pages.isEmpty()) emptyTokens += token
+        }
+        emptyTokens.forEach(tokenPages::remove)
+    }
+}
+
+data class SharedPdfIndexedPage(
+    val pageIndex: Int,
+    val text: String
+)
+
+private data class SharedPdfPhraseMatch(
+    val startIndex: Int,
+    val length: Int
+)
+
+private class SharedPdfPhraseMatcher(query: String) {
+    val tokens: List<String> = query.searchTokens()
+    private val regex = query.toSearchPhraseRegex()
+    private val literal = query.takeIf { regex == null }
+
+    fun findAll(text: String): List<SharedPdfPhraseMatch> {
+        return if (regex != null) {
+            regex.findAll(text).map { match ->
+                SharedPdfPhraseMatch(
+                    startIndex = match.range.first,
+                    length = match.range.last - match.range.first + 1
+                )
+            }.toList()
+        } else {
+            val needle = literal.orEmpty()
+            val matches = mutableListOf<SharedPdfPhraseMatch>()
+            var startIndex = 0
+            while (startIndex < text.length) {
+                val matchIndex = text.indexOf(needle, startIndex, ignoreCase = true)
+                if (matchIndex < 0) break
+                matches += SharedPdfPhraseMatch(matchIndex, needle.length)
+                startIndex = matchIndex + needle.length.coerceAtLeast(1)
+            }
+            matches
+        }
+    }
+}
+
+private fun String.toSearchPhraseRegex(): Regex? {
+    val tokens = trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return null
+    // Android parity (PdfTextRepository.createPhraseRegex): matches are
+    // anchored to a word start on the first token and joined by any
+    // whitespace run. This applies to single-token queries too, so "ion"
+    // matches "ionic" but not the tail of "citation".
+    val prefix = if (all { it.code < 128 }) "\\b" else ""
+    return runCatching {
+        Regex(prefix + tokens.joinToString("\\s+") { Regex.escape(it) }, RegexOption.IGNORE_CASE)
+    }.getOrNull()
+}
+
+private fun Int.wrapIndex(size: Int): Int {
+    if (size <= 0) return -1
+    return when {
+        this < 0 -> size - 1
+        this >= size -> 0
+        else -> this
+    }
+}
+
+private fun List<SharedPdfBookmark>.normalizedBookmarks(lastPageIndex: Int): List<SharedPdfBookmark> {
+    return asSequence()
+        .filter { it.pageIndex in 0..lastPageIndex }
+        .distinctBy { it.pageIndex }
+        .sortedBy { it.pageIndex }
+        .toList()
+}
+
+private fun String.previewAround(
+    index: Int,
+    queryLength: Int,
+    before: Int,
+    after: Int
+): String = previewAroundWithMatch(index, queryLength, before, after).first
+
+/**
+ * Builds the [SharedPdfSearchResult.preview] snippet and returns the exact
+ * offset of the matched span inside it, so result rows can bold the query
+ * like Android's FTS/regex snippets do. Whitespace collapsing and trimming
+ * are applied to the prefix before the match to compute the shift.
+ */
+private fun String.previewAroundWithMatch(
+    index: Int,
+    queryLength: Int,
+    before: Int,
+    after: Int
+): Pair<String, Int> {
+    val start = (index - before).coerceAtLeast(0)
+    val end = (index + queryLength + after).coerceAtMost(length)
+    val prefix = if (start > 0) "..." else ""
+    val suffix = if (end < length) "..." else ""
+    val segment = substring(start, end)
+    val collapsed = segment.replace(Regex("\\s+"), " ")
+    val collapsedPrefixLength = if (index > start) {
+        segment.substring(0, index - start).replace(Regex("\\s+"), " ").length
+    } else {
+        0
+    }
+    val leadingTrimmed = collapsed.length - collapsed.trimStart().length
+    val matchOffset = (prefix.length + collapsedPrefixLength - leadingTrimmed)
+        .coerceIn(prefix.length, prefix.length + collapsed.trim().length)
+    return prefix + collapsed.trim() + suffix to matchOffset
+}
+
+private fun String.searchTokens(): List<String> {
+    val tokens = mutableListOf<String>()
+    val current = StringBuilder()
+    forEach { char ->
+        if (char.isLetterOrDigit() || char == '_') {
+            current.append(char.lowercaseChar())
+        } else if (current.isNotEmpty()) {
+            tokens += current.toString()
+            current.setLength(0)
+        }
+    }
+    if (current.isNotEmpty()) tokens += current.toString()
+    return tokens.distinct()
+}

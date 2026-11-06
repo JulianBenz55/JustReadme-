@@ -1,0 +1,1204 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.pdf
+
+import android.graphics.Bitmap
+import android.graphics.Rect
+import android.graphics.RectF
+import androidx.annotation.StringRes
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CopyAll
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
+import com.aryan.reader.OcrEngine
+import com.aryan.reader.R
+import com.aryan.reader.pdf.ocr.OcrElement
+import com.aryan.reader.pdf.ocr.OcrLine
+import com.aryan.reader.pdf.ocr.OcrResult
+import com.aryan.reader.pdf.ocr.OcrSymbol
+import com.aryan.reader.shared.HighlightStyle
+import com.aryan.reader.shared.pdf.DEFAULT_SHARED_PDF_COMMENT_AUTHOR
+import com.aryan.reader.shared.pdf.PdfOcrWord
+import com.aryan.reader.shared.pdf.PdfPageBounds
+import com.aryan.reader.shared.pdf.PdfProcessedText
+import com.aryan.reader.shared.pdf.PdfTextProcessing
+import com.aryan.reader.shared.pdf.PdfTextSelectionEngine
+import com.aryan.reader.shared.pdf.SharedPdfAnnotationComment
+import com.aryan.reader.shared.pdf.pdfCommentChildren
+import com.aryan.reader.shared.pdf.visiblePdfAnnotationComments
+import com.aryan.reader.shared.pdf.withoutPdfCommentThread
+import timber.log.Timber
+import java.text.DateFormat
+import java.util.Date
+import java.util.UUID
+
+enum class OcrLanguage(@StringRes val displayNameRes: Int) {
+    LATIN(R.string.ocr_language_latin),
+    DEVANAGARI(R.string.ocr_language_devanagari),
+    CHINESE(R.string.ocr_language_chinese),
+    JAPANESE(R.string.ocr_language_japanese),
+    KOREAN(R.string.ocr_language_korean)
+}
+
+internal data class OcrSymbolInfo(
+    val symbol: OcrSymbol,
+    val parentElement: OcrElement,
+    val parentLine: OcrLine
+)
+
+private class MenuActionItem(
+    val iconRes: Int? = null,
+    val imageVector: ImageVector? = null,
+    val label: String,
+    val onClick: () -> Unit,
+    val isError: Boolean = false
+)
+
+typealias PdfHighlightColor = com.aryan.reader.shared.pdf.PdfHighlightColor
+
+data class PdfUserHighlight(
+    val id: String = UUID.randomUUID().toString(),
+    val pageIndex: Int,
+    val bounds: List<RectF>,
+    val color: PdfHighlightColor,
+    val colorArgb: Int? = null,
+    val text: String,
+    val range: Pair<Int, Int>,
+    val style: HighlightStyle = HighlightStyle.BACKGROUND,
+    val note: String? = null,
+    val comments: List<SharedPdfAnnotationComment> = emptyList()
+) {
+    fun resolvedColor(customHighlightColors: Map<PdfHighlightColor, Color> = emptyMap()): Color {
+        customHighlightColors[color]?.let { return it }
+        colorArgb?.let { return Color(it) }
+        return color.color
+    }
+}
+
+internal data class CustomPdfMenuState(
+    val selectedText: String,
+    val anchorRect: Rect,
+    val charRange: Pair<Int, Int>,
+    val isExistingHighlight: Boolean = false,
+    val highlightId: String? = null,
+    val isComment: Boolean = false,
+    val author: String? = null,
+    val annotation: EmbeddedAnnotation? = null,
+    val note: String? = null,
+    val selectedColor: PdfHighlightColor? = null,
+    val selectedStyle: HighlightStyle = HighlightStyle.BACKGROUND
+)
+
+internal enum class PdfSelectionMethod {
+    PDFIUM, OCR
+}
+
+internal object OcrHelper {
+    fun init(language: OcrLanguage) {
+        OcrEngine.init(language)
+    }
+
+    suspend fun extractTextFromBitmap(
+        bitmap: Bitmap,
+        onModelDownloading: () -> Unit
+    ): OcrResult? {
+        return OcrEngine.extractTextFromBitmap(bitmap, onModelDownloading)
+    }
+}
+
+internal suspend fun findWordBoundaries(
+    textPage: ReaderTextPage,
+    initialCharIndex: Int,
+    pageCharCount: Int
+): Pair<Int, Int>? {
+    return PdfTextSelectionEngine.wordBoundariesSuspending(
+        pageCharCount = pageCharCount,
+        initialCharIndex = initialCharIndex,
+        charAt = { textPage.textPageGetUnicode(it).toChar() }
+    )?.let { it.start to it.end }
+}
+
+@Composable
+private fun CommentThread(replies: List<EmbeddedAnnotation>, depth: Int) {
+    Timber.tag("PdfCommentDebug").v("Rendering CommentThread: Depth=$depth, ReplyCount=${replies.size}")
+    replies.forEach { reply ->
+        HorizontalDivider(
+            modifier = Modifier.padding(vertical = 8.dp),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        )
+        CommentItem(author = reply.author, text = reply.contents ?: "", depth = depth)
+        if (reply.replies.isNotEmpty()) {
+            CommentThread(reply.replies, depth + 1)
+        }
+    }
+}
+
+
+private fun pdfHighlightStyleIconRes(style: HighlightStyle): Int {
+    return when (style) {
+        HighlightStyle.BACKGROUND -> R.drawable.font_background
+        HighlightStyle.UNDERLINE -> R.drawable.format_underlined
+        HighlightStyle.WAVY_UNDERLINE -> R.drawable.format_underlined_squiggle
+        HighlightStyle.STRIKETHROUGH -> R.drawable.strikethrough
+    }
+}
+
+@Composable
+internal fun PdfSelectionMenuPopup(
+    menuState: CustomPdfMenuState,
+    popupPositionProvider: PopupPositionProvider,
+    customHighlightColors: Map<PdfHighlightColor, Color> = emptyMap(),
+    onPaletteClick: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+    onCopy: (String) -> Unit,
+    onAiDefine: (String) -> Unit,
+    onTranslate: (String) -> Unit,
+    onSearch: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onColorSelected: (PdfHighlightColor, HighlightStyle) -> Unit,
+    onDelete: () -> Unit,
+    onTts: (() -> Unit)? = null,
+    onNote: ((HighlightStyle) -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val selectionMenuMaxHeight = (configuration.screenHeightDp.dp - 32.dp).coerceAtLeast(160.dp)
+    val menuScrollState = rememberScrollState()
+    var selectedHighlightStyle by remember(menuState.highlightId, menuState.selectedStyle) {
+        mutableStateOf(
+            if (menuState.selectedStyle == HighlightStyle.BACKGROUND) loadPreferredPdfHighlightStyle(context) else menuState.selectedStyle
+        )
+    }
+
+    Popup(
+        popupPositionProvider = popupPositionProvider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnClickOutside = false,
+            dismissOnBackPress = true
+        )
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            shadowElevation = 8.dp,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier
+                .widthIn(max = 280.dp)
+                .heightIn(max = selectionMenuMaxHeight)
+        ) {
+            Column(
+                modifier = (if (menuState.isComment) Modifier.fillMaxWidth() else Modifier.width(IntrinsicSize.Max))
+                    .heightIn(max = selectionMenuMaxHeight)
+                    .verticalScroll(menuScrollState)
+            ) {
+                if (!menuState.note.isNullOrBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .heightIn(max = 140.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = stringResource(R.string.label_note),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Note",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = menuState.note,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontStyle = FontStyle.Italic
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                }
+
+                if (menuState.isComment) {
+                    Column(
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .heightIn(max = 400.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        CommentItem(author = menuState.author, text = menuState.selectedText, depth = 0)
+                        menuState.annotation?.replies?.let { CommentThread(it, 1) }
+                    }
+
+                    HorizontalDivider()
+                    TextButton(
+                        onClick = {
+                            val fullText = buildString {
+                                append("${menuState.author ?: "Unknown"}: ${menuState.selectedText}\n")
+                                fun appendReplies(replies: List<EmbeddedAnnotation>, indent: String) {
+                                    for (r in replies) {
+                                        append("$indent${r.author ?: "Unknown"}: ${r.contents ?: ""}\n")
+                                        appendReplies(r.replies, "$indent  ")
+                                    }
+                                }
+                                menuState.annotation?.replies?.let { appendReplies(it, "  ") }
+                            }.trimEnd()
+                            onCopy(fullText)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.CopyAll, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_copy_thread))
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.padding(top = 8.dp, start = 10.dp, end = 10.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        HighlightStyle.entries.forEach { style ->
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 3.dp)
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (selectedHighlightStyle == style) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (selectedHighlightStyle == style) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable {
+                                        selectedHighlightStyle = style
+                                        savePreferredPdfHighlightStyle(context, style)
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = pdfHighlightStyleIconRes(style)),
+                                    contentDescription = style.id,
+                                    tint = if (selectedHighlightStyle == style) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        PdfHighlightColor.entries.forEach { colorEnum ->
+                            val displayColor = customHighlightColors[colorEnum] ?: colorEnum.color
+                            Box(
+                                modifier = Modifier.padding(horizontal = 4.dp).size(28.dp)
+                                    .background(displayColor, CircleShape).clip(CircleShape)
+                                    .clickable {
+                                        Timber.tag("PdfHighlightDebug")
+                                            .d("Color box clicked: $colorEnum style=$selectedHighlightStyle")
+                                        savePreferredPdfHighlightStyle(context, selectedHighlightStyle)
+                                        onColorSelected(colorEnum, selectedHighlightStyle)
+                                    })
+                        }
+                        if (onPaletteClick != null) {
+                            val rainbowColors = listOf(
+                                Color.Red, Color.Magenta, Color.Blue, Color.Cyan, Color.Green, Color.Yellow, Color.Red
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 4.dp)
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Brush.sweepGradient(rainbowColors))
+                                    .clickable { onPaletteClick() },
+                                contentAlignment = Alignment.Center
+                            ) {}
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    val actions = mutableListOf<MenuActionItem>()
+                    actions.add(MenuActionItem(iconRes = R.drawable.copy, label = context.getString(R.string.action_copy), onClick = { onCopy(menuState.selectedText) }))
+                    if (onTts != null) {
+                        actions.add(MenuActionItem(imageVector = Icons.AutoMirrored.Filled.VolumeUp, label = context.getString(R.string.label_speak), onClick = onTts))
+                    }
+                    if (menuState.selectedText.length <= 2000) {
+                        actions.add(MenuActionItem(iconRes = R.drawable.dictionary, label = context.getString(R.string.label_dict), onClick = { onAiDefine(menuState.selectedText) }))
+                        actions.add(MenuActionItem(iconRes = R.drawable.translate, label = context.getString(R.string.action_translate), onClick = { onTranslate(menuState.selectedText) }))
+                        actions.add(MenuActionItem(imageVector = Icons.Default.Search, label = context.getString(R.string.action_search), onClick = { onSearch(menuState.selectedText) }))
+                    }
+
+                    if (onNote != null) {
+                        val noteLabel = context.getString(if (menuState.note.isNullOrBlank()) R.string.label_note else R.string.label_edit)
+                        actions.add(MenuActionItem(imageVector = Icons.Default.Edit, label = noteLabel, onClick = { onNote(selectedHighlightStyle) }))
+                    }
+
+                    if (!menuState.isExistingHighlight) {
+                        actions.add(MenuActionItem(iconRes = R.drawable.select_all, label = context.getString(R.string.select_all), onClick = { onSelectAll() }))
+                    }
+                    if (menuState.isExistingHighlight) {
+                        actions.add(MenuActionItem(imageVector = Icons.Default.Delete, label = "Remove", onClick = { onDelete() }, isError = true))
+                    }
+
+                    Column(modifier = Modifier.padding(bottom = 4.dp)) {
+                        actions.chunked(3).forEach { rowActions ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                rowActions.forEach { action ->
+                                    val tint = if (action.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                                    Column(
+                                        modifier = Modifier
+                                            .width(56.dp)
+                                            .clickable { action.onClick() }
+                                            .padding(vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        if (action.imageVector != null) {
+                                            Icon(imageVector = action.imageVector, contentDescription = action.label, tint = tint, modifier = Modifier.size(22.dp))
+                                        } else if (action.iconRes != null) {
+                                            Icon(painter = painterResource(id = action.iconRes), contentDescription = action.label, tint = tint, modifier = Modifier.size(22.dp))
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(text = action.label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
+                                    }
+                                }
+                                repeat(3 - rowActions.size) {
+                                    Spacer(modifier = Modifier.width(56.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommentItem(author: String?, text: String, depth: Int) {
+    val indentSize = (depth * 16).dp
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = indentSize, top = 4.dp, bottom = 4.dp)
+    ) {
+        if (depth > 0) {
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.outlineVariant)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+        }
+
+        Column(modifier = Modifier.weight(1f)) {
+            if (!author.isNullOrBlank()) {
+                Text(
+                    text = author,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (depth > 0) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+internal fun mergeRectsIntoLines(rects: List<Rect>): List<Rect> {
+    return PdfTextProcessing.mergeScreenBoundsIntoLines(rects.map(Rect::toSharedBounds))
+        .map(PdfPageBounds::toAndroidRect)
+}
+
+internal fun findRectsForTextChunkInOcrVisual(
+    visionText: OcrResult,
+    textChunkToHighlight: String
+): List<Rect> {
+    val allOcrElements = visionText.textBlocks.flatMap { tb -> tb.lines.flatMap { l -> l.elements } }
+    return PdfTextProcessing.findOcrWordSequence(
+        words = allOcrElements.map { element ->
+            PdfOcrWord(element.text, element.boundingBox?.toSharedBounds())
+        },
+        textChunk = textChunkToHighlight
+    ).map(PdfPageBounds::toAndroidRect)
+}
+
+internal typealias ProcessedText = PdfProcessedText
+
+internal sealed class TtsHighlightData {
+    data class Pdfium(val startIndex: Int, val length: Int) : TtsHighlightData()
+    data class Ocr(val text: String) : TtsHighlightData()
+}
+
+internal fun preprocessTextForTts(rawText: String): ProcessedText {
+    return PdfTextProcessing.preprocessForTts(rawText)
+}
+
+internal fun mergePdfRectsIntoLines(rects: List<RectF>): List<RectF> {
+    return PdfTextProcessing.mergePdfBoundsIntoLines(rects.map(RectF::toSharedBounds))
+        .map(PdfPageBounds::toAndroidRectF)
+}
+
+private fun Rect.toSharedBounds() = PdfPageBounds(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
+private fun RectF.toSharedBounds() = PdfPageBounds(left, top, right, bottom)
+private fun PdfPageBounds.toAndroidRect() = Rect(left.toInt(), top.toInt(), right.toInt(), bottom.toInt())
+private fun PdfPageBounds.toAndroidRectF() = RectF(left, top, right, bottom)
+
+@Composable
+fun PdfHighlightColorRow(
+    modifier: Modifier = Modifier,
+    selectedColor: PdfHighlightColor? = null,
+    customHighlightColors: Map<PdfHighlightColor, Color> = emptyMap(),
+    onColorSelect: (PdfHighlightColor) -> Unit,
+    onPaletteClick: (() -> Unit)? = null
+) {
+    Row(
+        modifier = modifier
+            .padding(vertical = 12.dp, horizontal = 12.dp)
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PdfHighlightColor.entries.forEach { colorEnum ->
+            val displayColor = customHighlightColors[colorEnum] ?: colorEnum.color
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .padding(horizontal = 6.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(displayColor)
+                    .clickable { onColorSelect(colorEnum) }
+                    .border(
+                        width = if (selectedColor == colorEnum) 3.dp else 1.dp,
+                        color = if (selectedColor == colorEnum) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                        shape = CircleShape
+                    )
+            ) {
+                if (selectedColor == colorEnum) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = stringResource(R.string.content_desc_selected),
+                        tint = if (displayColor.luminance() > 0.5f) Color.Black else Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        if (onPaletteClick != null) {
+            val rainbowColors = listOf(
+                Color.Red, Color.Magenta, Color.Blue, Color.Cyan, Color.Green, Color.Yellow, Color.Red
+            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 6.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Brush.sweepGradient(rainbowColors))
+                    .clickable { onPaletteClick() },
+                contentAlignment = Alignment.Center
+            ) {}
+        }
+    }
+}
+
+@Composable
+private fun PdfHighlightStyleRow(
+    selectedStyle: HighlightStyle,
+    onStyleSelect: (HighlightStyle) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HighlightStyle.entries.forEach { style ->
+            val selected = style == selectedStyle
+            Surface(
+                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent,
+                contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                ),
+                modifier = Modifier
+                    .size(width = 38.dp, height = 30.dp)
+                    .clickable { onStyleSelect(style) }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(id = pdfHighlightStyleIconRes(style)),
+                        contentDescription = style.id,
+                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private enum class PdfAnnotationSheetSection {
+    NOTE,
+    COMMENTS
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PdfAnnotationBottomSheet(
+    highlight: PdfUserHighlight,
+    effectiveBg: Color,
+    effectiveText: Color,
+    customHighlightColors: Map<PdfHighlightColor, Color> = emptyMap(),
+    onPaletteClick: (() -> Unit)? = null,
+    onColorChange: (PdfHighlightColor) -> Unit,
+    onStyleChange: (HighlightStyle) -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (String, List<SharedPdfAnnotationComment>) -> Unit,
+    onUpdate: (String, List<SharedPdfAnnotationComment>) -> Unit = { _, _ -> },
+    onDelete: () -> Unit,
+    onCopy: () -> Unit,
+    onDictionary: () -> Unit,
+    onTranslate: () -> Unit,
+    onSearch: () -> Unit
+) {
+    val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var noteText by remember { mutableStateOf(highlight.note ?: "") }
+    var comments by remember(highlight.id) { mutableStateOf(highlight.comments) }
+    var selectedSection by remember(highlight.id) { mutableStateOf(PdfAnnotationSheetSection.NOTE) }
+    var commentText by remember(highlight.id) { mutableStateOf("") }
+    var replyTargetId by remember(highlight.id) { mutableStateOf<String?>(null) }
+    var editingCommentId by remember(highlight.id) { mutableStateOf<String?>(null) }
+    var commentAuthor by remember(highlight.id) {
+        mutableStateOf(
+            highlight.comments
+                .lastOrNull { it.author.isNotBlank() }
+                ?.author
+                ?: DEFAULT_SHARED_PDF_COMMENT_AUTHOR
+        )
+    }
+
+    fun persistComments(nextComments: List<SharedPdfAnnotationComment>) {
+        comments = nextComments
+        onUpdate(noteText, nextComments)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = effectiveBg,
+        contentColor = effectiveText,
+        contentWindowInsets = { WindowInsets.navigationBars }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            val displayColor = highlight.resolvedColor(customHighlightColors)
+
+            PdfHighlightStyleRow(
+                selectedStyle = highlight.style,
+                onStyleSelect = {
+                    savePreferredPdfHighlightStyle(context, it)
+                    onStyleChange(it)
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            PdfHighlightColorRow(
+                selectedColor = highlight.color,
+                customHighlightColors = customHighlightColors,
+                onColorSelect = onColorChange,
+                onPaletteClick = onPaletteClick,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            Surface(
+                color = displayColor.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, displayColor.copy(alpha = 0.3f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                    Box(modifier = Modifier.width(6.dp).fillMaxHeight().background(displayColor))
+                    Text(
+                        text = "\"${highlight.text}\"",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        color = effectiveText.copy(alpha = 0.9f),
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                PdfBottomSheetToolButton(icon = R.drawable.copy, label = stringResource(R.string.action_copy), effectiveText = effectiveText, onClick = onCopy)
+                PdfBottomSheetToolButton(icon = R.drawable.dictionary, label = stringResource(R.string.label_dict), effectiveText = effectiveText, onClick = onDictionary)
+                PdfBottomSheetToolButton(icon = R.drawable.translate, label = stringResource(R.string.action_translate), effectiveText = effectiveText, onClick = onTranslate)
+                PdfBottomSheetToolButton(icon = R.drawable.search, label = stringResource(R.string.action_search), effectiveText = effectiveText, onClick = onSearch)
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            PdfAnnotationSheetTabs(
+                selectedSection = selectedSection,
+                commentCount = comments.count { it.contents.isNotBlank() },
+                effectiveText = effectiveText,
+                onSectionChange = { selectedSection = it }
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            if (selectedSection == PdfAnnotationSheetSection.NOTE) {
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    placeholder = { Text(stringResource(R.string.placeholder_add_note), color = effectiveText.copy(alpha = 0.5f)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp),
+                    maxLines = 5,
+                    colors = pdfAnnotationTextFieldColors(effectiveText),
+                    shape = RoundedCornerShape(12.dp)
+                )
+            } else {
+                PdfHighlightCommentsEditor(
+                    comments = comments,
+                    commentText = commentText,
+                    commentAuthor = commentAuthor,
+                    replyTargetId = replyTargetId,
+                    editingCommentId = editingCommentId,
+                    effectiveText = effectiveText,
+                    onCommentTextChange = { commentText = it },
+                    onCommentAuthorChange = { commentAuthor = it },
+                    onReply = {
+                        editingCommentId = null
+                        replyTargetId = it.id
+                        commentText = ""
+                    },
+                    onCancelReply = { replyTargetId = null },
+                    onEdit = { comment ->
+                        editingCommentId = comment.id
+                        replyTargetId = null
+                        commentText = comment.contents
+                        commentAuthor = comment.author.ifBlank { DEFAULT_SHARED_PDF_COMMENT_AUTHOR }
+                    },
+                    onCancelEdit = {
+                        editingCommentId = null
+                        commentText = ""
+                    },
+                    onDelete = { comment ->
+                        val nextComments = comments.withoutPdfCommentThread(comment.id)
+                        persistComments(nextComments)
+                        if (replyTargetId != null && (replyTargetId == comment.id || nextComments.none { it.id == replyTargetId })) {
+                            replyTargetId = null
+                        }
+                        if (editingCommentId != null && (editingCommentId == comment.id || nextComments.none { it.id == editingCommentId })) {
+                            editingCommentId = null
+                            commentText = ""
+                        }
+                    },
+                    onAddComment = {
+                        val contents = commentText.trim()
+                        if (contents.isNotBlank()) {
+                            val now = System.currentTimeMillis()
+                            val author = commentAuthor.trim().ifBlank { DEFAULT_SHARED_PDF_COMMENT_AUTHOR }
+                            val nextComments = if (editingCommentId != null) {
+                                comments.map { comment ->
+                                    if (comment.id == editingCommentId) {
+                                        comment.copy(
+                                            author = author,
+                                            contents = contents,
+                                            modifiedAt = now
+                                        )
+                                    } else {
+                                        comment
+                                    }
+                                }
+                            } else {
+                                comments + SharedPdfAnnotationComment(
+                                    id = UUID.randomUUID().toString(),
+                                    parentId = replyTargetId,
+                                    author = author,
+                                    contents = contents,
+                                    createdAt = now,
+                                    modifiedAt = now
+                                )
+                            }
+                            persistComments(nextComments)
+                            commentText = ""
+                            replyTargetId = null
+                            editingCommentId = null
+                        }
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_delete))
+                }
+                Button(
+                    onClick = { onSave(noteText, comments) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Text(stringResource(R.string.action_done))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PdfAnnotationSheetTabs(
+    selectedSection: PdfAnnotationSheetSection,
+    commentCount: Int,
+    effectiveText: Color,
+    onSectionChange: (PdfAnnotationSheetSection) -> Unit
+) {
+    Surface(
+        color = effectiveText.copy(alpha = 0.06f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(modifier = Modifier.padding(4.dp)) {
+            PdfAnnotationSheetTab(
+                label = stringResource(R.string.label_note),
+                selected = selectedSection == PdfAnnotationSheetSection.NOTE,
+                effectiveText = effectiveText,
+                modifier = Modifier.weight(1f),
+                onClick = { onSectionChange(PdfAnnotationSheetSection.NOTE) }
+            )
+            PdfAnnotationSheetTab(
+                label = "${stringResource(R.string.label_comments)} ($commentCount)",
+                selected = selectedSection == PdfAnnotationSheetSection.COMMENTS,
+                effectiveText = effectiveText,
+                modifier = Modifier.weight(1f),
+                onClick = { onSectionChange(PdfAnnotationSheetSection.COMMENTS) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun PdfAnnotationSheetTab(
+    label: String,
+    selected: Boolean,
+    effectiveText: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+        contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else effectiveText,
+        shape = RoundedCornerShape(6.dp),
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun PdfHighlightCommentsEditor(
+    comments: List<SharedPdfAnnotationComment>,
+    commentText: String,
+    commentAuthor: String,
+    replyTargetId: String?,
+    editingCommentId: String?,
+    effectiveText: Color,
+    onCommentTextChange: (String) -> Unit,
+    onCommentAuthorChange: (String) -> Unit,
+    onReply: (SharedPdfAnnotationComment) -> Unit,
+    onCancelReply: () -> Unit,
+    onEdit: (SharedPdfAnnotationComment) -> Unit,
+    onCancelEdit: () -> Unit,
+    onDelete: (SharedPdfAnnotationComment) -> Unit,
+    onAddComment: () -> Unit
+) {
+    val visibleComments = comments.visiblePdfAnnotationComments()
+    val replyTarget = visibleComments.firstOrNull { it.id == replyTargetId }
+    val editingComment = visibleComments.firstOrNull { it.id == editingCommentId }
+
+    Column {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            PdfHighlightCommentThread(
+                comments = visibleComments,
+                parentId = null,
+                depth = 0,
+                visitedIds = emptySet(),
+                effectiveText = effectiveText,
+                onReply = onReply,
+                onEdit = onEdit,
+                onDelete = onDelete
+            )
+        }
+
+        if (editingComment != null || replyTarget != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (editingComment != null) {
+                        stringResource(R.string.label_editing_comment)
+                    } else {
+                        stringResource(
+                            R.string.label_replying_to,
+                            replyTarget?.author?.ifBlank { DEFAULT_SHARED_PDF_COMMENT_AUTHOR }.orEmpty()
+                        )
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = effectiveText.copy(alpha = 0.7f),
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = if (editingComment != null) onCancelEdit else onCancelReply) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        }
+
+        OutlinedTextField(
+            value = commentAuthor,
+            onValueChange = onCommentAuthorChange,
+            label = { Text(stringResource(R.string.author)) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            colors = pdfAnnotationTextFieldColors(effectiveText),
+            shape = RoundedCornerShape(12.dp)
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = commentText,
+            onValueChange = onCommentTextChange,
+            placeholder = {
+                Text(
+                    stringResource(R.string.placeholder_add_comment),
+                    color = effectiveText.copy(alpha = 0.5f)
+                )
+            },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp),
+            maxLines = 4,
+            colors = pdfAnnotationTextFieldColors(effectiveText),
+            shape = RoundedCornerShape(12.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(onClick = onAddComment, enabled = commentText.isNotBlank()) {
+                Text(
+                    stringResource(
+                        if (editingComment != null) R.string.action_save_comment else R.string.action_add_comment
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PdfHighlightCommentThread(
+    comments: List<SharedPdfAnnotationComment>,
+    parentId: String?,
+    depth: Int,
+    visitedIds: Set<String>,
+    effectiveText: Color,
+    onReply: (SharedPdfAnnotationComment) -> Unit,
+    onEdit: (SharedPdfAnnotationComment) -> Unit,
+    onDelete: (SharedPdfAnnotationComment) -> Unit
+) {
+    comments
+        .pdfCommentChildren(parentId)
+        .forEach { comment ->
+            if (comment.id in visitedIds) return@forEach
+            PdfHighlightCommentItem(
+                comment = comment,
+                depth = depth,
+                effectiveText = effectiveText,
+                onReply = { onReply(comment) },
+                onEdit = { onEdit(comment) },
+                onDelete = { onDelete(comment) }
+            )
+            PdfHighlightCommentThread(
+                comments = comments,
+                parentId = comment.id,
+                depth = depth + 1,
+                visitedIds = visitedIds + comment.id,
+                effectiveText = effectiveText,
+                onReply = onReply,
+                onEdit = onEdit,
+                onDelete = onDelete
+            )
+        }
+}
+
+@Composable
+private fun PdfHighlightCommentItem(
+    comment: SharedPdfAnnotationComment,
+    depth: Int,
+    effectiveText: Color,
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val indentSize = (depth * 16).dp
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = indentSize, top = 6.dp, bottom = 6.dp)
+    ) {
+        if (depth > 0) {
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(MaterialTheme.colorScheme.outlineVariant)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = comment.author.ifBlank { DEFAULT_SHARED_PDF_COMMENT_AUTHOR },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                val timestamp = comment.createdAt.formatPdfCommentTimestamp()
+                if (timestamp.isNotBlank()) {
+                    Text(
+                        text = timestamp,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = effectiveText.copy(alpha = 0.55f)
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = comment.contents,
+                style = MaterialTheme.typography.bodyMedium,
+                color = effectiveText
+            )
+            Row {
+                TextButton(onClick = onReply) {
+                    Text(stringResource(R.string.action_reply))
+                }
+                TextButton(onClick = onEdit) {
+                    Text(stringResource(R.string.label_edit))
+                }
+                TextButton(onClick = onDelete) {
+                    Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun pdfAnnotationTextFieldColors(effectiveText: Color) =
+    OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = Color.Transparent,
+        unfocusedContainerColor = Color.Transparent,
+        focusedBorderColor = MaterialTheme.colorScheme.primary,
+        unfocusedBorderColor = effectiveText.copy(alpha = 0.3f),
+        focusedTextColor = effectiveText,
+        unfocusedTextColor = effectiveText
+    )
+
+private fun Long.formatPdfCommentTimestamp(): String {
+    if (this <= 0L) return ""
+    return runCatching {
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(this))
+    }.getOrDefault("")
+}
+
+@Composable
+private fun PdfBottomSheetToolButton(
+    icon: Int,
+    label: String,
+    effectiveText: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            painter = painterResource(id = icon),
+            contentDescription = label,
+            tint = effectiveText.copy(alpha = 0.8f),
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = effectiveText.copy(alpha = 0.8f)
+        )
+    }
+}

@@ -1,0 +1,669 @@
+package com.aryan.reader.shared.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DoNotTouch
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import com.aryan.reader.shared.DockLocation
+import com.aryan.reader.shared.pdf.PdfInkTool
+import com.aryan.reader.shared.pdf.SharedPdfAnnotationHighlighterTools
+import com.aryan.reader.shared.pdf.SharedPdfAnnotationPenTools
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationDockFullBar
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationDockSide
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationEraserActive
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationHighlighterActive
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationPenActive
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationSelectActive
+import com.aryan.reader.shared.pdf.isSharedPdfAnnotationTextActive
+import com.aryan.reader.shared.pdf.resolveSharedPdfAnnotationDockToolClick
+
+/**
+ * Android-parity PDF annotation dock.
+ *
+ * Benchmark: `app/.../pdf/AnnotationDock.kt` (behavior + layout).
+ * Shared-first so iOS renders the same toolbar as Android:
+ * close, minimize, stylus-only, select / pen / highlighter / text / eraser,
+ * undo + redo. Sticky (TOP/BOTTOM) renders full-width rectangular with no
+ * shadow; floating renders as a pill; floating + minimized collapses to the
+ * 48dp circle. Minimized dims tools to 30% and disables them, matching
+ * Android's `toolsAlpha` + `enabled = canX && !isMinimized` + drawing gate.
+ *
+ * Side docks (LEFT/RIGHT) render as a vertical bar flush to the edge with
+ * semi-circle caps (half-pill: flat on the edge side, fully rounded on the
+ * outer side) instead of the horizontal bar.
+ */
+@Composable
+fun SharedPdfAndroidAnnotationDock(
+    selectedTool: PdfInkTool,
+    activePenColor: Color,
+    activeHighlighterColor: Color,
+    onToolClick: (PdfInkTool) -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onClose: () -> Unit,
+    canUndo: Boolean,
+    canRedo: Boolean,
+    lastPenTool: PdfInkTool,
+    modifier: Modifier = Modifier,
+    lastHighlighterTool: PdfInkTool = PdfInkTool.HIGHLIGHTER,
+    isSticky: Boolean = false,
+    isMinimized: Boolean,
+    onToggleMinimize: () -> Unit,
+    isStylusOnlyMode: Boolean,
+    onToggleStylusOnlyMode: () -> Unit,
+    dockLocation: DockLocation = DockLocation.BOTTOM,
+) {
+    val showFullDock = isSharedPdfAnnotationDockFullBar(isSticky, isMinimized)
+    val isVertical = isSharedPdfAnnotationDockSide(dockLocation)
+
+    val dockHeight = 56.dp
+    val buttonSize = 36.dp
+    val iconSize = 20.dp
+    val spacing = 8.dp
+    val horizontalPadding = 12.dp
+
+    if (showFullDock) {
+        val shape = if (isSticky) RectangleShape else RoundedCornerShape(percent = 50)
+        if (isVertical) {
+            // Side edges render as a compact scrollable semi-circle wheel
+            // (no Surface: the wheel draws its own half-disc background).
+            Box(modifier = modifier) {
+                SharedPdfAnnotationDockWheelContent(
+                    selectedTool = selectedTool,
+                    activePenColor = activePenColor,
+                    activeHighlighterColor = activeHighlighterColor,
+                    lastPenTool = lastPenTool,
+                    lastHighlighterTool = lastHighlighterTool,
+                    isStylusOnlyMode = isStylusOnlyMode,
+                    onToggleStylusOnlyMode = onToggleStylusOnlyMode,
+                    onToolClick = onToolClick,
+                    onUndo = onUndo,
+                    onRedo = onRedo,
+                    onClose = onClose,
+                    canUndo = canUndo,
+                    canRedo = canRedo,
+                    isMinimized = isMinimized,
+                    onToggleMinimize = onToggleMinimize,
+                    buttonSize = buttonSize,
+                    iconSize = iconSize,
+                    dockLocation = dockLocation,
+                    spinEnabled = isSticky,
+                )
+            }
+        } else {
+        Surface(
+            color = Color(0xFF1E1E1E),
+            shape = shape,
+            shadowElevation = if (isSticky) 0.dp else 8.dp,
+            modifier = modifier.height(dockHeight),
+        ) {
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = horizontalPadding)
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.1f))
+                        .clickable(onClick = onClose),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = readerString("content_desc_close_edit_mode", "Close edit mode"),
+                        tint = Color.White,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+
+                val visIcon = if (isMinimized) Icons.Default.VisibilityOff else Icons.Default.Visibility
+                Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .clickable(onClick = onToggleMinimize),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = visIcon,
+                        contentDescription = readerString("content_desc_toggle_visibility", "Toggle visibility"),
+                        tint = Color.White,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .height(20.dp)
+                        .width(1.dp)
+                        .background(Color.White.copy(alpha = 0.2f)),
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(spacing),
+                    modifier = Modifier.graphicsLayer { alpha = if (isMinimized) 0.3f else 1f },
+                ) {
+                    if (!isMinimized) {
+                        val iconVector = if (isStylusOnlyMode) Icons.Default.DoNotTouch else Icons.Default.TouchApp
+                        val iconTint = if (isStylusOnlyMode) Color(0xFFE57373) else Color.White
+                        Box(
+                            modifier = Modifier
+                                .size(buttonSize)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = if (isStylusOnlyMode) 0.15f else 0f))
+                                .clickable(onClick = onToggleStylusOnlyMode),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = iconVector,
+                                contentDescription = readerString("content_desc_stylus_only_mode", "Stylus-only mode"),
+                                tint = iconTint,
+                                modifier = Modifier.size(iconSize),
+                            )
+                        }
+                    }
+
+                    // Android parity (AnnotationDock.kt Select/Edit cell): sits
+                    // before the pen group and activates SELECT directly.
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.SELECT,
+                        isActive = isSharedPdfAnnotationSelectActive(selectedTool, isMinimized),
+                        tintColor = if (isMinimized) Color.Gray else Color.White,
+                        description = readerString("content_desc_select_mode", "Select"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = { if (!isMinimized) onToolClick(PdfInkTool.SELECT) },
+                    )
+
+                    val isPenActive = isSharedPdfAnnotationPenActive(selectedTool, isMinimized)
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.PEN,
+                        isActive = isPenActive,
+                        tintColor = if (isMinimized) Color.Gray else activePenColor,
+                        description = readerString("content_desc_pen", "Pen"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = {
+                            if (!isMinimized) {
+                                onToolClick(
+                                    resolveSharedPdfAnnotationDockToolClick(
+                                        selectedTool = selectedTool,
+                                        clickedGroup = PdfInkTool.PEN,
+                                        lastPenTool = lastPenTool,
+                                        lastHighlighterTool = lastHighlighterTool,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+
+                    val isHighlighterActive = isSharedPdfAnnotationHighlighterActive(selectedTool, isMinimized)
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.HIGHLIGHTER,
+                        isActive = isHighlighterActive,
+                        tintColor = if (isMinimized) Color.Gray else activeHighlighterColor.copy(alpha = 1f),
+                        description = readerString("content_desc_highlighter", "Highlighter"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = {
+                            if (!isMinimized) {
+                                onToolClick(
+                                    resolveSharedPdfAnnotationDockToolClick(
+                                        selectedTool = selectedTool,
+                                        clickedGroup = PdfInkTool.HIGHLIGHTER,
+                                        lastPenTool = lastPenTool,
+                                        lastHighlighterTool = lastHighlighterTool,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.TEXT,
+                        isActive = isSharedPdfAnnotationTextActive(selectedTool, isMinimized),
+                        tintColor = if (isMinimized) Color.Gray else Color.White,
+                        description = readerString("content_desc_text", "Text"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = { if (!isMinimized) onToolClick(PdfInkTool.TEXT) },
+                    )
+
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.ERASER,
+                        isActive = isSharedPdfAnnotationEraserActive(selectedTool, isMinimized),
+                        tintColor = if (isMinimized) Color.Gray else Color.White,
+                        description = readerString("content_desc_eraser", "Eraser"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = { if (!isMinimized) onToolClick(PdfInkTool.ERASER) },
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .clickable(enabled = canUndo && !isMinimized, onClick = onUndo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                        contentDescription = readerString("content_desc_undo", "Undo"),
+                        tint = if (canUndo && !isMinimized) Color.White else Color.White.copy(alpha = 0.3f),
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .clickable(enabled = canRedo && !isMinimized, onClick = onRedo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Redo,
+                        contentDescription = readerString("content_desc_redo", "Redo"),
+                        tint = if (canRedo && !isMinimized) Color.White else Color.White.copy(alpha = 0.3f),
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+            }
+            }
+        }
+    } else {
+        Surface(
+            color = Color(0xFF1E1E1E),
+            shape = CircleShape,
+            shadowElevation = 8.dp,
+            modifier = modifier.size(48.dp),
+        ) {
+            Box(
+                modifier = Modifier.clickable(onClick = onToggleMinimize),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.VisibilityOff,
+                    contentDescription = readerString("content_desc_show_dock", "Show dock"),
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedPdfAnnotationDockWheelContent(
+    selectedTool: PdfInkTool,
+    activePenColor: Color,
+    activeHighlighterColor: Color,
+    lastPenTool: PdfInkTool,
+    lastHighlighterTool: PdfInkTool,
+    isStylusOnlyMode: Boolean,
+    onToggleStylusOnlyMode: () -> Unit,
+    onToolClick: (PdfInkTool) -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onClose: () -> Unit,
+    canUndo: Boolean,
+    canRedo: Boolean,
+    isMinimized: Boolean,
+    onToggleMinimize: () -> Unit,
+    buttonSize: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
+    dockLocation: DockLocation,
+    spinEnabled: Boolean,
+) {
+    // Arc order matches the horizontal bar dock: chrome, tool groups,
+    // history. The stylus toggle hides while minimized (same as the bar).
+    val itemCount = if (isMinimized) 9 else 10
+    // Unkeyed so the spin position survives edge flips (e.g. previewing the
+    // right edge mid-drag) and minimize toggles.
+    var wheelRotation by remember { mutableStateOf(0f) }
+    SharedPdfSideWheelDock(
+        dockLocation = dockLocation,
+        backgroundColor = Color(0xFF1E1E1E),
+        rotationDeg = wheelRotation,
+        onRotationChange = { wheelRotation = it },
+        itemCount = itemCount,
+        spinEnabled = spinEnabled,
+    ) { index ->
+        // Without the stylus cell later indices shift up by one.
+        val shifted = if (isMinimized && index >= 2) index + 1 else index
+        // Minimized dims the tool group to 30% like the bar dock; chrome
+        // (close / minimize / undo / redo) stays fully visible.
+        val dimmed = isMinimized && shifted in 2..7
+        Box(
+            modifier = Modifier.graphicsLayer { alpha = if (dimmed) 0.3f else 1f },
+            contentAlignment = Alignment.Center,
+        ) {
+            when (shifted) {
+                0 -> Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.1f))
+                        .clickable(onClick = onClose),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = readerString("content_desc_close_edit_mode", "Close edit mode"),
+                        tint = Color.White,
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+                1 -> {
+                    val visIcon = if (isMinimized) Icons.Default.VisibilityOff else Icons.Default.Visibility
+                    Box(
+                        modifier = Modifier
+                            .size(buttonSize)
+                            .clip(CircleShape)
+                            .clickable(onClick = onToggleMinimize),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = visIcon,
+                            contentDescription = readerString("content_desc_toggle_visibility", "Toggle visibility"),
+                            tint = Color.White,
+                            modifier = Modifier.size(iconSize),
+                        )
+                    }
+                }
+                2 -> {
+                    val iconVector = if (isStylusOnlyMode) Icons.Default.DoNotTouch else Icons.Default.TouchApp
+                    val iconTint = if (isStylusOnlyMode) Color(0xFFE57373) else Color.White
+                    Box(
+                        modifier = Modifier
+                            .size(buttonSize)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = if (isStylusOnlyMode) 0.15f else 0f))
+                            .clickable(onClick = onToggleStylusOnlyMode),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = iconVector,
+                            contentDescription = readerString("content_desc_stylus_only_mode", "Stylus-only mode"),
+                            tint = iconTint,
+                            modifier = Modifier.size(iconSize),
+                        )
+                    }
+                }
+                3 -> SharedPdfDockIcon(
+                    tool = PdfInkTool.SELECT,
+                    isActive = isSharedPdfAnnotationSelectActive(selectedTool, isMinimized),
+                    tintColor = if (isMinimized) Color.Gray else Color.White,
+                    description = readerString("content_desc_select_mode", "Select"),
+                    sizeDp = buttonSize,
+                    iconSizeDp = iconSize,
+                    onClick = { if (!isMinimized) onToolClick(PdfInkTool.SELECT) },
+                )
+                4 -> {
+                    val isPenActive = isSharedPdfAnnotationPenActive(selectedTool, isMinimized)
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.PEN,
+                        isActive = isPenActive,
+                        tintColor = if (isMinimized) Color.Gray else activePenColor,
+                        description = readerString("content_desc_pen", "Pen"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = {
+                            if (!isMinimized) {
+                                onToolClick(
+                                    resolveSharedPdfAnnotationDockToolClick(
+                                        selectedTool = selectedTool,
+                                        clickedGroup = PdfInkTool.PEN,
+                                        lastPenTool = lastPenTool,
+                                        lastHighlighterTool = lastHighlighterTool,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+                }
+                5 -> {
+                    val isHighlighterActive = isSharedPdfAnnotationHighlighterActive(selectedTool, isMinimized)
+                    SharedPdfDockIcon(
+                        tool = PdfInkTool.HIGHLIGHTER,
+                        isActive = isHighlighterActive,
+                        tintColor = if (isMinimized) Color.Gray else activeHighlighterColor.copy(alpha = 1f),
+                        description = readerString("content_desc_highlighter", "Highlighter"),
+                        sizeDp = buttonSize,
+                        iconSizeDp = iconSize,
+                        onClick = {
+                            if (!isMinimized) {
+                                onToolClick(
+                                    resolveSharedPdfAnnotationDockToolClick(
+                                        selectedTool = selectedTool,
+                                        clickedGroup = PdfInkTool.HIGHLIGHTER,
+                                        lastPenTool = lastPenTool,
+                                        lastHighlighterTool = lastHighlighterTool,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+                }
+                6 -> SharedPdfDockIcon(
+                    tool = PdfInkTool.TEXT,
+                    isActive = isSharedPdfAnnotationTextActive(selectedTool, isMinimized),
+                    tintColor = if (isMinimized) Color.Gray else Color.White,
+                    description = readerString("content_desc_text", "Text"),
+                    sizeDp = buttonSize,
+                    iconSizeDp = iconSize,
+                    onClick = { if (!isMinimized) onToolClick(PdfInkTool.TEXT) },
+                )
+                7 -> SharedPdfDockIcon(
+                    tool = PdfInkTool.ERASER,
+                    isActive = isSharedPdfAnnotationEraserActive(selectedTool, isMinimized),
+                    tintColor = if (isMinimized) Color.Gray else Color.White,
+                    description = readerString("content_desc_eraser", "Eraser"),
+                    sizeDp = buttonSize,
+                    iconSizeDp = iconSize,
+                    onClick = { if (!isMinimized) onToolClick(PdfInkTool.ERASER) },
+                )
+                8 -> Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .clickable(enabled = canUndo && !isMinimized, onClick = onUndo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Undo,
+                        contentDescription = readerString("content_desc_undo", "Undo"),
+                        tint = if (canUndo && !isMinimized) Color.White else Color.White.copy(alpha = 0.3f),
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+                else -> Box(
+                    modifier = Modifier
+                        .size(buttonSize)
+                        .clip(CircleShape)
+                        .clickable(enabled = canRedo && !isMinimized, onClick = onRedo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Redo,
+                        contentDescription = readerString("content_desc_redo", "Redo"),
+                        tint = if (canRedo && !isMinimized) Color.White else Color.White.copy(alpha = 0.3f),
+                        modifier = Modifier.size(iconSize),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedPdfDockIcon(
+    tool: PdfInkTool,
+    isActive: Boolean,
+    tintColor: Color,
+    description: String,
+    sizeDp: androidx.compose.ui.unit.Dp,
+    iconSizeDp: androidx.compose.ui.unit.Dp,
+    onClick: () -> Unit,
+) {
+    val backgroundAlpha = if (isActive) 0.15f else 0f
+    Box(
+        modifier = Modifier
+            .size(sizeDp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = backgroundAlpha))
+            .semantics { selected = isActive }
+            .testTag("DockItem_$description")
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        when (tool) {
+            PdfInkTool.TEXT -> SharedPdfAndroidPathIcon(
+                pathData = SharedPdfAndroidKeyboardPath,
+                tint = tintColor,
+                modifier = Modifier.size(iconSizeDp),
+            )
+            PdfInkTool.ERASER -> SharedPdfAndroidPathIcon(
+                pathData = SharedPdfAndroidEraserPath,
+                tint = tintColor,
+                modifier = Modifier.size(iconSizeDp),
+            )
+            PdfInkTool.HIGHLIGHTER,
+            PdfInkTool.HIGHLIGHTER_ROUND -> SharedPdfAndroidPathIcon(
+                pathData = SharedPdfAndroidMarkerPath,
+                tint = tintColor,
+                modifier = Modifier.size(iconSizeDp),
+            )
+            PdfInkTool.PEN,
+            PdfInkTool.FOUNTAIN_PEN,
+            PdfInkTool.PENCIL -> SharedPdfAndroidPathIcon(
+                pathData = SharedPdfAndroidPenPath,
+                tint = tintColor,
+                modifier = Modifier.size(iconSizeDp),
+            )
+            PdfInkTool.NONE -> SharedPdfAndroidPathIcon(
+                pathData = SharedPdfAndroidTouchAppPath,
+                tint = tintColor,
+                modifier = Modifier.size(iconSizeDp),
+            )
+            PdfInkTool.SELECT -> SharedPdfAndroidPathIcon(
+                pathData = SharedPdfAndroidLassoSelectPath,
+                tint = tintColor,
+                modifier = Modifier.size(iconSizeDp),
+            )
+        }
+    }
+}
+
+internal val SharedPdfAnnotationPenToolsForDock: Set<PdfInkTool>
+    get() = SharedPdfAnnotationPenTools
+
+internal val SharedPdfAnnotationHighlighterToolsForDock: Set<PdfInkTool>
+    get() = SharedPdfAnnotationHighlighterTools
+
+/**
+ * Android-parity tool-settings popup content.
+ *
+ * Benchmark: `ToolSettingsPopup.kt` — pen / highlighter type selector,
+ * thickness + opacity sliders, 6-color palette with long-press spectrum,
+ * straight-line switch for highlighters, eraser size preview.
+ * Shared rendering lives in [SharedPdfAnnotationToolSettingsPanel]; this
+ * wrapper picks the panel from the selected tool like Android does
+ * (`isHighlighter` / `isEraser`) so callers don't need the private enum.
+ */
+@Composable
+fun SharedPdfAndroidToolSettingsPopup(
+    selectedTool: PdfInkTool,
+    selectedColor: Int,
+    strokeWidth: Float,
+    actualToolConfigs: Map<PdfInkTool, com.aryan.reader.shared.pdf.PdfToolConfig> = emptyMap(),
+    penPalette: List<Int>,
+    highlighterPalette: List<Int>,
+    onToolSelected: (PdfInkTool) -> Unit,
+    onColorSelected: (Int) -> Unit,
+    onStrokeWidthChange: (Float) -> Unit,
+    onPaletteChange: (List<Int>) -> Unit,
+    isHighlighterSnapEnabled: Boolean,
+    onHighlighterSnapChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    maxHeight: androidx.compose.ui.unit.Dp? = null,
+) {
+    val isEraser = selectedTool == PdfInkTool.ERASER
+    val isHighlighter = selectedTool in SharedPdfAnnotationHighlighterTools
+    val panel = when {
+        isEraser -> SharedPdfAnnotationSettingsPanel.ERASER
+        isHighlighter -> SharedPdfAnnotationSettingsPanel.HIGHLIGHTER
+        else -> SharedPdfAnnotationSettingsPanel.PEN
+    }
+    val panelTools = when (panel) {
+        SharedPdfAnnotationSettingsPanel.PEN -> listOf(
+            PdfInkTool.FOUNTAIN_PEN,
+            PdfInkTool.PEN,
+            PdfInkTool.PENCIL,
+        )
+        SharedPdfAnnotationSettingsPanel.HIGHLIGHTER -> listOf(
+            PdfInkTool.HIGHLIGHTER,
+            PdfInkTool.HIGHLIGHTER_ROUND,
+        )
+        SharedPdfAnnotationSettingsPanel.ERASER -> listOf(PdfInkTool.ERASER)
+    }
+    Box(modifier = modifier) {
+        SharedPdfAnnotationToolSettingsPanel(
+            panel = panel,
+            tools = panelTools,
+            selectedTool = selectedTool,
+            selectedColor = selectedColor,
+            strokeWidth = strokeWidth,
+            toolConfigs = actualToolConfigs,
+            penPalette = penPalette,
+            highlighterPalette = highlighterPalette,
+            onToolSelected = onToolSelected,
+            onColorSelected = onColorSelected,
+            onStrokeWidthChange = onStrokeWidthChange,
+            onPaletteChange = onPaletteChange,
+            isHighlighterSnapEnabled = isHighlighterSnapEnabled,
+            onHighlighterSnapChange = onHighlighterSnapChange,
+            maxHeight = maxHeight,
+        )
+    }
+}

@@ -1,0 +1,434 @@
+package com.aryan.reader.paginatedreader
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class ContentStylerTest {
+
+    @Test
+    fun `reader paragraph direction follows content instead of app locale by default`() {
+        val block = styler().style(listOf(paragraph("English text", blockIndex = 1)))
+            .single() as ParagraphBlock
+
+        assertEquals(TextDirection.ContentOrLtr, block.content.paragraphStyles.single().item.textDirection)
+        assertEquals(LineBreak.Simple, block.content.paragraphStyles.single().item.lineBreak)
+    }
+
+    @Test
+    fun `explicit rtl paragraph direction is preserved`() {
+        val block = styler().style(
+            listOf(
+                paragraph(
+                    text = "نص عربي",
+                    blockIndex = 2,
+                    style = CssStyle(
+                        paragraphStyle = androidx.compose.ui.text.ParagraphStyle(
+                            textDirection = TextDirection.Rtl
+                        )
+                    )
+                )
+            )
+        ).single() as ParagraphBlock
+
+        assertEquals(TextDirection.Rtl, block.content.paragraphStyles.single().item.textDirection)
+    }
+
+    @Test
+    fun `paragraph styling applies user text alignment and preserves cfi metadata`() {
+        val styler = styler(userTextAlign = TextAlign.Justify)
+
+        val block = styler.style(
+            listOf(
+                SemanticParagraph(
+                    text = "Aligned text",
+                    spans = emptyList(),
+                    style = CssStyle(),
+                    elementId = "p1",
+                    cfi = "/4/2",
+                    startCharOffsetInSource = 7,
+                    blockIndex = 10
+                )
+            )
+        ).single() as ParagraphBlock
+
+        assertEquals(TextAlign.Justify, block.textAlign)
+        assertEquals(TextAlign.Justify, block.content.paragraphStyles.first().item.textAlign)
+        assertEquals("p1", block.elementId)
+        assertEquals("/4/2", block.cfi)
+        assertEquals(7, block.startCharOffsetInSource)
+        assertEquals(10, block.blockIndex)
+        assertEquals("Aligned text", block.content.text)
+    }
+
+    @Test
+    fun `paragraph styling downgrades css justify unless user explicitly forces alignment`() {
+        val block = styler(userTextAlign = null).style(
+            listOf(
+                paragraph(
+                    text = "Justified text",
+                    blockIndex = 20,
+                    style = CssStyle(paragraphStyle = androidx.compose.ui.text.ParagraphStyle(textAlign = TextAlign.Justify))
+                )
+            )
+        ).single() as ParagraphBlock
+
+        assertEquals(TextAlign.Left, block.textAlign)
+        assertEquals(TextAlign.Left, block.content.paragraphStyles.first().item.textAlign)
+    }
+
+    @Test
+    fun `root and nested css font sizes remain distinct in native content`() {
+        val text = "Large small"
+        val semantic = SemanticParagraph(
+            text = text,
+            spans = listOf(
+                SemanticSpan(
+                    start = 6,
+                    end = text.length,
+                    style = CssStyle(fontSize = 0.5.em),
+                    tag = "span"
+                )
+            ),
+            style = CssStyle(fontSize = 2.em),
+            elementId = null,
+            cfi = "/4/2",
+            blockIndex = 30
+        )
+
+        val block = styler().style(listOf(semantic)).single() as ParagraphBlock
+
+        assertTrue(block.content.spanStyles.any { it.start == 0 && it.end == text.length && it.item.fontSize == 2.em })
+        assertTrue(block.content.spanStyles.any { it.start == 6 && it.end == text.length && it.item.fontSize == 0.5.em })
+    }
+
+    @Test
+    fun `saturated author text colors survive reader theme adaptation`() {
+        val red = Color(0xFFE00000)
+        assertEquals(
+            red,
+            CssParser.adaptColorForTheme(
+                color = red,
+                isDarkTheme = true,
+                isBackground = false,
+                themeBackground = Color.Black,
+                themeText = Color.White
+            )
+        )
+    }
+
+    @Test
+    fun `floating image is grouped with following paragraphs until clear`() {
+        val blocks = styler().style(
+            listOf(
+                SemanticImage(
+                    path = "image.png",
+                    altText = "Cover",
+                    intrinsicWidth = 120f,
+                    intrinsicHeight = 200f,
+                    style = CssStyle(blockStyle = BlockStyle(float = "left")),
+                    elementId = "img",
+                    cfi = "/4/4",
+                    blockIndex = 1
+                ),
+                paragraph("Wrapped one", blockIndex = 2),
+                paragraph("Wrapped two", blockIndex = 3),
+                paragraph(
+                    "After clear",
+                    blockIndex = 4,
+                    style = CssStyle(blockStyle = BlockStyle(clear = "left"))
+                )
+            )
+        )
+
+        val wrapping = blocks[0] as WrappingContentBlock
+        assertEquals("image.png", wrapping.floatedImage.path)
+        assertEquals(listOf("Wrapped one", "Wrapped two"), wrapping.paragraphsToWrap.map { it.content.text })
+        assertEquals("After clear", (blocks[1] as ParagraphBlock).content.text)
+    }
+
+    @Test
+    fun `ordered list items receive decimal markers and nested text styles`() {
+        val list = SemanticList(
+            items = listOf(
+                SemanticListItem(
+                    text = "First",
+                    spans = listOf(
+                        SemanticSpan(
+                            start = 0,
+                            end = 5,
+                            style = CssStyle(spanStyle = SpanStyle(color = Color.Red)),
+                            tag = "span",
+                            linkHref = "https://example.org",
+                            elementId = "link"
+                        )
+                    ),
+                    style = CssStyle(),
+                    elementId = "li1",
+                    cfi = "/4/2/2",
+                    startCharOffsetInSource = 0,
+                    itemMarkerImage = null,
+                    blockIndex = 11
+                ),
+                SemanticListItem(
+                    text = "Second",
+                    spans = emptyList(),
+                    style = CssStyle(),
+                    elementId = "li2",
+                    cfi = "/4/2/4",
+                    startCharOffsetInSource = 6,
+                    itemMarkerImage = null,
+                    blockIndex = 12
+                )
+            ),
+            isOrdered = true,
+            style = CssStyle(blockStyle = BlockStyle(listStyleType = "decimal-leading-zero")),
+            elementId = "list",
+            cfi = "/4/2",
+            blockIndex = 10
+        )
+
+        val flex = styler().style(listOf(list)).single() as FlexContainerBlock
+        val first = flex.children[0] as ListItemBlock
+        val second = flex.children[1] as ListItemBlock
+
+        assertEquals("01. ", first.itemMarker)
+        assertEquals("02. ", second.itemMarker)
+        assertEquals("li1", first.elementId)
+        assertEquals("https://example.org", first.content.getStringAnnotations("URL", 0, 5).single().item)
+        assertEquals("link", first.content.getStringAnnotations("ID", 0, 5).single().item)
+        assertTrue(first.content.spanStyles.any { range ->
+            range.start <= 0 &&
+                range.end >= 5 &&
+                range.item.color.isSpecified &&
+                range.item.color != Color.Red &&
+                range.item.background.isSpecified &&
+                range.item.textDecoration?.contains(TextDecoration.Underline) == true
+        })
+    }
+
+    @Test
+    fun `link styling is applied after nested epub span styling`() {
+        val label = "Nested link"
+        val paragraph = SemanticParagraph(
+            text = label,
+            spans = listOf(
+                SemanticSpan(
+                    start = 0,
+                    end = label.length,
+                    style = CssStyle(),
+                    linkHref = "https://example.org",
+                    tag = "a"
+                ),
+                SemanticSpan(
+                    start = 0,
+                    end = label.length,
+                    style = CssStyle(
+                        spanStyle = SpanStyle(
+                            color = Color.Red,
+                            background = Color.Yellow,
+                            textDecoration = TextDecoration.None
+                        )
+                    ),
+                    tag = "span"
+                )
+            ),
+            style = CssStyle(),
+            elementId = null,
+            cfi = "/4/2",
+            blockIndex = 21
+        )
+
+        val styled = styler().style(listOf(paragraph)).single() as ParagraphBlock
+        val finalCoveringStyle = styled.content.spanStyles
+            .filter { it.start <= 0 && it.end >= label.length }
+            .last()
+            .item
+
+        assertEquals("https://example.org", styled.content.getStringAnnotations("URL", 0, label.length).single().item)
+        assertTrue(finalCoveringStyle.color.isSpecified)
+        assertTrue(finalCoveringStyle.color != Color.Red)
+        assertTrue(finalCoveringStyle.background.isSpecified)
+        assertTrue(finalCoveringStyle.background != Color.Yellow)
+        assertTrue(finalCoveringStyle.textDecoration?.contains(TextDecoration.Underline) == true)
+    }
+
+    @Test
+    fun `runtime theme reapplies visible link style for cached paginated text`() {
+        val linkText = "Cached link"
+        val text = buildAnnotatedString {
+            append(linkText)
+            addStringAnnotation("URL", "https://example.org", 0, linkText.length)
+        }
+        val page = Page(
+            content = listOf(
+                ParagraphBlock(
+                    content = text,
+                    blockIndex = 1
+                )
+            )
+        )
+
+        val themed = page.applyReaderThemeForDisplay(
+            isDarkTheme = true,
+            themeBackgroundColor = Color(0xFF121212),
+            themeTextColor = Color(0xFFE0E0E0)
+        )
+        val paragraph = themed.content.single() as ParagraphBlock
+
+        assertTrue(paragraph.content.spanStyles.any { range ->
+            range.start == 0 &&
+                range.end == linkText.length &&
+                range.item.color.isSpecified &&
+                range.item.color != Color(0xFFE0E0E0) &&
+                range.item.background.isSpecified &&
+                range.item.textDecoration?.contains(TextDecoration.Underline) == true
+            })
+    }
+
+    @Test
+    fun `block anchor from html is styled and annotated as paginated link`() {
+        val semanticBlocks = htmlToSemanticBlocks(
+            html = """<html><body><a href="chapter2.xhtml#start"><p>Continue reading</p></a></body></html>""",
+            cssRules = OptimizedCssRules(),
+            textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
+            chapterAbsPath = "OEBPS/chapter1.xhtml",
+            extractionBasePath = "",
+            density = Density(1f),
+            fontFamilyMap = emptyMap(),
+            constraints = androidx.compose.ui.unit.Constraints(maxWidth = 400, maxHeight = 800)
+        )
+
+        val paragraph = styler().style(semanticBlocks).single() as ParagraphBlock
+
+        assertEquals("chapter2.xhtml#start", paragraph.content.getStringAnnotations("URL", 0, paragraph.content.length).single().item)
+        assertTrue(paragraph.content.spanStyles.any { range ->
+            range.start == 0 &&
+                range.end == paragraph.content.length &&
+                range.item.background.isSpecified &&
+                range.item.textDecoration?.contains(TextDecoration.Underline) == true
+        })
+    }
+
+
+    @Test
+    fun `html parser skips executable body nodes`() {
+        val semanticBlocks = htmlToSemanticBlocks(
+            html = """
+                <html>
+                  <head><style>p { color: red; }</style></head>
+                  <body>
+                    <p>Visible<script>function productEzoicAds() { return true; }</script><style>.ad { display: block; }</style><noscript>Enable scripts</noscript> text</p>
+                  </body>
+                </html>
+            """.trimIndent(),
+            cssRules = OptimizedCssRules(),
+            textStyle = TextStyle(fontSize = 16.sp, color = Color.Black),
+            chapterAbsPath = "OEBPS/chapter1.xhtml",
+            extractionBasePath = "",
+            density = Density(1f),
+            fontFamilyMap = emptyMap(),
+            constraints = androidx.compose.ui.unit.Constraints(maxWidth = 400, maxHeight = 800)
+        )
+
+        val text = semanticBlocks.filterIsInstance<SemanticParagraph>().joinToString(" ") { it.text }
+
+        assertTrue(text.contains("Visible"))
+        assertTrue(text.contains("text"))
+        assertFalse(text.contains("productEzoicAds"))
+        assertFalse(text.contains(".ad"))
+        assertFalse(text.contains("Enable scripts"))
+    }
+
+    @Test
+    fun `math svg is themed and external images are embedded when resolvable`() {
+        val root = kotlin.io.path.createTempDirectory("content-styler-svg").toFile()
+        val chapterDir = java.io.File(root, "chapters").apply { mkdirs() }
+        val image = java.io.File(chapterDir, "pixel.png")
+        image.writeBytes(
+            java.util.Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+            )
+        )
+        val styler = styler(
+            extractionBasePath = root.absolutePath,
+            chapterAbsPath = "chapters/chapter.xhtml",
+            baseTextStyle = TextStyle(fontSize = 16.sp, color = Color.Black)
+        )
+
+        val math = styler.style(
+            listOf(
+                SemanticMath(
+                    svgContent = """<svg><text fill="#fff">x</text><image href="pixel.png"/></svg>""",
+                    altText = "x",
+                    svgWidth = null,
+                    svgHeight = null,
+                    svgViewBox = null,
+                    isFromMathJax = false,
+                    style = CssStyle(),
+                    elementId = null,
+                    cfi = "/math",
+                    blockIndex = 1
+                )
+            )
+        ).single() as MathBlock
+
+        val svgContent = math.svgContent!!
+        assertTrue(svgContent.contains("fill:#000000"))
+        assertTrue(svgContent.contains("data:image/png;base64,"))
+    }
+
+    private fun paragraph(
+        text: String,
+        blockIndex: Int,
+        style: CssStyle = CssStyle()
+    ): SemanticParagraph {
+        return SemanticParagraph(
+            text = text,
+            spans = emptyList(),
+            style = style,
+            elementId = null,
+            cfi = null,
+            startCharOffsetInSource = 0,
+            blockIndex = blockIndex
+        )
+    }
+
+    private fun styler(
+        userTextAlign: TextAlign? = null,
+        extractionBasePath: String = "",
+        chapterAbsPath: String = "chapter.xhtml",
+        baseTextStyle: TextStyle = TextStyle(fontSize = 16.sp, color = Color.Black)
+    ): ContentStyler {
+        return ContentStyler(
+            baseTextStyle = baseTextStyle,
+            fontFamilyMap = emptyMap(),
+            density = Density(1f),
+            isDarkTheme = false,
+            themeBackgroundColor = Color.White,
+            themeTextColor = Color.Black,
+            chapterAbsPath = chapterAbsPath,
+            extractionBasePath = extractionBasePath,
+            userTextAlign = userTextAlign,
+            paragraphGapMultiplier = 1f
+        )
+    }
+}

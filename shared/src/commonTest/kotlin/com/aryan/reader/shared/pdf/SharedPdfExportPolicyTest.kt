@@ -1,0 +1,118 @@
+package com.aryan.reader.shared.pdf
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+
+class SharedPdfExportPolicyTest {
+    @Test
+    fun originalIsUsedOnlyWhenThereIsNoExportableReaderContent() {
+        assertEquals(SharedPdfExportMode.ORIGINAL, sharedPdfExportMode(SharedPdfReaderState()))
+    }
+
+    @Test
+    fun inkAndHighlightsRequireAnAnnotatedExport() {
+        val ink = SharedPdfAnnotation(
+            id = "ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.1f, 0.2f), PdfPagePoint(0.3f, 0.4f)),
+            colorArgb = 0xFF112233.toInt(),
+        )
+
+        assertEquals(
+            SharedPdfExportMode.ANNOTATED,
+            sharedPdfExportMode(SharedPdfReaderState(annotations = listOf(ink))),
+        )
+    }
+
+    @Test
+    fun unsupportedContentCannotFallBackToTheUnmodifiedSource() {
+        val text = SharedPdfAnnotation(
+            id = "text",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.TEXT,
+            tool = PdfInkTool.TEXT,
+            text = "Keep this",
+            colorArgb = 0xFF000000.toInt(),
+        )
+        assertEquals(
+            SharedPdfExportMode.UNSUPPORTED_TEXT_CONTENT,
+            sharedPdfExportMode(SharedPdfReaderState(annotations = listOf(text))),
+        )
+        assertEquals(
+            SharedPdfExportMode.ANNOTATED,
+            sharedPdfExportMode(
+                SharedPdfReaderState(
+                    annotations = listOf(text.copy(bounds = PdfPageBounds(0.1f, 0.2f, 0.4f, 0.3f))),
+                ),
+            ),
+        )
+        assertEquals(
+            SharedPdfExportMode.UNSUPPORTED_TEXT_CONTENT,
+            sharedPdfExportMode(SharedPdfReaderState(
+                    richTextDocumentJson = SharedPdfRichTextSerializer.encode(SharedPdfRichDocument("Keep this")),
+                )),
+        )
+        assertEquals(
+            SharedPdfExportMode.ANNOTATED,
+            sharedPdfExportMode(
+                SharedPdfExportSnapshot(
+                    state = SharedPdfReaderState(
+                        richTextDocumentJson = SharedPdfRichTextSerializer.encode(SharedPdfRichDocument("Keep this")),
+                    ),
+                    richTextPageLayouts = listOf(
+                        SharedPdfRichPageLayout(0, androidx.compose.ui.text.AnnotatedString("Keep this"), 0, 9, 1000f),
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            SharedPdfExportMode.ANNOTATED,
+            sharedPdfExportMode(
+                SharedPdfReaderState(blankPageInsertions = listOf(SharedPdfBlankPageInsertion(0))),
+            ),
+        )
+    }
+
+    @Test
+    fun originalExportSnapshotStripsReaderOwnedContent() {
+        val ink = SharedPdfAnnotation(
+            id = "ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.1f, 0.2f), PdfPagePoint(0.3f, 0.4f)),
+            colorArgb = 0xFF112233.toInt(),
+        )
+        val state = SharedPdfReaderState(
+            annotations = listOf(ink),
+            blankPageInsertions = listOf(SharedPdfBlankPageInsertion(0)),
+            richTextDocumentJson = SharedPdfRichTextSerializer.encode(SharedPdfRichDocument("Keep this")),
+        )
+
+        val original = sharedPdfOriginalExportSnapshot(state)
+
+        assertEquals(SharedPdfExportMode.ORIGINAL, sharedPdfExportMode(original))
+        assertEquals(emptyList(), original.state.annotations)
+        assertEquals(emptyList(), original.state.blankPageInsertions)
+        assertEquals("", original.state.richTextDocumentJson)
+        assertEquals(emptyList(), original.richTextPageLayouts)
+        // Source state is left untouched for the annotated path.
+        assertEquals(listOf(ink), state.annotations)
+    }
+
+    @Test
+    fun richTextExportScaleMultipliesDensityAndFontScaleLikeAndroidSpToPx() {
+        assertEquals(1f, SharedPdfExportSnapshot(SharedPdfReaderState()).richTextExportScale)
+        assertEquals(3f, SharedPdfExportSnapshot(SharedPdfReaderState(), exportDensity = 3f).richTextExportScale)
+        assertEquals(
+            4.5f,
+            SharedPdfExportSnapshot(
+                SharedPdfReaderState(),
+                exportDensity = 3f,
+                exportFontScale = 1.5f,
+            ).richTextExportScale,
+            1e-6f,
+        )
+        assertEquals(0f, SharedPdfExportSnapshot(SharedPdfReaderState(), exportDensity = 0f).richTextExportScale)
+    }
+}

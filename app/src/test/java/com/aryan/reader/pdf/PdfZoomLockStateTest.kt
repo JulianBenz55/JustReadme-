@@ -1,0 +1,279 @@
+package com.aryan.reader.pdf
+
+import androidx.compose.ui.geometry.Offset
+import com.aryan.reader.shared.reader.ReaderPageSpreadMode
+import com.aryan.reader.shared.reader.ReaderSettings
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class PdfZoomLockStateTest {
+
+    @Test
+    fun `paginated locked page waits to report camera until saved lock is applied`() {
+        val lockedState = Triple(2.25f, -12f, 32f)
+
+        assertFalse(
+            shouldReportPdfPageCamera(
+                isZoomEnabled = true,
+                isVerticalScroll = false,
+                isScrollLocked = true,
+                lockedState = lockedState,
+                hasAppliedLockedState = false
+            )
+        )
+
+        assertTrue(
+            shouldReportPdfPageCamera(
+                isZoomEnabled = true,
+                isVerticalScroll = false,
+                isScrollLocked = true,
+                lockedState = lockedState,
+                hasAppliedLockedState = true
+            )
+        )
+    }
+
+    @Test
+    fun `paginated locked page initializes from saved camera`() {
+        val camera = initialPdfPageCamera(
+            isZoomEnabled = true,
+            isVerticalScroll = false,
+            isScrollLocked = true,
+            lockedState = Triple(2.25f, -12f, 32f)
+        )
+
+        assertEquals(2.25f, camera.first, 0.0001f)
+        assertEquals(-12f, camera.second.x, 0.0001f)
+        assertEquals(32f, camera.second.y, 0.0001f)
+    }
+
+    @Test
+    fun `loading locked preferences primes active camera from saved state`() {
+        val camera = activePdfCameraAfterLockPreferenceLoad(
+            isScrollLocked = true,
+            lockedState = Triple(2.25f, -12f, 32f)
+        )
+
+        assertEquals(2.25f, camera.first, 0.0001f)
+        assertEquals(-12f, camera.second.x, 0.0001f)
+        assertEquals(32f, camera.second.y, 0.0001f)
+    }
+
+    @Test
+    fun `paginated locked page can report camera when no saved lock exists yet`() {
+        assertTrue(
+            shouldReportPdfPageCamera(
+                isZoomEnabled = true,
+                isVerticalScroll = false,
+                isScrollLocked = true,
+                lockedState = null,
+                hasAppliedLockedState = false
+            )
+        )
+    }
+
+    @Test
+    fun `bubble zoom cleanup does not reset zoom while scroll lock is on`() {
+        assertFalse(
+            shouldResetPdfZoomAfterBubbleZoomCleanup(
+                isBubbleZoomModeActive = false,
+                scale = 1.8f,
+                isVerticalScroll = false,
+                isZoomEnabled = true,
+                isScrollLocked = true
+            )
+        )
+        assertTrue(
+            shouldResetPdfZoomAfterBubbleZoomCleanup(
+                isBubbleZoomModeActive = false,
+                scale = 1.8f,
+                isVerticalScroll = false,
+                isZoomEnabled = true,
+                isScrollLocked = false
+            )
+        )
+    }
+
+    @Test
+    fun `vertical pdf high res tiles render for settled zoom below one hundred percent`() {
+        assertTrue(
+            shouldRenderPdfHighResTiles(
+                effectiveScale = 0.82f,
+                targetWidthPx = 1080,
+                targetHeightPx = 1600,
+                isVerticalScroll = true,
+                isActivePage = true
+            )
+        )
+    }
+
+    @Test
+    fun `vertical pdf high res tiles skip exact one hundred percent unless page is large`() {
+        assertFalse(
+            shouldRenderPdfHighResTiles(
+                effectiveScale = 1f,
+                targetWidthPx = 1080,
+                targetHeightPx = 1600,
+                isVerticalScroll = true,
+                isActivePage = true
+            )
+        )
+        assertTrue(
+            shouldRenderPdfHighResTiles(
+                effectiveScale = 1f,
+                targetWidthPx = 3200,
+                targetHeightPx = 1600,
+                isVerticalScroll = true,
+                isActivePage = true
+            )
+        )
+    }
+
+    @Test
+    fun `paginated pdf high res tiles keep existing zoom threshold`() {
+        assertFalse(
+            shouldRenderPdfHighResTiles(
+                effectiveScale = 0.82f,
+                targetWidthPx = 1080,
+                targetHeightPx = 1600,
+                isVerticalScroll = false,
+                isActivePage = true
+            )
+        )
+        assertTrue(
+            shouldRenderPdfHighResTiles(
+                effectiveScale = 1.25f,
+                targetWidthPx = 1080,
+                targetHeightPx = 1600,
+                isVerticalScroll = false,
+                isActivePage = true
+            )
+        )
+        assertFalse(
+            shouldRenderPdfHighResTiles(
+                effectiveScale = 1.25f,
+                targetWidthPx = 1080,
+                targetHeightPx = 1600,
+                isVerticalScroll = false,
+                isActivePage = false
+            )
+        )
+    }
+
+    @Test
+    fun `zoom indicator percent rounds displayed scale`() {
+        assertEquals(82, pdfZoomIndicatorPercent(0.824f))
+        assertEquals(83, pdfZoomIndicatorPercent(0.826f))
+        assertEquals(100, pdfZoomIndicatorPercent(0.996f))
+    }
+
+    @Test
+    fun `zoom indicator hides only at displayed one hundred percent`() {
+        assertFalse(shouldShowPdfZoomIndicator(100))
+        assertTrue(shouldShowPdfZoomIndicator(99))
+        assertTrue(shouldShowPdfZoomIndicator(125))
+    }
+
+    @Test
+    fun `page change preserves locked zoom scale only in paginated lock mode`() {
+        val lockedState = Triple(2.25f, -12f, 32f)
+
+        assertEquals(
+            2.25f,
+            currentPageScaleAfterPdfPageChange(
+                displayMode = DisplayMode.PAGINATION,
+                isScrollLocked = true,
+                lockedState = lockedState,
+                currentActiveScale = 1f
+            ),
+            0.0001f
+        )
+        assertEquals(
+            1f,
+            currentPageScaleAfterPdfPageChange(
+                displayMode = DisplayMode.PAGINATION,
+                isScrollLocked = false,
+                lockedState = lockedState,
+                currentActiveScale = 2.25f
+            ),
+            0.0001f
+        )
+        assertEquals(
+            1f,
+            currentPageScaleAfterPdfPageChange(
+                displayMode = DisplayMode.VERTICAL_SCROLL,
+                isScrollLocked = true,
+                lockedState = lockedState,
+                currentActiveScale = 2.25f
+            ),
+            0.0001f
+        )
+    }
+
+    @Test
+    fun `pdf page range labels preserve single page and spread wording`() {
+        val singlePageSettings = ReaderSettings()
+        val spreadSettings = ReaderSettings(pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE)
+
+        assertEquals(
+            "5/5",
+            pdfPageRangeText(
+                pageIndex = 99,
+                pageCount = 5,
+                displayMode = DisplayMode.VERTICAL_SCROLL,
+                settings = singlePageSettings
+            )
+        )
+        assertEquals(
+            "5/5",
+            pdfPageRangeLabel(
+                pageIndex = 99,
+                pageCount = 5,
+                displayMode = DisplayMode.VERTICAL_SCROLL,
+                settings = singlePageSettings
+            )
+        )
+        assertEquals(
+            "3-4/10",
+            pdfPageRangeText(
+                pageIndex = 2,
+                pageCount = 10,
+                displayMode = DisplayMode.PAGINATION,
+                settings = spreadSettings
+            )
+        )
+        assertEquals(
+            "3-4/10",
+            pdfPageRangeLabel(
+                pageIndex = 2,
+                pageCount = 10,
+                displayMode = DisplayMode.PAGINATION,
+                settings = spreadSettings
+            )
+        )
+    }
+
+    @Test
+    fun `spread camera clamp keeps offset inside scaled viewport bounds`() {
+        val clamped = clampPdfSpreadCameraOffset(
+            scale = 2f,
+            offset = Offset(100f, -100f),
+            viewportWidth = 100f,
+            viewportHeight = 80f
+        )
+
+        assertEquals(50f, clamped.x, 0.0001f)
+        assertEquals(-40f, clamped.y, 0.0001f)
+        assertEquals(
+            Offset.Zero,
+            clampPdfSpreadCameraOffset(
+                scale = 1f,
+                offset = Offset(20f, 20f),
+                viewportWidth = 100f,
+                viewportHeight = 80f
+            )
+        )
+    }
+}

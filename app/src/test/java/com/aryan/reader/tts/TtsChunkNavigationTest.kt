@@ -1,0 +1,352 @@
+package com.aryan.reader.tts
+
+import com.aryan.reader.shared.readerTtsChunkLabel
+import androidx.media3.common.util.UnstableApi
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentHashMap
+
+class TtsChunkNavigationTest {
+    @Test
+    fun `notification context mirrors overlay chunk information`() {
+        assertEquals(
+            "Chapter 3 of 12: The Journey - 18% - Chunk 7/40",
+            buildTtsNotificationContextLabel(
+                chapterTitle = "The Journey",
+                chapterIndex = 2,
+                totalChapters = 12,
+                bookProgressPercent = 18,
+                currentChunkIndex = 6,
+                totalChunks = 40
+            )
+        )
+        assertEquals(
+            "Chunk 1/3",
+            buildTtsNotificationContextLabel(
+                chapterTitle = null,
+                chapterIndex = null,
+                totalChapters = null,
+                bookProgressPercent = null,
+                currentChunkIndex = 0,
+                totalChunks = 3
+            )
+        )
+    }
+
+    @Test
+    fun `chunk skip target moves one chunk at a time`() {
+        assertEquals(1, resolveTtsChunkSkipTarget(currentChunkIndex = 2, totalChunks = 5, direction = -1))
+        assertEquals(3, resolveTtsChunkSkipTarget(currentChunkIndex = 2, totalChunks = 5, direction = 1))
+    }
+
+    @Test
+    fun `chunk skip target is absent at boundaries`() {
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = 0, totalChunks = 5, direction = -1))
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = 4, totalChunks = 5, direction = 1))
+    }
+
+    @Test
+    fun `chunk skip target is absent for invalid state`() {
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = -1, totalChunks = 5, direction = 1))
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = 5, totalChunks = 5, direction = -1))
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = 0, totalChunks = 0, direction = 1))
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = 0, totalChunks = 5, direction = 0))
+        assertNull(resolveTtsChunkSkipTarget(currentChunkIndex = 0, totalChunks = 5, direction = 2))
+    }
+
+    @Test
+    fun `start chunk index is clamped to available chunks`() {
+        assertEquals(2, resolveTtsStartChunkIndex(requestedChunkIndex = 2, totalChunks = 5))
+        assertEquals(0, resolveTtsStartChunkIndex(requestedChunkIndex = -1, totalChunks = 5))
+        assertEquals(4, resolveTtsStartChunkIndex(requestedChunkIndex = 7, totalChunks = 5))
+        assertEquals(0, resolveTtsStartChunkIndex(requestedChunkIndex = 2, totalChunks = 0))
+    }
+
+    @Test
+    fun `transcript window follows current chunk and clamps at chapter edges`() {
+        assertEquals(0 to (0..3), resolveTtsTranscriptWindow(currentIndex = 0, chunkCount = 10))
+        assertEquals(3 to (3..8), resolveTtsTranscriptWindow(currentIndex = 5, chunkCount = 10))
+        assertEquals(7 to (7..9), resolveTtsTranscriptWindow(currentIndex = 9, chunkCount = 10))
+        assertEquals(0 to IntRange.EMPTY, resolveTtsTranscriptWindow(currentIndex = 0, chunkCount = 0))
+    }
+
+    @Test
+    fun `only forward chunk skips can reuse an existing playlist item`() {
+        assertEquals(3, resolveReusableTtsPlaylistIndex(playlistIndex = 3, direction = 1))
+        assertNull(resolveReusableTtsPlaylistIndex(playlistIndex = 3, direction = -1))
+        assertNull(resolveReusableTtsPlaylistIndex(playlistIndex = null, direction = 1))
+        assertNull(resolveReusableTtsPlaylistIndex(playlistIndex = -1, direction = 1))
+    }
+
+    @Test
+    fun `automatic playlist advance must stay contiguous by chunk id`() {
+        assertEquals(true, shouldAdvanceToTtsPlaylistChunk(currentChunkIndex = 8, playlistChunkIndex = 9))
+        assertEquals(false, shouldAdvanceToTtsPlaylistChunk(currentChunkIndex = 8, playlistChunkIndex = 10))
+        assertEquals(false, shouldAdvanceToTtsPlaylistChunk(currentChunkIndex = 8, playlistChunkIndex = null))
+    }
+
+    @Test
+    fun `automatic playlist advance never steps over missing chunks`() {
+        assertEquals(
+            false,
+            shouldAdvanceToTtsPlaylistChunk(
+                currentChunkIndex = 8,
+                playlistChunkIndex = 10,
+                skippedChunkIndices = setOf(9)
+            )
+        )
+        assertEquals(9, resolveNextPlayableTtsChunkIndex(8, 12, setOf(9)))
+    }
+
+    @Test
+    fun `premature streamed transitions are retried instead of accepted`() {
+        assertEquals(
+            true,
+            shouldRetryPrematureTtsStreamTransition(
+                transitionReason = androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_AUTO,
+                previousUriScheme = "ttsstream",
+                previousStreamFinished = false
+            )
+        )
+        assertEquals(
+            false,
+            shouldRetryPrematureTtsStreamTransition(
+                transitionReason = androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_AUTO,
+                previousUriScheme = "ttsstream",
+                previousStreamFinished = true
+            )
+        )
+        assertEquals(
+            false,
+            shouldRetryPrematureTtsStreamTransition(
+                transitionReason = androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_SEEK,
+                previousUriScheme = "ttsstream",
+                previousStreamFinished = false
+            )
+        )
+    }
+
+    @Test
+    fun `chunk generation gives up after bounded failures`() {
+        assertEquals(false, shouldGiveUpTtsChunkGeneration(failureCount = 1, maxFailures = 2))
+        assertEquals(true, shouldGiveUpTtsChunkGeneration(failureCount = 2, maxFailures = 2))
+    }
+
+    @Test
+    fun `transition prefetch is deferred only for the rebuilding generation`() {
+        assertEquals(false, shouldStartTtsTransitionPrefetch(currentGeneration = 6, deferredGeneration = 6))
+        assertEquals(true, shouldStartTtsTransitionPrefetch(currentGeneration = 6, deferredGeneration = 5))
+        assertEquals(true, shouldStartTtsTransitionPrefetch(currentGeneration = 6, deferredGeneration = -1))
+    }
+
+    @Test
+    fun `prefetch stops only when generated chunk is neither loaded nor queued`() {
+        assertEquals(true, shouldStopTtsPrefetchAfterMissingChunk(isLoaded = false, playlistIndex = null))
+        assertEquals(false, shouldStopTtsPrefetchAfterMissingChunk(isLoaded = true, playlistIndex = null))
+        assertEquals(false, shouldStopTtsPrefetchAfterMissingChunk(isLoaded = false, playlistIndex = 2))
+    }
+
+    @Test
+    fun `prefetch loop restarts when expected next chunk is missing`() {
+        assertEquals(
+            true,
+            shouldSkipExistingTtsPrefetchLoop(
+                currentChunkIndex = 3,
+                lastPrefetchIndex = 3,
+                isLoopActive = true,
+                nextChunkLoaded = false,
+                nextChunkPrefetching = true
+            )
+        )
+        assertEquals(
+            false,
+            shouldSkipExistingTtsPrefetchLoop(
+                currentChunkIndex = 3,
+                lastPrefetchIndex = 3,
+                isLoopActive = true,
+                nextChunkLoaded = false,
+                nextChunkPrefetching = false
+            )
+        )
+    }
+
+    @Test
+    fun `playlist exposure waits for contiguous previous chunk`() {
+        assertEquals(true, canExposeTtsChunkInPlaylist(2, listOf(0, 1)))
+        assertEquals(false, canExposeTtsChunkInPlaylist(3, listOf(0, 1)))
+        assertEquals(2, resolveContiguousTtsPlaylistInsertPosition(2, listOf(0, 1)))
+        assertNull(resolveContiguousTtsPlaylistInsertPosition(3, listOf(0, 1)))
+    }
+
+    @Test
+    fun `forward skip waits for target chunk already being prefetched`() {
+        assertEquals(
+            true,
+            shouldWaitForInFlightTtsSkip(
+                direction = 1,
+                isTargetPrefetching = true,
+                targetPlaylistIndex = null
+            )
+        )
+        assertEquals(
+            false,
+            shouldWaitForInFlightTtsSkip(
+                direction = -1,
+                isTargetPrefetching = true,
+                targetPlaylistIndex = null
+            )
+        )
+        assertEquals(
+            false,
+            shouldWaitForInFlightTtsSkip(
+                direction = 1,
+                isTargetPrefetching = true,
+                targetPlaylistIndex = 2
+            )
+        )
+    }
+
+    @Test
+    fun `native tts processing timeout waits while audio is progressing`() {
+        assertEquals(
+            false,
+            shouldTimeoutNativeTtsProcessing(
+                requestElapsedMs = 18_000L,
+                idleElapsedMs = 20L,
+                maxTimeoutMs = 60_000L,
+                idleTimeoutMs = 15_000L
+            )
+        )
+        assertEquals(
+            true,
+            shouldTimeoutNativeTtsProcessing(
+                requestElapsedMs = 18_000L,
+                idleElapsedMs = 15_000L,
+                maxTimeoutMs = 60_000L,
+                idleTimeoutMs = 15_000L
+            )
+        )
+        assertEquals(
+            true,
+            shouldTimeoutNativeTtsProcessing(
+                requestElapsedMs = 60_000L,
+                idleElapsedMs = 20L,
+                maxTimeoutMs = 60_000L,
+                idleTimeoutMs = 15_000L
+            )
+        )
+    }
+
+    @Test
+    fun `tts does not publish separate media button preferences`() {
+        assertEquals(false, shouldUseSeparateTtsMediaButtonPreferences())
+    }
+
+    @Test
+    fun `tts keeps transport buttons out of media3 custom layout`() {
+        assertEquals(false, shouldPublishTtsTransportButtonsInCustomLayout())
+    }
+
+    @Test
+    fun `reader tts overlay size exposes the other two sizes as choices`() {
+        assertEquals(
+            listOf(ReaderTtsOverlaySize.MEDIUM, ReaderTtsOverlaySize.SMALL),
+            readerTtsOverlayAlternativeSizes(ReaderTtsOverlaySize.LARGE)
+        )
+        assertEquals(
+            listOf(ReaderTtsOverlaySize.LARGE, ReaderTtsOverlaySize.SMALL),
+            readerTtsOverlayAlternativeSizes(ReaderTtsOverlaySize.MEDIUM)
+        )
+        assertEquals(
+            listOf(ReaderTtsOverlaySize.LARGE, ReaderTtsOverlaySize.MEDIUM),
+            readerTtsOverlayAlternativeSizes(ReaderTtsOverlaySize.SMALL)
+        )
+    }
+
+    @Test
+    fun `reader tts overlay stored size defaults to large for missing or invalid values`() {
+        assertEquals(ReaderTtsOverlaySize.MEDIUM, resolveReaderTtsOverlaySize("MEDIUM"))
+        assertEquals(ReaderTtsOverlaySize.LARGE, resolveReaderTtsOverlaySize(null))
+        assertEquals(ReaderTtsOverlaySize.LARGE, resolveReaderTtsOverlaySize("FULL"))
+    }
+
+    @Test
+    fun `reader tts overlay only aligns small state to the trailing edge`() {
+        assertEquals(0f, readerTtsOverlayAlignmentBias(ReaderTtsOverlaySize.LARGE), 0f)
+        assertEquals(0f, readerTtsOverlayAlignmentBias(ReaderTtsOverlaySize.MEDIUM), 0f)
+        assertEquals(1f, readerTtsOverlayAlignmentBias(ReaderTtsOverlaySize.SMALL), 0f)
+    }
+
+    @Test
+    fun `reader tts chunk label uses one based progress`() {
+        assertEquals("Chunk 1/4", readerTtsChunkLabel(currentChunkIndex = 0, totalChunks = 4))
+        assertEquals("Chunk 4/4", readerTtsChunkLabel(currentChunkIndex = 3, totalChunks = 4))
+        assertNull(readerTtsChunkLabel(currentChunkIndex = -1, totalChunks = 4))
+        assertNull(readerTtsChunkLabel(currentChunkIndex = 4, totalChunks = 4))
+        assertNull(readerTtsChunkLabel(currentChunkIndex = 0, totalChunks = 0))
+    }
+
+    @Test
+    fun `stream pcm duration uses cloud tts audio format`() {
+        assertEquals(1_000L, resolveTtsStreamPcmDurationMs(totalBytes = 44L + 48_000L))
+        assertNull(resolveTtsStreamPcmDurationMs(totalBytes = 44L))
+        assertNull(resolveTtsStreamPcmDurationMs(totalBytes = 0L))
+    }
+
+    @Test
+    fun `notification duration estimate stays ahead of playback position`() {
+        assertEquals(1_500L, estimateTtsNotificationDurationMs(text = "one two"))
+        assertEquals(5_000L, estimateTtsNotificationDurationMs(text = "one", currentPositionMs = 3_000L))
+        assertNull(estimateTtsNotificationDurationMs(text = "   "))
+    }
+
+    @Test
+    fun `stable sorted snapshot copies concurrent cache keys`() {
+        val cache = ConcurrentHashMap<Int, String>()
+        cache[3] = "three"
+        cache[1] = "one"
+        cache[2] = "two"
+
+        assertEquals(listOf(1, 2, 3), stableSortedIntSnapshot(cache.keys))
+    }
+
+    @Test
+    fun `wav file duration is read from pcm byte rate`() {
+        val file = createTempWavFile(pcmBytes = 48_000)
+
+        try {
+            assertEquals(1_000L, resolveWavFileDurationMs(file))
+        } finally {
+            file.delete()
+        }
+    }
+
+    private fun createTempWavFile(pcmBytes: Int): File {
+        val file = File.createTempFile("tts_chunk_navigation_", ".wav")
+        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(36 + pcmBytes)
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+            put("fmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16)
+            putShort(1.toShort())
+            putShort(1.toShort())
+            putInt(24_000)
+            putInt(48_000)
+            putShort(2.toShort())
+            putShort(16.toShort())
+            put("data".toByteArray(Charsets.US_ASCII))
+            putInt(pcmBytes)
+        }.array()
+
+        file.outputStream().use { output ->
+            output.write(header)
+            output.write(ByteArray(pcmBytes))
+        }
+        return file
+    }
+}

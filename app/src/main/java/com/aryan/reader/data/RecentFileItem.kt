@@ -1,0 +1,299 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.data
+
+import androidx.compose.runtime.Immutable
+import com.aryan.reader.FileType
+
+/**
+ * Immutable library row. Instances are never mutated in place — updates go
+ * through `copy()` with freshly built lists — so Compose can trust equals()
+ * for skipping card/cover recompositions on unrelated state emissions.
+ */
+@Immutable
+data class RecentFileItem(
+    val bookId: String,
+    val uriString: String?,
+    val type: FileType,
+    val displayName: String,
+    val timestamp: Long,
+    val dateAddedTimestamp: Long = timestamp,
+    val coverImagePath: String? = null,
+    val title: String? = null,
+    val author: String? = null,
+    val lastChapterIndex: Int? = null,
+    val lastPage: Int? = null,
+    val lastPositionCfi: String? = null,
+    val locatorBlockIndex: Int? = null,
+    val locatorCharOffset: Int? = null,
+    val progressPercentage: Float? = null,
+    val isRecent: Boolean = true,
+    val isAvailable: Boolean = true,
+    val lastModifiedTimestamp: Long = 0L,
+    val isDeleted: Boolean = false,
+    val bookmarksJson: String? = null,
+    val sourceFolderUri: String? = null,
+    val isReflowPreferred: Boolean = false,
+    val customName: String? = null,
+    val highlightsJson: String? = null,
+    val fileSize: Long = 0L,
+    val fileContentModifiedTimestamp: Long = 0L,
+    val seriesName: String? = null,
+    val seriesIndex: Double? = null,
+    val description: String? = null,
+    val originalTitle: String? = null,
+    val originalAuthor: String? = null,
+    val originalSeriesName: String? = null,
+    val originalSeriesIndex: Double? = null,
+    val originalDescription: String? = null,
+    val folderTextMetadataParsed: Boolean = false,
+    val folderCoverMetadataParsed: Boolean = false,
+    val readingPositionModifiedTimestamp: Long = 0L,
+    val tags: List<TagEntity> = emptyList()
+)
+
+fun RecentFileItem.hasReadingPositionForSync(): Boolean {
+    return lastChapterIndex != null ||
+        lastPage != null ||
+        !lastPositionCfi.isNullOrBlank() ||
+        locatorBlockIndex != null ||
+        locatorCharOffset != null ||
+        (progressPercentage ?: 0f) > 0f
+}
+
+fun RecentFileItem.effectiveReadingPositionModifiedTimestamp(): Long {
+    return readingPositionModifiedTimestamp.takeIf { it > 0L }
+        ?: lastModifiedTimestamp.takeIf { hasReadingPositionForSync() }
+        ?: 0L
+}
+
+fun RecentFileEntity.toRecentFileItem(): RecentFileItem {
+    return RecentFileItem(
+        bookId = this.bookId,
+        uriString = this.uriString,
+        type = this.type,
+        displayName = this.displayName,
+        timestamp = this.timestamp,
+        dateAddedTimestamp = this.dateAddedTimestamp.takeIf { it > 0L } ?: this.timestamp,
+        coverImagePath = this.coverImagePath,
+        title = this.title,
+        author = this.author,
+        lastChapterIndex = this.lastChapterIndex,
+        locatorBlockIndex = this.locatorBlockIndex,
+        locatorCharOffset = this.locatorCharOffset,
+        lastPage = this.lastPage,
+        lastPositionCfi = this.lastPositionCfi,
+        progressPercentage = this.progressPercentage,
+        isRecent = this.isRecent,
+        isAvailable = this.isAvailable,
+        lastModifiedTimestamp = this.lastModifiedTimestamp,
+        isDeleted = this.isDeleted,
+        bookmarksJson = this.bookmarks,
+        sourceFolderUri = this.sourceFolderUri,
+        isReflowPreferred = this.isReflowPreferred,
+        customName = this.customName,
+        highlightsJson = this.highlights,
+        fileSize = this.fileSize,
+        fileContentModifiedTimestamp = this.fileContentModifiedTimestamp,
+        seriesName = this.seriesName,
+        seriesIndex = this.seriesIndex,
+        description = this.description,
+        originalTitle = this.originalTitle,
+        originalAuthor = this.originalAuthor,
+        originalSeriesName = this.originalSeriesName,
+        originalSeriesIndex = this.originalSeriesIndex,
+        originalDescription = this.originalDescription,
+        folderTextMetadataParsed = this.folderTextMetadataParsed,
+        folderCoverMetadataParsed = this.folderCoverMetadataParsed,
+        readingPositionModifiedTimestamp = this.readingPositionModifiedTimestamp
+    )
+}
+
+fun RecentFileItem.toRecentFileEntity(): RecentFileEntity {
+    return RecentFileEntity(
+        bookId = this.bookId,
+        uriString = this.uriString,
+        type = this.type,
+        displayName = this.displayName,
+        timestamp = this.timestamp,
+        dateAddedTimestamp = this.dateAddedTimestamp.takeIf { it > 0L } ?: this.timestamp,
+        coverImagePath = this.coverImagePath,
+        title = this.title,
+        author = this.author,
+        lastChapterIndex = this.lastChapterIndex,
+        locatorBlockIndex = this.locatorBlockIndex,
+        locatorCharOffset = this.locatorCharOffset,
+        lastPage = this.lastPage,
+        lastPositionCfi = this.lastPositionCfi,
+        progressPercentage = this.progressPercentage,
+        isRecent = this.isRecent,
+        isAvailable = this.isAvailable,
+        lastModifiedTimestamp = this.lastModifiedTimestamp,
+        isDeleted = this.isDeleted,
+        bookmarks = this.bookmarksJson,
+        sourceFolderUri = this.sourceFolderUri,
+        isReflowPreferred = this.isReflowPreferred,
+        customName = this.customName,
+        highlights = this.highlightsJson,
+        fileSize = this.fileSize,
+        fileContentModifiedTimestamp = this.fileContentModifiedTimestamp,
+        seriesName = this.seriesName,
+        seriesIndex = this.seriesIndex,
+        description = this.description,
+        originalTitle = this.originalTitle ?: this.title,
+        originalAuthor = this.originalAuthor ?: this.author,
+        originalSeriesName = this.originalSeriesName ?: this.seriesName,
+        originalSeriesIndex = this.originalSeriesIndex ?: this.seriesIndex,
+        originalDescription = this.originalDescription ?: this.description,
+        folderTextMetadataParsed = this.folderTextMetadataParsed,
+        folderCoverMetadataParsed = this.folderCoverMetadataParsed,
+        readingPositionModifiedTimestamp = this.effectiveReadingPositionModifiedTimestamp()
+    )
+}
+
+fun RecentFileItem.toBookMetadata(): BookMetadata {
+    return BookMetadata(
+        bookId = this.bookId,
+        title = this.title,
+        author = this.author,
+        displayName = this.displayName,
+        type = this.type.name,
+        lastPositionCfi = this.lastPositionCfi,
+        lastChapterIndex = this.lastChapterIndex,
+        locatorBlockIndex = this.locatorBlockIndex,
+        locatorCharOffset = this.locatorCharOffset,
+        lastPage = this.lastPage,
+        progressPercentage = this.progressPercentage,
+        isRecent = this.isRecent,
+        isDeleted = this.isDeleted,
+        lastModifiedTimestamp = this.lastModifiedTimestamp,
+        readingPositionModifiedTimestamp = this.effectiveReadingPositionModifiedTimestamp(),
+        bookmarksJson = this.bookmarksJson,
+        hasAnnotations = false,
+        customName = this.customName,
+        highlightsJson = this.highlightsJson,
+        fileContentModifiedTimestamp = this.fileContentModifiedTimestamp,
+        seriesName = this.seriesName,
+        seriesIndex = this.seriesIndex,
+        description = this.description,
+        originalTitle = this.originalTitle ?: this.title,
+        originalAuthor = this.originalAuthor ?: this.author,
+        originalSeriesName = this.originalSeriesName ?: this.seriesName,
+        originalSeriesIndex = this.originalSeriesIndex ?: this.seriesIndex,
+        originalDescription = this.originalDescription ?: this.description
+    )
+}
+
+fun BookMetadata.hasReadingPositionForSync(): Boolean {
+    return lastChapterIndex != null ||
+        lastPage != null ||
+        !lastPositionCfi.isNullOrBlank() ||
+        locatorBlockIndex != null ||
+        locatorCharOffset != null ||
+        (progressPercentage ?: 0f) > 0f
+}
+
+fun BookMetadata.effectiveReadingPositionModifiedTimestamp(): Long {
+    return readingPositionModifiedTimestamp.takeIf { it > 0L }
+        ?: lastModifiedTimestamp.takeIf { hasReadingPositionForSync() }
+        ?: 0L
+}
+
+fun BookMetadata.effectiveAnnotationModifiedTimestamp(sidecarModifiedTimestamp: Long = 0L): Long {
+    return sidecarModifiedTimestamp.takeIf { it > 0L }
+        ?: annotationModifiedTimestamp.takeIf { it > 0L }
+        ?: 0L
+}
+
+fun BookMetadata.toRecentFileItem(): RecentFileItem {
+    return RecentFileItem(
+        bookId = this.bookId,
+        uriString = null,
+        type = try { FileType.valueOf(this.type) } catch (_: Exception) { FileType.EPUB },
+        displayName = this.displayName,
+        timestamp = this.lastModifiedTimestamp,
+        coverImagePath = null,
+        title = this.title,
+        author = this.author,
+        lastChapterIndex = this.lastChapterIndex,
+        locatorBlockIndex = this.locatorBlockIndex,
+        locatorCharOffset = this.locatorCharOffset,
+        lastPositionCfi = this.lastPositionCfi,
+        lastPage = this.lastPage,
+        progressPercentage = this.progressPercentage,
+        isRecent = this.isRecent,
+        isAvailable = false,
+        lastModifiedTimestamp = this.lastModifiedTimestamp,
+        isDeleted = this.isDeleted,
+        bookmarksJson = this.bookmarksJson,
+        customName = this.customName,
+        highlightsJson = this.highlightsJson,
+        fileContentModifiedTimestamp = this.fileContentModifiedTimestamp,
+        seriesName = this.seriesName,
+        seriesIndex = this.seriesIndex,
+        description = this.description,
+        originalTitle = this.originalTitle,
+        originalAuthor = this.originalAuthor,
+        originalSeriesName = this.originalSeriesName,
+        originalSeriesIndex = this.originalSeriesIndex,
+        originalDescription = this.originalDescription,
+        readingPositionModifiedTimestamp = this.effectiveReadingPositionModifiedTimestamp()
+    )
+}
+
+fun RecentFileSummary.toRecentFileItem(): RecentFileItem {
+    return RecentFileItem(
+        bookId = this.bookId,
+        uriString = this.uriString,
+        type = this.type,
+        displayName = this.displayName,
+        timestamp = this.timestamp,
+        dateAddedTimestamp = this.dateAddedTimestamp.takeIf { it > 0L } ?: this.timestamp,
+        coverImagePath = this.coverImagePath,
+        title = this.title,
+        author = this.author,
+        lastChapterIndex = this.lastChapterIndex,
+        locatorBlockIndex = this.locatorBlockIndex,
+        locatorCharOffset = this.locatorCharOffset,
+        lastPage = this.lastPage,
+        lastPositionCfi = this.lastPositionCfi,
+        progressPercentage = this.progressPercentage,
+        isRecent = this.isRecent,
+        isAvailable = this.isAvailable,
+        lastModifiedTimestamp = this.lastModifiedTimestamp,
+        isDeleted = this.isDeleted,
+        bookmarksJson = null,
+        sourceFolderUri = this.sourceFolderUri,
+        isReflowPreferred = this.isReflowPreferred,
+        customName = this.customName,
+        highlightsJson = null,
+        fileSize = this.fileSize,
+        fileContentModifiedTimestamp = this.fileContentModifiedTimestamp,
+        seriesName = this.seriesName,
+        seriesIndex = this.seriesIndex,
+        description = this.description,
+        originalTitle = this.originalTitle,
+        originalAuthor = this.originalAuthor,
+        originalSeriesName = this.originalSeriesName,
+        originalSeriesIndex = this.originalSeriesIndex,
+        originalDescription = this.originalDescription,
+        readingPositionModifiedTimestamp = this.readingPositionModifiedTimestamp
+    )
+}

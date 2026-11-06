@@ -1,0 +1,668 @@
+package com.aryan.reader.shared.pdf
+
+import com.aryan.reader.shared.HighlightStyle
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+
+class SharedPdfAnnotationSerializerTest {
+
+    @Test
+    fun `serializer round trips text highlight annotations`() {
+        val annotation = SharedPdfAnnotation(
+            id = "highlight",
+            pageIndex = 3,
+            kind = PdfAnnotationKind.HIGHLIGHT,
+            tool = PdfInkTool.HIGHLIGHTER,
+            bounds = PdfPageBounds(left = 0.1f, top = 0.2f, right = 0.5f, bottom = 0.24f),
+            text = "Selected text",
+            colorArgb = 0x8CFFEB3B.toInt(),
+            createdAt = 42L
+        )
+
+        val decoded = SharedPdfAnnotationSerializer.decode(
+            SharedPdfAnnotationSerializer.encode(listOf(annotation))
+        )
+
+        assertEquals(listOf(annotation), decoded)
+    }
+
+    @Test
+    fun `sidecar codec canonicalizes legacy android annotation payloads`() {
+        val legacyPayload = """
+            {
+              "ink": [
+                {
+                  "pageIndex": 1,
+                  "id": "ink-1",
+                  "annotationType": "INK",
+                  "inkType": "PENCIL",
+                  "color": -16777216,
+                  "strokeWidth": 0.008,
+                  "note": "Desktop-only ink note",
+                  "points": [{"x":0.1,"y":0.2,"t":10},{"x":0.3,"y":0.4,"t":12}]
+                }
+              ],
+              "textBoxes": [
+                {
+                  "id": "box-1",
+                  "pageIndex": 2,
+                  "text": "Typed note",
+                  "color": -15654349,
+                  "backgroundColor": 1712398870,
+                  "fontSize": 0.032,
+                  "isBold": true,
+                  "bounds": {"left":0.1,"top":0.2,"right":0.5,"bottom":0.3}
+                }
+              ],
+              "highlights": [
+                {
+                  "id": "highlight-1",
+                  "pageIndex": 3,
+                  "color": "BLUE",
+                  "text": "Selected text",
+                  "rangeStart": 4,
+                  "rangeEnd": 18,
+                  "note": "Keep this",
+                  "comments": [
+                    {
+                      "id": "comment-1",
+                      "author": "Ada",
+                      "contents": "First comment",
+                      "createdAt": 100,
+                      "modifiedAt": 120
+                    },
+                    {
+                      "id": "comment-2",
+                      "parentId": "comment-1",
+                      "author": "Bea",
+                      "contents": "Reply",
+                      "createdAt": 130
+                    }
+                  ],
+                  "bounds": []
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val canonical = SharedPdfAnnotationSidecarCodec.canonicalizeDataJson(legacyPayload)
+        val data = testJson.parseToJsonElement(canonical).jsonObject
+        val annotations = SharedPdfAnnotationSidecarCodec.annotationsFromData(data)
+
+        assertNotNull(data[SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS])
+        assertEquals(listOf(PdfAnnotationKind.INK, PdfAnnotationKind.TEXT, PdfAnnotationKind.HIGHLIGHT), annotations.map { it.kind })
+        assertEquals("ink-1", annotations[0].id)
+        assertEquals(PdfInkTool.PENCIL, annotations[0].tool)
+        assertEquals("Desktop-only ink note", annotations[0].note)
+        assertEquals(16f, annotations[1].fontSize, 0.001f)
+        assertEquals(0.032f, annotations[1].pageRelativeFontSize ?: 0f, 0.0001f)
+        assertTrue(annotations[1].isBold)
+        assertEquals("Keep this", annotations[2].note)
+        assertEquals(listOf("comment-1", "comment-2"), annotations[2].comments.map { it.id })
+        assertEquals("comment-1", annotations[2].comments[1].parentId)
+        assertEquals("Ada", annotations[2].comments[0].author)
+        assertEquals(120L, annotations[2].comments[0].modifiedAt)
+        assertEquals(4, annotations[2].rangeStartIndex)
+        assertEquals(17, annotations[2].rangeEndIndex)
+    }
+
+    @Test
+    fun `sidecar codec expands canonical annotations for android legacy readers`() {
+        val annotations = listOf(
+            SharedPdfAnnotation(
+                id = "ink-1",
+                pageIndex = 0,
+                kind = PdfAnnotationKind.INK,
+                tool = PdfInkTool.FOUNTAIN_PEN,
+                points = listOf(PdfPagePoint(0.1f, 0.2f, 1L), PdfPagePoint(0.2f, 0.3f, 2L)),
+                colorArgb = 0xFF0000FF.toInt(),
+                strokeWidth = 0.009f
+            ),
+            SharedPdfAnnotation(
+                id = "text-1",
+                pageIndex = 1,
+                kind = PdfAnnotationKind.TEXT,
+                tool = PdfInkTool.TEXT,
+                bounds = PdfPageBounds(0.2f, 0.3f, 0.6f, 0.5f),
+                text = "Desktop text",
+                colorArgb = 0xFF112233.toInt(),
+                backgroundArgb = 0x66112233,
+                fontSize = 20f,
+                pageRelativeFontSize = 0.031f
+            ),
+            SharedPdfAnnotation(
+                id = "highlight-1",
+                pageIndex = 2,
+                kind = PdfAnnotationKind.HIGHLIGHT,
+                tool = PdfInkTool.HIGHLIGHTER,
+                text = "Desktop highlight",
+                note = "Synced note",
+                comments = listOf(
+                    SharedPdfAnnotationComment(
+                        id = "comment-1",
+                        author = "Ada",
+                        contents = "Sidecar comment",
+                        createdAt = 100L,
+                        modifiedAt = 110L
+                    ),
+                    SharedPdfAnnotationComment(
+                        id = "comment-2",
+                        parentId = "comment-1",
+                        author = "Bea",
+                        contents = "Nested reply",
+                        createdAt = 120L
+                    )
+                ),
+                colorArgb = 0x8C64B5F6.toInt(),
+                highlightStyle = HighlightStyle.STRIKETHROUGH,
+                rangeStartIndex = 7,
+                rangeEndIndex = 21
+            )
+        )
+        val canonicalPayload = testJson.encodeToString(
+            JsonElement.serializer(),
+            JsonObject(
+                mapOf(
+                    SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS to
+                        SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(annotations)
+                )
+            )
+        )
+
+        val legacyPayload = SharedPdfAnnotationSidecarCodec.legacyAndroidDataJsonFromCanonical(canonicalPayload)
+        val legacy = testJson.parseToJsonElement(legacyPayload).jsonObject
+
+        assertEquals(1, legacy.getValue("ink").jsonArray.size)
+        assertEquals("FOUNTAIN_PEN", legacy.getValue("ink").jsonArray[0].jsonObject.getValue("inkType").jsonPrimitive.content)
+        assertEquals(1, legacy.getValue("textBoxes").jsonArray.size)
+        assertEquals(
+            0.031,
+            legacy.getValue("textBoxes").jsonArray[0].jsonObject.getValue("fontSize").jsonPrimitive.content.toDouble(),
+            0.0001
+        )
+        assertEquals(1, legacy.getValue("highlights").jsonArray.size)
+        assertEquals("BLUE", legacy.getValue("highlights").jsonArray[0].jsonObject.getValue("color").jsonPrimitive.content)
+        assertEquals("strikethrough", legacy.getValue("highlights").jsonArray[0].jsonObject.getValue("style").jsonPrimitive.content)
+        assertEquals("Synced note", legacy.getValue("highlights").jsonArray[0].jsonObject.getValue("note").jsonPrimitive.content)
+        assertEquals(22, legacy.getValue("highlights").jsonArray[0].jsonObject.getValue("rangeEnd").jsonPrimitive.content.toInt())
+        val comments = legacy.getValue("highlights").jsonArray[0].jsonObject.getValue("comments").jsonArray
+        assertEquals(2, comments.size)
+        assertEquals("comment-1", comments[0].jsonObject.getValue("id").jsonPrimitive.content)
+        assertEquals("comment-1", comments[1].jsonObject.getValue("parentId").jsonPrimitive.content)
+        assertEquals("Nested reply", comments[1].jsonObject.getValue("contents").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `sidecar codec round trips text box lock state`() {
+        val legacyPayload = """
+            {
+              "textBoxes": [
+                {
+                  "id": "box-locked",
+                  "pageIndex": 0,
+                  "text": "Pinned note",
+                  "color": -16777216,
+                  "backgroundColor": 0,
+                  "fontSize": 0.032,
+                  "isLocked": true,
+                  "bounds": {"left":0.1,"top":0.2,"right":0.5,"bottom":0.3}
+                },
+                {
+                  "id": "box-open",
+                  "pageIndex": 0,
+                  "text": "Free note",
+                  "color": -16777216,
+                  "backgroundColor": 0,
+                  "fontSize": 0.032,
+                  "bounds": {"left":0.1,"top":0.4,"right":0.5,"bottom":0.5}
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val canonical = SharedPdfAnnotationSidecarCodec.canonicalizeDataJson(legacyPayload)
+        val annotations = SharedPdfAnnotationSidecarCodec.annotationsFromData(
+            testJson.parseToJsonElement(canonical).jsonObject
+        )
+        assertEquals(2, annotations.size)
+        assertTrue(annotations.first { it.id == "box-locked" }.isLocked)
+        assertTrue(!annotations.first { it.id == "box-open" }.isLocked)
+
+        val legacy = testJson.parseToJsonElement(
+            SharedPdfAnnotationSidecarCodec.legacyAndroidDataJsonFromCanonical(canonical)
+        ).jsonObject
+        val boxes = legacy.getValue("textBoxes").jsonArray
+        assertEquals(true, boxes.first { it.jsonObject.getValue("id").jsonPrimitive.content == "box-locked" }
+            .jsonObject.getValue("isLocked").jsonPrimitive.content.toBoolean())
+        assertTrue("isLocked" !in boxes.first { it.jsonObject.getValue("id").jsonPrimitive.content == "box-open" }
+            .jsonObject)
+    }
+
+    @Test
+    fun `sidecar codec treats canonical annotations as authoritative for android legacy expansion`() {
+        val canonicalAnnotation = SharedPdfAnnotation(
+            id = "desktop-ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            tool = PdfInkTool.PEN,
+            points = listOf(PdfPagePoint(0.1f, 0.2f, 100L)),
+            note = "Edited on desktop",
+            colorArgb = 0xFF112233.toInt(),
+            strokeWidth = 0.01f
+        )
+        val payload = testJson.encodeToString(
+            JsonElement.serializer(),
+            JsonObject(
+                mapOf(
+                    SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS to
+                        SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(listOf(canonicalAnnotation)),
+                    "ink" to testJson.parseToJsonElement(
+                        """[{"id":"stale","pageIndex":9,"annotationType":"INK","inkType":"PENCIL","color":0,"strokeWidth":1,"points":[{"x":0.9,"y":0.9}]}]"""
+                    )
+                )
+            )
+        )
+
+        val legacy = testJson.parseToJsonElement(
+            SharedPdfAnnotationSidecarCodec.legacyAndroidDataJsonFromCanonical(payload)
+        ).jsonObject
+        val ink = legacy.getValue("ink").jsonArray.single().jsonObject
+
+        assertEquals("desktop-ink", ink.getValue("id").jsonPrimitive.content)
+        assertEquals("Edited on desktop", ink.getValue("note").jsonPrimitive.content)
+        assertEquals(0, ink.getValue("pageIndex").jsonPrimitive.content.toInt())
+    }
+
+    @Test
+    fun `sidecar codec expands empty canonical annotations to empty android legacy arrays`() {
+        val payload = testJson.encodeToString(
+            JsonElement.serializer(),
+            JsonObject(
+                mapOf(
+                    SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS to
+                        SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(emptyList())
+                )
+            )
+        )
+
+        val legacy = testJson.parseToJsonElement(
+            SharedPdfAnnotationSidecarCodec.legacyAndroidDataJsonFromCanonical(payload)
+        ).jsonObject
+
+        assertEquals(0, legacy.getValue("ink").jsonArray.size)
+        assertEquals(0, legacy.getValue("textBoxes").jsonArray.size)
+        assertEquals(0, legacy.getValue("highlights").jsonArray.size)
+    }
+
+    @Test
+    fun `sidecar codec merges local and remote annotation additions`() {
+        val local = SharedPdfAnnotation(
+            id = "local-ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.1f, 0.2f, 10L)),
+            colorArgb = 0xFF000000.toInt(),
+            createdAt = 10L
+        )
+        val remote = SharedPdfAnnotation(
+            id = "remote-ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.3f, 0.4f, 20L)),
+            colorArgb = 0xFFFF0000.toInt(),
+            createdAt = 20L
+        )
+        fun payload(annotation: SharedPdfAnnotation): String {
+            return testJson.encodeToString(
+                JsonElement.serializer(),
+                JsonObject(
+                    mapOf(
+                        SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS to
+                            SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(listOf(annotation))
+                    )
+                )
+            )
+        }
+
+        val merged = SharedPdfAnnotationSidecarCodec.mergeAnnotationDataJson(
+            localDataJson = payload(local),
+            remoteDataJson = payload(remote),
+            preferRemoteOnConflict = false
+        )
+        val annotations = SharedPdfAnnotationSidecarCodec.annotationsFromData(
+            testJson.parseToJsonElement(merged).jsonObject
+        )
+
+        assertEquals(listOf("local-ink", "remote-ink"), annotations.map { it.id })
+        assertEquals(2, SharedPdfAnnotationSidecarCodec.annotationCountFromDataJson(merged))
+    }
+
+    @Test
+    fun `sidecar codec deletion tombstones remove stale remote annotations`() {
+        val deletedRemote = SharedPdfAnnotation(
+            id = "deleted-remote-ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.1f, 0.2f, 10L)),
+            colorArgb = 0xFF000000.toInt(),
+            createdAt = 10L
+        )
+        val local = SharedPdfAnnotation(
+            id = "local-ink",
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.3f, 0.4f, 20L)),
+            colorArgb = 0xFFFF0000.toInt(),
+            createdAt = 20L
+        )
+        fun payload(
+            annotations: List<SharedPdfAnnotation>,
+            deletions: Map<String, Long> = emptyMap()
+        ): String {
+            return testJson.encodeToString(
+                JsonElement.serializer(),
+                JsonObject(
+                    buildMap {
+                        put(
+                            SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS,
+                            SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(annotations)
+                        )
+                        if (deletions.isNotEmpty()) {
+                            put(
+                                SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATION_DELETIONS,
+                                SharedPdfAnnotationSidecarCodec.encodeAnnotationDeletionsElement(deletions)
+                            )
+                        }
+                    }
+                )
+            )
+        }
+
+        val merged = SharedPdfAnnotationSidecarCodec.mergeAnnotationDataJson(
+            localDataJson = payload(
+                annotations = listOf(local),
+                deletions = mapOf(deletedRemote.id to 100L)
+            ),
+            remoteDataJson = payload(listOf(deletedRemote)),
+            preferRemoteOnConflict = false
+        )
+        val annotations = SharedPdfAnnotationSidecarCodec.annotationsFromData(
+            testJson.parseToJsonElement(merged).jsonObject
+        )
+
+        assertEquals(listOf("local-ink"), annotations.map { it.id })
+        assertEquals(mapOf(deletedRemote.id to 100L), SharedPdfAnnotationSidecarCodec.annotationDeletionsFromJson(merged))
+    }
+
+    @Test
+    fun `clearing final annotations emits tombstones and cannot resurrect previous remote state`() {
+        val previous = SharedPdfAnnotation(
+            id = "previous-ink",
+            pageIndex = 1,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.1f, 0.2f, 10L)),
+            colorArgb = 0xFF000000.toInt(),
+            createdAt = 10L
+        )
+        val previousSidecar = testJson.encodeToString(
+            JsonElement.serializer(),
+            JsonObject(
+                mapOf(
+                    SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS to
+                        SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(listOf(previous)),
+                    "layout" to testJson.parseToJsonElement("{\"mode\":\"continuous\"}")
+                )
+            )
+        )
+
+        val cleared = SharedPdfAnnotationSidecarCodec.clearAllAnnotationsDataJson(
+            previousDataJson = previousSidecar,
+            deletedAt = 100L
+        )
+        val clearedObject = testJson.parseToJsonElement(cleared).jsonObject
+
+        assertEquals(0, SharedPdfAnnotationSidecarCodec.annotationCountFromDataJson(cleared))
+        assertEquals(
+            mapOf(previous.id to 100L),
+            SharedPdfAnnotationSidecarCodec.annotationDeletionsFromJson(cleared)
+        )
+        assertEquals(0, clearedObject.getValue("ink").jsonArray.size)
+        assertNotNull(clearedObject["layout"])
+
+        val merged = SharedPdfAnnotationSidecarCodec.mergeAnnotationDataJson(
+            localDataJson = cleared,
+            remoteDataJson = previousSidecar,
+            preferRemoteOnConflict = false
+        )
+        assertEquals(0, SharedPdfAnnotationSidecarCodec.annotationCountFromDataJson(merged))
+        assertEquals(
+            mapOf(previous.id to 100L),
+            SharedPdfAnnotationSidecarCodec.annotationDeletionsFromJson(merged)
+        )
+    }
+
+    @Test
+    fun `sidecar snapshot merge preserves concurrent additions at equal timestamps`() {
+        fun annotation(id: String, createdAt: Long) = SharedPdfAnnotation(
+            id = id,
+            pageIndex = 0,
+            kind = PdfAnnotationKind.INK,
+            points = listOf(PdfPagePoint(0.1f, 0.2f, createdAt)),
+            colorArgb = 0xFF000000.toInt(),
+            createdAt = createdAt
+        )
+        fun payload(value: SharedPdfAnnotation): String = testJson.encodeToString(
+            JsonElement.serializer(),
+            JsonObject(
+                mapOf(
+                    SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS to
+                        SharedPdfAnnotationSidecarCodec.encodeAnnotationsElement(listOf(value))
+                )
+            )
+        )
+
+        val merged = SharedPdfAnnotationSidecarCodec.mergeAnnotationSnapshots(
+            listOf(
+                SharedPdfAnnotationSidecarSnapshot("tablet", 100L, payload(annotation("tablet", 1L))),
+                SharedPdfAnnotationSidecarSnapshot("phone", 100L, payload(annotation("phone", 2L)))
+            )
+        )
+
+        assertNotNull(merged)
+        assertEquals(100L, merged.timestamp)
+        assertEquals(2, SharedPdfAnnotationSidecarCodec.annotationCountFromDataJson(merged.data))
+    }
+
+    @Test
+    fun `sidecar merge preserves sections present on only one device`() {
+        val local = """{"layout":{"mode":"local"}}"""
+        val remote = """{"text":{"blocks":[]}}"""
+
+        val merged = testJson.parseToJsonElement(
+            SharedPdfAnnotationSidecarCodec.mergeAnnotationDataJson(
+                localDataJson = local,
+                remoteDataJson = remote,
+                preferRemoteOnConflict = false
+            )
+        ).jsonObject
+
+        assertNotNull(merged["layout"])
+        assertNotNull(merged["text"])
+    }
+
+    @Test
+    fun `embedded annotation threads link replies and nearby orphan comments`() {
+        val root = embeddedAnnotation(
+            id = "root",
+            index = 0,
+            contents = "Root comment",
+            name = "root-name",
+            bounds = PdfPageBounds(0.1f, 0.1f, 0.2f, 0.2f)
+        )
+        val reply = embeddedAnnotation(
+            id = "reply",
+            index = 1,
+            contents = "Reply comment",
+            name = "reply-name",
+            inReplyTo = "root-name",
+            bounds = PdfPageBounds(0.11f, 0.11f, 0.21f, 0.21f)
+        )
+        val nearbyOrphan = embeddedAnnotation(
+            id = "nearby",
+            index = 2,
+            contents = "Nearby comment",
+            name = "nearby-name",
+            bounds = PdfPageBounds(0.12f, 0.12f, 0.22f, 0.22f)
+        )
+        val empty = embeddedAnnotation(
+            id = "empty",
+            index = 3,
+            contents = "",
+            name = "empty-name",
+            bounds = PdfPageBounds(0.8f, 0.8f, 0.9f, 0.9f)
+        )
+
+        val grouped = SharedPdfEmbeddedAnnotationThreads.group(listOf(root, reply, nearbyOrphan, empty))
+
+        assertEquals(listOf("root"), grouped.map { it.id })
+        assertEquals(listOf("reply", "nearby"), grouped.single().replies.map { it.id })
+    }
+
+    @Test
+    fun `highlight factory normalizes exclusive Android ranges and shared bounds`() {
+        val bounds = listOf(PdfPageBounds(0.1f, 0.2f, 0.3f, 0.4f))
+
+        val annotation = sharedPdfHighlightAnnotation(
+            id = "highlight",
+            pageIndex = 2,
+            bounds = bounds,
+            text = "marked",
+            note = "note",
+            comments = emptyList(),
+            colorArgb = 0x8C112233.toInt(),
+            highlightStyle = HighlightStyle.UNDERLINE,
+            rangeStart = 7,
+            rangeEndExclusive = 12,
+        )
+
+        assertEquals(PdfAnnotationKind.HIGHLIGHT, annotation.kind)
+        assertEquals(PdfInkTool.HIGHLIGHTER, annotation.tool)
+        assertEquals(bounds.single(), annotation.bounds)
+        assertEquals(bounds, annotation.boundsList)
+        assertEquals(7, annotation.rangeStartIndex)
+        assertEquals(11, annotation.rangeEndIndex)
+    }
+
+    private fun embeddedAnnotation(
+        id: String,
+        index: Int,
+        contents: String,
+        name: String,
+        bounds: PdfPageBounds,
+        inReplyTo: String = ""
+    ): SharedPdfEmbeddedAnnotation {
+        return SharedPdfEmbeddedAnnotation(
+            id = id,
+            pageIndex = 0,
+            index = index,
+            subtype = PdfiumAnnotationSubtype.TEXT,
+            bounds = bounds,
+            contents = contents,
+            author = "Reader",
+            name = name,
+            inReplyTo = inReplyTo
+        )
+    }
+
+    @Test
+    fun `legacy ink codec preserves compact Android shape and load limits`() {
+        val encoded = SharedPdfLegacyInkCodec.encode(
+            listOf(
+                SharedPdfLegacyInkAnnotation(
+                    id = "ink",
+                    pageIndex = 2,
+                    inkTypeName = "PENCIL",
+                    colorArgb = -16777216,
+                    strokeWidth = 0.25f,
+                    points = listOf(PdfPagePoint(0.123456f, 0.5f, 7L)),
+                    note = "Note",
+                )
+            )
+        )
+
+        assertEquals(
+            "[{\"id\":\"ink\",\"pageIndex\":2,\"annotationType\":\"INK\",\"inkType\":\"PENCIL\",\"color\":-16777216,\"strokeWidth\":0.25,\"note\":\"Note\",\"points\":[{\"x\":0.12346,\"y\":0.5,\"t\":7}]}]",
+            encoded,
+        )
+        val decoded = SharedPdfLegacyInkCodec.decode(encoded) { "generated" }
+        assertEquals("ink", decoded.annotations.single().id)
+        assertEquals(PdfPagePoint(0.12346f, 0.5f, 7L), decoded.annotations.single().points.single())
+    }
+
+    @Test
+    fun `legacy ink encode caps points per annotation like decode`() {
+        val points = (0 until SharedPdfLegacyInkCodec.MAX_POINTS_PER_ANNOTATION + 500).map { index ->
+            PdfPagePoint(0.1f, 0.2f, index.toLong())
+        }
+        val encoded = SharedPdfLegacyInkCodec.encode(
+            listOf(
+                SharedPdfLegacyInkAnnotation(
+                    id = "ink",
+                    pageIndex = 0,
+                    colorArgb = -1,
+                    strokeWidth = 0.5f,
+                    points = points,
+                )
+            )
+        )
+
+        // The persisted payload itself respects the cap, so saving huge ink
+        // collections cannot OOM building the JSON DOM.
+        val decoded = SharedPdfLegacyInkCodec.decode(encoded) { "generated" }
+        assertEquals(
+            SharedPdfLegacyInkCodec.MAX_POINTS_PER_ANNOTATION,
+            decoded.annotations.single().points.size,
+        )
+        assertEquals(0L, decoded.annotations.single().points.first().timestamp)
+        assertEquals(
+            (SharedPdfLegacyInkCodec.MAX_POINTS_PER_ANNOTATION - 1).toLong(),
+            decoded.annotations.single().points.last().timestamp,
+        )
+    }
+
+    @Test
+    fun `legacy ink encode caps annotation count like decode`() {
+        val annotations = (0 until SharedPdfLegacyInkCodec.MAX_ANNOTATIONS_PER_LOAD + 50).map { index ->
+            SharedPdfLegacyInkAnnotation(
+                id = "a$index",
+                pageIndex = 0,
+                colorArgb = -1,
+                strokeWidth = 0.5f,
+                points = listOf(PdfPagePoint(0.1f, 0.2f, 0L)),
+            )
+        }
+        val encoded = SharedPdfLegacyInkCodec.encode(annotations)
+
+        val decoded = SharedPdfLegacyInkCodec.decode(encoded) { "generated" }
+        assertEquals(SharedPdfLegacyInkCodec.MAX_ANNOTATIONS_PER_LOAD, decoded.annotations.size)
+        assertEquals("a0", decoded.annotations.first().id)
+        assertEquals(
+            "a${SharedPdfLegacyInkCodec.MAX_ANNOTATIONS_PER_LOAD - 1}",
+            decoded.annotations.last().id,
+        )
+    }
+
+    private val testJson = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+}

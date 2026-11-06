@@ -1,0 +1,869 @@
+package com.aryan.reader.shared.reader
+
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.protobuf.ProtoNumber
+
+const val MOBILE_EPUB_MAX_METADATA_ENTRY_BYTES: Int = 4 * 1024 * 1024
+const val MOBILE_EPUB_MAX_CACHED_BOOK_METADATA_BYTES: Long = 4L * 1024L * 1024L
+const val MOBILE_EPUB_MAX_LOCATOR_ON_DEMAND_HTML_BYTES: Long = 2L * 1024L * 1024L
+const val MOBILE_EPUB_MAX_LOCATOR_ON_DEMAND_HTML_CHARS: Int = 2 * 1024 * 1024
+
+/**
+ * The persisted EPUB chapter contract used by the Android reader.
+ *
+ * Keep this shape stable while the package loader moves into shared code: Android extraction
+ * metadata and pagination protobuf payloads depend on these names, defaults, and field numbers.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+@SerialName("com.aryan.reader.epub.EpubChapter")
+data class MobileEpubChapter @OptIn(ExperimentalSerializationApi::class) constructor(
+    @ProtoNumber(1) val chapterId: String,
+    @ProtoNumber(2) val absPath: String,
+    @ProtoNumber(3) val title: String,
+    @ProtoNumber(4) val htmlFilePath: String,
+    @ProtoNumber(5) val plainTextContent: String,
+    @ProtoNumber(6) val htmlContent: String,
+    @ProtoNumber(7) val depth: Int = 0,
+    @ProtoNumber(8) val isInToc: Boolean = true,
+    @ProtoNumber(9) val plainTextLength: Int = plainTextContent.length
+)
+
+fun MobileEpubChapter.plainTextCharacterCount(): Int =
+    maxOf(plainTextLength, plainTextContent.length)
+
+/** Android's exact chapter projection for its lightweight extracted-book metadata cache. */
+fun MobileEpubChapter.toMobileEpubExtractionCacheChapter(): MobileEpubChapter = copy(
+    plainTextContent = "",
+    htmlContent = "",
+    plainTextLength = plainTextCharacterCount()
+)
+
+fun mobileEpubContentFilePath(path: String): String =
+    path.substringBefore('#').substringBefore('?')
+
+/** Android's extracted-cache readability decision after platform filesystem inspection. */
+fun isMobileEpubExtractionCacheReadable(
+    extractionBasePathPresent: Boolean,
+    extractionDirectoryPresent: Boolean,
+    chapterCount: Int,
+    extractionDirectoryHasEntries: Boolean,
+    allChapterFilesPresent: Boolean
+): Boolean = when {
+    !extractionBasePathPresent || !extractionDirectoryPresent -> false
+    chapterCount == 0 -> extractionDirectoryHasEntries
+    else -> allChapterFilesPresent
+}
+
+/** Android's WebView chapter scroll fraction, including short and not-yet-measured documents. */
+fun mobileEpubChapterScrollFraction(
+    scrollY: Int,
+    scrollHeight: Int,
+    clientHeight: Int
+): Float = when {
+    scrollHeight > clientHeight -> {
+        val scrollableHeight = (scrollHeight - clientHeight).toFloat()
+        if (scrollableHeight > 0f) (scrollY.toFloat() / scrollableHeight).coerceIn(0f, 1f) else 1f
+    }
+    scrollHeight > 0 -> 1f
+    else -> 0f
+}
+
+/** Android's character-weighted whole-book progress after the platform resolves an offset. */
+fun mobileEpubCharacterProgress(
+    totalBookCharacters: Long,
+    completedChapterCharacters: Long,
+    currentChapterOffset: Long,
+    isAtEndOfBook: Boolean
+): Float {
+    if (totalBookCharacters <= 0L) return 0f
+    if (isAtEndOfBook) return 100f
+    return (((completedChapterCharacters + currentChapterOffset).toDouble() / totalBookCharacters.toDouble()) * 100.0).toFloat()
+}
+
+/** Android's paginated footer percentage: capped above at 100 and floored to one decimal. */
+fun mobileEpubCharacterDisplayProgress(
+    totalBookCharacters: Long,
+    completedChapterCharacters: Long,
+    currentChapterOffset: Long,
+    isLastPageOfBook: Boolean
+): Double {
+    if (isLastPageOfBook) return 100.0
+    if (totalBookCharacters <= 0L) return 0.0
+    val calculated =
+        ((completedChapterCharacters + currentChapterOffset).toDouble() / totalBookCharacters.toDouble()) * 100.0
+    return kotlin.math.floor(calculated.coerceAtMost(100.0) * 10.0) / 10.0
+}
+
+/** Exact shared owner of Android's flattened EPUB navigation entry contract. */
+@Serializable
+@SerialName("com.aryan.reader.epub.EpubTocEntry")
+data class MobileEpubTocEntry(
+    val label: String,
+    val absolutePath: String,
+    val fragmentId: String?,
+    val depth: Int
+)
+
+data class MobileEpubLogicalSectionRange<T>(
+    val entry: T,
+    val startChildIndex: Int,
+    val endChildIndexExclusive: Int,
+    val materializationIndex: Int
+)
+
+/**
+ * Minimum plain-text length for a TOC split to stand as its own chapter. Sections below
+ * this with no media are front-matter crumbs (title-page lines) or half-titles, not chapters.
+ */
+const val MOBILE_EPUB_MIN_SPLIT_SECTION_TEXT_CHARS = 400
+
+data class MobileEpubMergedSection<T>(
+    val entry: T,
+    val startChildIndex: Int,
+    val endChildIndexExclusive: Int,
+    /** TOC entries absorbed into this section; they stay in the TOC and navigate by fragment. */
+    val absorbedEntries: List<T>,
+    val materializationIndex: Int
+)
+
+/**
+ * Good-split policy over [mobileEpubLogicalSectionRanges].
+ *
+ * Raw ranges are kept verbatim except for two tiny-section cases (a section is tiny when
+ * its plain text is below [MOBILE_EPUB_MIN_SPLIT_SECTION_TEXT_CHARS] and it holds no media):
+ * - a leading run of 2+ tiny sections is folded into one section starting at the first
+ *   entry (Gutenberg title pages: LOST IN THE JUNGLE. + 3 one-line h4s + ...). The run stops
+ *   at the first substantial section or depth-0 parent. A single leading tiny section is
+ *   kept, and an all-tiny file is never folded.
+ * - a tiny section whose entry is a TOC parent of the entries following it in the same
+ *   file is folded forward into the next section (half-titles such as the reprinted
+ *   LOST IN THE JUNGLE. before CHAPTER I.).
+ *
+ * Collision/id-priority semantics of [mobileEpubLogicalSectionRanges] are preserved: this
+ * only drops split points, never reorders or remaps anchors.
+ */
+fun <T> mobileEpubMergedChapterSections(
+    entries: List<T>,
+    bodyChildCount: Int,
+    fragmentId: (T) -> String?,
+    idChildIndex: (String) -> Int?,
+    nameChildIndex: (String) -> Int?,
+    depthOf: (T) -> Int,
+    sectionTextLength: (startChild: Int, endChildExclusive: Int) -> Int,
+    sectionHasMedia: (startChild: Int, endChildExclusive: Int) -> Boolean
+): List<MobileEpubMergedSection<T>> {
+    val raw = mobileEpubLogicalSectionRanges(
+        entries = entries,
+        bodyChildCount = bodyChildCount,
+        fragmentId = fragmentId,
+        idChildIndex = idChildIndex,
+        nameChildIndex = nameChildIndex
+    )
+    if (raw.size < 2) {
+        return raw.mapIndexed { index, range ->
+            MobileEpubMergedSection(range.entry, range.startChildIndex, range.endChildIndexExclusive, emptyList(), index)
+        }
+    }
+    fun isTiny(range: MobileEpubLogicalSectionRange<T>): Boolean =
+        sectionTextLength(range.startChildIndex, range.endChildIndexExclusive) < MOBILE_EPUB_MIN_SPLIT_SECTION_TEXT_CHARS &&
+            !sectionHasMedia(range.startChildIndex, range.endChildIndexExclusive)
+
+    fun isParentOfFollowing(entry: T, entryIndexInEntries: Int): Boolean {
+        val depth = depthOf(entry)
+        for (i in entryIndexInEntries + 1 until entries.size) {
+            val laterDepth = depthOf(entries[i])
+            if (laterDepth > depth) return true
+            if (laterDepth <= depth) return false
+        }
+        return false
+    }
+    // Map each raw range back to its position in `entries` for the parent test. Raw ranges
+    // hold the winning entry per start; entries are distinct by fragment upstream.
+    fun entryIndex(entry: T): Int = entries.indexOfFirst { fragmentId(it) == fragmentId(entry) }
+
+    val working = raw.toMutableList()
+    // Leading tiny run folds into one section starting at the first entry (Gutenberg title
+    // pages). The run stops at the first substantial section or at a depth-0 parent, which
+    // opens its own group (e.g. a half-title before its chapter). A single leading tiny
+    // section is kept, and an all-tiny file is never folded.
+    var runEnd = 0
+    while (runEnd < working.size && isTiny(working[runEnd]) &&
+        (runEnd == 0 || !(depthOf(working[runEnd].entry) == 0 && isParentOfFollowing(working[runEnd].entry, entryIndex(working[runEnd].entry))))
+    ) {
+        runEnd++
+    }
+    if (runEnd >= 2 && runEnd < working.size) {
+        val head = working[0]
+        val mergedHead = MobileEpubMergedSection(
+            entry = head.entry,
+            startChildIndex = head.startChildIndex,
+            endChildIndexExclusive = working[runEnd - 1].endChildIndexExclusive,
+            absorbedEntries = working.subList(1, runEnd).map { it.entry },
+            materializationIndex = 0
+        )
+        val rest = working.subList(runEnd, working.size).toList()
+        val out = mutableListOf(mergedHead)
+        out.addAll(foldParentRanges(rest, ::isTiny, ::isParentOfFollowing, ::entryIndex, startIndex = 1))
+        return out
+    }
+    return foldParentRanges(working, ::isTiny, ::isParentOfFollowing, ::entryIndex, startIndex = 0)
+}
+
+private fun <T> foldParentRanges(
+    working: List<MobileEpubLogicalSectionRange<T>>,
+    isTiny: (MobileEpubLogicalSectionRange<T>) -> Boolean,
+    isParentOfFollowing: (T, Int) -> Boolean,
+    entryIndex: (T) -> Int,
+    startIndex: Int
+): List<MobileEpubMergedSection<T>> {
+    val out = mutableListOf<MobileEpubMergedSection<T>>()
+    var index = 0
+    var materializationIndex = startIndex
+    while (index < working.size) {
+        val current = working[index]
+        val isLast = index == working.lastIndex
+        if (!isLast && isTiny(current) && isParentOfFollowing(current.entry, entryIndex(current.entry))) {
+            val next = working[index + 1]
+            out += MobileEpubMergedSection(
+                entry = current.entry,
+                startChildIndex = current.startChildIndex,
+                endChildIndexExclusive = next.endChildIndexExclusive,
+                absorbedEntries = listOf(next.entry),
+                materializationIndex = materializationIndex++
+            )
+            index += 2
+        } else {
+            out += MobileEpubMergedSection(
+                entry = current.entry,
+                startChildIndex = current.startChildIndex,
+                endChildIndexExclusive = current.endChildIndexExclusive,
+                absorbedEntries = emptyList(),
+                materializationIndex = materializationIndex++
+            )
+            index += 1
+        }
+    }
+    return out
+}
+
+/**
+ * Android's exact fragment-section ordering and collision policy after a platform HTML adapter
+ * maps fragment IDs/names to direct body-child indices.
+ */
+fun <T> mobileEpubLogicalSectionRanges(
+    entries: List<T>,
+    bodyChildCount: Int,
+    fragmentId: (T) -> String?,
+    idChildIndex: (String) -> Int?,
+    nameChildIndex: (String) -> Int?
+): List<MobileEpubLogicalSectionRange<T>> {
+    if (entries.size < 2 || bodyChildCount < 2) return emptyList()
+    val starts = entries.distinctBy(fragmentId).mapNotNull { entry ->
+        val fragment = fragmentId(entry)?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        (idChildIndex(fragment) ?: nameChildIndex(fragment))
+            ?.takeIf { it in 0 until bodyChildCount }
+            ?.let { entry to it }
+    }.sortedBy { it.second }
+    if (starts.size < 2 || starts.map { it.second }.distinct().size < 2) return emptyList()
+    return starts.mapIndexedNotNull { index, (entry, startIndex) ->
+        val endIndex = starts.getOrNull(index + 1)?.second ?: bodyChildCount
+        if (startIndex >= endIndex) null else MobileEpubLogicalSectionRange(entry, startIndex, endIndex, index)
+    }
+}
+
+/** Exact persisted NCX page-target shape consumed by Android's reader. */
+@Serializable
+@SerialName("com.aryan.reader.epub.EpubParser.EpubPageTarget")
+data class MobileEpubPageTarget(
+    val id: String?,
+    val value: String?,
+    val label: String?,
+    val contentSrc: String
+)
+
+data class MobileEpubNcxPageNode(
+    val id: String?,
+    val value: String?,
+    val label: String?,
+    val resolvedContentSrc: String?
+)
+
+/** Android ignores NCX page targets without a content source and otherwise preserves order. */
+fun mobileEpubPageTargets(nodes: List<MobileEpubNcxPageNode>): List<MobileEpubPageTarget> =
+    nodes.mapNotNull { node ->
+        node.resolvedContentSrc?.let { contentSrc ->
+            MobileEpubPageTarget(node.id, node.value, node.label, contentSrc)
+        }
+    }
+
+/** Platform-neutral NCX tree after the platform XML/path adapter has resolved each target. */
+data class MobileEpubNcxNavigationNode(
+    val label: String?,
+    val absolutePath: String?,
+    val fragmentId: String?,
+    val children: List<MobileEpubNcxNavigationNode> = emptyList()
+)
+
+/**
+ * Preserves Android's NCX flattening semantics: only nodes with a content target are emitted,
+ * and a target-less node's descendants are deliberately not traversed.
+ */
+fun flattenMobileEpubNcxNavigation(
+    roots: List<MobileEpubNcxNavigationNode>
+): List<MobileEpubTocEntry> {
+    val entries = mutableListOf<MobileEpubTocEntry>()
+
+    fun append(nodes: List<MobileEpubNcxNavigationNode>, depth: Int) {
+        nodes.forEach { node ->
+            val path = node.absolutePath ?: return@forEach
+            entries += MobileEpubTocEntry(
+                label = node.label ?: "Untitled",
+                absolutePath = path,
+                fragmentId = node.fragmentId,
+                depth = depth
+            )
+            append(node.children, depth + 1)
+        }
+    }
+
+    append(roots, 0)
+    return entries
+}
+
+data class MobileEpubNcxChapterMetadata(
+    val title: String,
+    val depth: Int
+)
+
+data class MobileEpubChapterNavigation(
+    val title: String?,
+    val depth: Int,
+    val isInToc: Boolean
+)
+
+/** Android's exact NCX-to-spine chapter title, depth, and membership projection. */
+fun resolveMobileEpubChapterNavigation(
+    absolutePath: String,
+    fallbackTitle: String?,
+    navigationMetadata: Map<String, MobileEpubNcxChapterMetadata>
+): MobileEpubChapterNavigation {
+    val metadata = navigationMetadata[absolutePath.substringBefore('#')]
+    return MobileEpubChapterNavigation(
+        title = metadata?.title?.takeIf(String::isNotBlank) ?: fallbackTitle,
+        depth = metadata?.depth ?: 0,
+        isInToc = navigationMetadata.isEmpty() || metadata != null
+    )
+}
+
+/** Android keeps a non-blank extracted heading or falls back to the one-based spine position. */
+fun resolveMobileEpubSpineChapterTitle(extractedHeading: String?, spineIndex: Int): String =
+    extractedHeading?.takeIf(String::isNotBlank) ?: "Chapter ${spineIndex + 1}"
+
+/**
+ * Android's chapter-title map traverses target-less parents, ignores blank labels, strips
+ * fragments in the platform adapter, and keeps the first outermost entry for each resource.
+ */
+fun mobileEpubNcxChapterMetadata(
+    roots: List<MobileEpubNcxNavigationNode>
+): Map<String, MobileEpubNcxChapterMetadata> {
+    val result = linkedMapOf<String, MobileEpubNcxChapterMetadata>()
+    fun visit(nodes: List<MobileEpubNcxNavigationNode>, depth: Int) {
+        nodes.forEach { node ->
+            val label = node.label
+            val path = node.absolutePath
+            if (!label.isNullOrBlank() && path != null && path !in result) {
+                result[path] = MobileEpubNcxChapterMetadata(label, depth)
+            }
+            visit(node.children, depth + 1)
+        }
+    }
+    visit(roots, 0)
+    return result
+}
+
+data class MobileEpubMetadata(
+    val fileName: String,
+    val title: String,
+    val author: String,
+    val language: String,
+    val seriesName: String?,
+    val seriesIndex: Double?,
+    val description: String?
+)
+
+/** Raw `<meta>` element from an OPF package document with its attributes and text value intact. */
+data class MobileEpubMetaElement(
+    val id: String? = null,
+    val name: String? = null,
+    val property: String? = null,
+    val content: String? = null,
+    val text: String? = null,
+    val refines: String? = null
+)
+
+/** Series name and optional position resolved from OPF metadata. */
+data class MobileEpubSeriesMetadata(
+    val name: String,
+    val index: Double?
+)
+
+private const val MOBILE_EPUB_COLLECTION_PROPERTY = "belongs-to-collection"
+private const val MOBILE_EPUB_SERIES_TYPE_PROPERTY = "collection-type"
+private const val MOBILE_EPUB_SERIES_TYPE_VALUE = "series"
+private const val MOBILE_EPUB_GROUP_POSITION_PROPERTY = "group-position"
+
+private val MobileOpfMetaOpenTagRegex = Regex("""<(?:[\w.-]+:)?meta\s+[^>]*>""", RegexOption.IGNORE_CASE)
+private val MobileOpfMetaCloseTagRegex = Regex("""</(?:[\w.-]+:)?meta\s*>""", RegexOption.IGNORE_CASE)
+private val MobileXmlTagRegex = Regex("<[^>]*>")
+
+/** Raw `<meta>` element parsed from an OPF metadata block with its source range. */
+internal data class MobileOpfMetaElementRange(
+    val element: MobileEpubMetaElement,
+    val start: Int,
+    val end: Int
+)
+
+/**
+ * Parses every OPF `<meta>` element from a package document, matching both the
+ * unprefixed and prefixed (`opf:meta`) spellings Calibre mixes inside one
+ * `<metadata>` block, keeping document order.
+ */
+internal fun parseMobileOpfMetaElementRanges(opf: String): List<MobileOpfMetaElementRange> {
+    return MobileOpfMetaOpenTagRegex.findAll(opf).mapNotNull { match ->
+        val openTag = match.value
+        val text: String?
+        val end: Int
+        if (openTag.endsWith("/>")) {
+            text = null
+            end = match.range.last + 1
+        } else {
+            val close = MobileOpfMetaCloseTagRegex.find(opf, startIndex = match.range.last + 1)
+                ?: return@mapNotNull null
+            text = opf.substring(match.range.last + 1, close.range.first)
+                .replace(MobileXmlTagRegex, " ")
+                .decodeEpubEntities()
+                .trim()
+                .takeIf { it.isNotEmpty() }
+            end = close.range.last + 1
+        }
+        MobileOpfMetaElementRange(
+            element = MobileEpubMetaElement(
+                id = openTag.metaAttribute("id"),
+                name = openTag.metaAttribute("name"),
+                property = openTag.metaAttribute("property"),
+                content = openTag.metaAttribute("content"),
+                text = text,
+                refines = openTag.metaAttribute("refines")
+            ),
+            start = match.range.first,
+            end = end
+        )
+    }.toList()
+}
+
+/** Public OPF `<meta>` parser shared by the Android and desktop metadata extractors. */
+fun parseMobileOpfMetaElements(opf: String): List<MobileEpubMetaElement> =
+    parseMobileOpfMetaElementRanges(opf).map { it.element }
+
+private fun String.metaAttribute(name: String): String? =
+    Regex("""\b${Regex.escape(name)}\s*=\s*(['"])(.*?)\1""", RegexOption.IGNORE_CASE)
+        .find(this)
+        ?.groupValues
+        ?.get(2)
+        ?.decodeEpubEntities()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+private fun MobileEpubMetaElement.value(): String? =
+    content?.takeIf(String::isNotBlank) ?: text?.takeIf(String::isNotBlank)
+
+private fun MobileEpubMetaElement.refinedTargetId(): String? =
+    refines?.trim()?.removePrefix("#")?.takeIf(String::isNotBlank)
+
+private fun String.normalizeMobileEpubText(): String? =
+    replace(Regex("\\s+"), " ").trim().takeIf { it.isNotEmpty() }
+
+/** A `belongs-to-collection` group refined as `collection-type` = `series`. */
+private data class MobileOpfSeriesCollection(
+    val id: String,
+    val collection: MobileEpubMetaElement,
+    val refinements: List<MobileEpubMetaElement>
+)
+
+private fun mobileOpfSeriesCollections(metaElements: List<MobileEpubMetaElement>): List<MobileOpfSeriesCollection> {
+    val refinementsByTargetId = mutableMapOf<String, MutableList<MobileEpubMetaElement>>()
+    metaElements.forEach { element ->
+        val targetId = element.refinedTargetId() ?: return@forEach
+        if (element.property.isNullOrBlank()) return@forEach
+        refinementsByTargetId.getOrPut(targetId) { mutableListOf() }.add(element)
+    }
+    return metaElements.mapNotNull { element ->
+        if (!element.property.equals(MOBILE_EPUB_COLLECTION_PROPERTY, ignoreCase = true)) return@mapNotNull null
+        // Collection elements without an id are skipped because refines cannot attach to them.
+        val id = element.id?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        val refinements = refinementsByTargetId[id].orEmpty()
+        val isSeriesCollection = refinements.any {
+            it.property.equals(MOBILE_EPUB_SERIES_TYPE_PROPERTY, ignoreCase = true) &&
+                it.value().equals(MOBILE_EPUB_SERIES_TYPE_VALUE, ignoreCase = true)
+        }
+        if (!isSeriesCollection) null
+        else MobileOpfSeriesCollection(id = id, collection = element, refinements = refinements)
+    }
+}
+
+/** Ids of EPUB 3 series collections so editors can replace them in lockstep with the reader. */
+internal fun mobileOpfSeriesCollectionIds(metaElements: List<MobileEpubMetaElement>): Set<String> =
+    mobileOpfSeriesCollections(metaElements).map { it.id }.toSet()
+
+/** Picks a free `<meta id>` for a rewritten series collection, preferring the id being replaced. */
+internal fun mobileOpfUniqueMetaId(takenIds: Set<String>, preferredId: String?): String {
+    preferredId?.takeIf { it.isNotBlank() && it !in takenIds }?.let { return it }
+    var counter = 1
+    var candidate = "calibre-series"
+    while (candidate in takenIds) {
+        counter++
+        candidate = "calibre-series-$counter"
+    }
+    return candidate
+}
+
+/**
+ * Mirrors Calibre's OPF3 reader precedence (`read_series`): prefer an EPUB 3
+ * `belongs-to-collection` element refined as a series, where `group-position`
+ * carries the index; otherwise fall back to the legacy `calibre:series` /
+ * `calibre:series_index` name/content metas, keeping Android's last-entry-wins rule.
+ */
+fun resolveMobileEpubSeries(metaElements: List<MobileEpubMetaElement>): MobileEpubSeriesMetadata? {
+    mobileOpfSeriesCollections(metaElements).forEach { group ->
+        val seriesName = group.collection.value()?.normalizeMobileEpubText() ?: return@forEach
+        val groupPosition = group.refinements.firstOrNull {
+            it.property.equals(MOBILE_EPUB_GROUP_POSITION_PROPERTY, ignoreCase = true)
+        }?.value()?.toDoubleOrNull()
+        return MobileEpubSeriesMetadata(name = seriesName, index = groupPosition)
+    }
+
+    var seriesName: String? = null
+    var seriesIndex: Double? = null
+    metaElements.forEach { element ->
+        when {
+            element.name.equals("calibre:series", ignoreCase = true) ->
+                seriesName = element.content?.normalizeMobileEpubText()
+            element.name.equals("calibre:series_index", ignoreCase = true) ->
+                seriesIndex = element.content?.toDoubleOrNull()
+        }
+    }
+    val resolvedName = seriesName ?: return null
+    return MobileEpubSeriesMetadata(name = resolvedName, index = seriesIndex)
+}
+
+/** Android's exact OPF metadata defaults plus shared Calibre-series resolution across EPUB 2 and 3 forms. */
+fun resolveMobileEpubMetadata(
+    sourceFileName: String,
+    title: String?,
+    author: String?,
+    language: String?,
+    description: String?,
+    metaElements: List<MobileEpubMetaElement>
+): MobileEpubMetadata {
+    val resolvedTitle = title ?: sourceFileName.substringAfterLast('/').substringBeforeLast('.')
+    val series = resolveMobileEpubSeries(metaElements)
+    return MobileEpubMetadata(
+        fileName = resolvedTitle.replace("/", "_"),
+        title = resolvedTitle,
+        author = author ?: "Unknown Author",
+        language = language ?: "en",
+        seriesName = series?.name,
+        seriesIndex = series?.index,
+        description = description
+    )
+}
+
+/** Android preserves every OPF itemref in document order, including `linear="no"`. */
+fun mobileEpubSpineItemIds(itemRefs: List<String?>): List<String> =
+    itemRefs.mapNotNull { it }
+
+/** Portable equivalent of Android's `URLDecoder.decode(value, UTF_8)` with raw fallback. */
+fun decodeMobileEpubUrl(value: String): String {
+    val output = ArrayList<Byte>(value.length)
+    val literal = StringBuilder()
+    fun flushLiteral() {
+        if (literal.isEmpty()) return
+        output += literal.toString().encodeToByteArray().toList()
+        literal.clear()
+    }
+    var index = 0
+    while (index < value.length) {
+        when (val char = value[index]) {
+            '+' -> {
+                flushLiteral()
+                output += ' '.code.toByte()
+                index++
+            }
+            '%' -> {
+                if (index + 2 >= value.length) return value
+                val decoded = value.substring(index + 1, index + 3).toIntOrNull(16) ?: return value
+                flushLiteral()
+                output += decoded.toByte()
+                index += 3
+            }
+            else -> {
+                literal.append(char)
+                index++
+            }
+        }
+    }
+    flushLiteral()
+    return output.toByteArray().decodeToString()
+}
+
+/**
+ * Portable lexical equivalent of Android's `Paths.get(ownerParent, reference).normalize()`.
+ * Absolute and above-root relative results are deliberately preserved; archive I/O rejects
+ * them later, matching Android's extraction boundary rather than rewriting the reference.
+ */
+fun resolveMobileEpubReference(ownerPath: String, reference: String): String {
+    val base = ownerPath.substringBeforeLast('/', missingDelimiterValue = "")
+    val absolute = reference.startsWith('/')
+    val candidate = if (absolute || base.isBlank()) reference else "$base/$reference"
+    val parts = mutableListOf<String>()
+    candidate.split('/').forEach { part ->
+        when (part) {
+            "", "." -> Unit
+            ".." -> when {
+                parts.lastOrNull()?.let { it != ".." } == true -> parts.removeAt(parts.lastIndex)
+                !absolute -> parts += part
+            }
+            else -> parts += part
+        }
+    }
+    val normalized = parts.joinToString("/")
+    return if (absolute) "/$normalized" else normalized
+}
+
+data class MobileEpubManifestItem(
+    val id: String,
+    val absPath: String,
+    val mediaType: String,
+    val properties: String,
+    /**
+     * The `media-overlay` attribute: the manifest id of the `application/smil+xml` item that
+     * narrates this one, or null when the item has no overlay.
+     *
+     * A reader that does not support overlays must ignore both this attribute and the smil items
+     * (`EPUB RS §9`), so this is purely additive and never changes how a book opens.
+     */
+    val mediaOverlay: String? = null
+)
+
+// 3 -> 4: `MobileEpubManifestItem` gained `mediaOverlay`, so a cached manifest written by 3 would
+// deserialize with the attribute silently absent and the book would look like it has no narration.
+// 4 -> 5: `EpubBook` gained `mediaOverlays`. The extracted-book cache is the whole `EpubBook`, and
+// a copy written by 4 has no overlay index field, so a narrated book would open mute until its
+// cache happened to be rewritten. Bumping the version is what makes the index appear immediately.
+const val MOBILE_EPUB_EXTRACTION_CACHE_VERSION = 5
+
+@Serializable
+data class MobileEpubExtractionCacheManifest(
+    val bookId: String,
+    val originalBookNameHint: String,
+    val parserVersion: Int,
+    val parseContent: Boolean,
+    val shouldUseToc: Boolean,
+    val sourceFingerprint: String? = null
+)
+
+/** Android's exact extracted-book cache compatibility key. */
+fun MobileEpubExtractionCacheManifest.matchesMobileEpubExtractionCache(
+    bookId: String,
+    originalBookNameHint: String,
+    shouldUseToc: Boolean,
+    sourceFingerprint: String?
+): Boolean =
+    this.bookId == bookId &&
+        this.originalBookNameHint == originalBookNameHint &&
+        parserVersion == MOBILE_EPUB_EXTRACTION_CACHE_VERSION &&
+        parseContent &&
+        this.shouldUseToc == shouldUseToc &&
+        this.sourceFingerprint == sourceFingerprint
+
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+@SerialName("com.aryan.reader.epub.EpubImage")
+data class MobileEpubImage @OptIn(ExperimentalSerializationApi::class) constructor(
+    @ProtoNumber(1) val absPath: String
+)
+
+private val MobileEpubImageExtensions = setOf(".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+
+enum class MobileEpubExtractionAction {
+    SKIP,
+    READ_IN_MEMORY,
+    EXTRACT_WITHOUT_MEMORY,
+    EXTRACT_AND_READ
+}
+
+enum class MobileEpubExtractionDirectoryMode {
+    OVERRIDE,
+    TEMPORARY_METADATA,
+    ACTIVE_CACHE
+}
+
+data class MobileEpubExtractionLifecycle(
+    val directoryMode: MobileEpubExtractionDirectoryMode,
+    val mayReadCache: Boolean,
+    val mayWriteCache: Boolean,
+    val deleteDirectoryAfterLoad: Boolean
+)
+
+/** Android's exact extraction-directory/cache lifecycle selection. */
+fun mobileEpubExtractionLifecycle(
+    parseContent: Boolean,
+    hasDirectoryOverride: Boolean
+): MobileEpubExtractionLifecycle = when {
+    hasDirectoryOverride -> MobileEpubExtractionLifecycle(
+        directoryMode = MobileEpubExtractionDirectoryMode.OVERRIDE,
+        mayReadCache = false,
+        mayWriteCache = false,
+        deleteDirectoryAfterLoad = false
+    )
+    !parseContent -> MobileEpubExtractionLifecycle(
+        directoryMode = MobileEpubExtractionDirectoryMode.TEMPORARY_METADATA,
+        mayReadCache = false,
+        mayWriteCache = false,
+        deleteDirectoryAfterLoad = true
+    )
+    else -> MobileEpubExtractionLifecycle(
+        directoryMode = MobileEpubExtractionDirectoryMode.ACTIVE_CACHE,
+        mayReadCache = true,
+        mayWriteCache = true,
+        deleteDirectoryAfterLoad = false
+    )
+}
+
+/** Android's exact per-entry extraction/memory policy for full and metadata-only parsing. */
+fun mobileEpubExtractionAction(
+    path: String,
+    parseContent: Boolean,
+    extractImagesForMetadata: Boolean
+): MobileEpubExtractionAction {
+    val lowerPath = path.lowercase()
+    val isContainerOrOpf = lowerPath.endsWith("container.xml") || lowerPath.endsWith(".opf")
+    if (parseContent) {
+        return if (isContainerOrOpf) {
+            MobileEpubExtractionAction.EXTRACT_AND_READ
+        } else {
+            MobileEpubExtractionAction.EXTRACT_WITHOUT_MEMORY
+        }
+    }
+    if (isContainerOrOpf) return MobileEpubExtractionAction.READ_IN_MEMORY
+    val isImage = MobileEpubImageExtensions.any(lowerPath::endsWith)
+    return if (isImage && extractImagesForMetadata) {
+        MobileEpubExtractionAction.EXTRACT_WITHOUT_MEMORY
+    } else {
+        MobileEpubExtractionAction.SKIP
+    }
+}
+
+/** Android's ordered manifest-plus-archive image inventory. */
+fun mobileEpubImages(
+    manifest: List<MobileEpubManifestItem>,
+    archivePaths: List<String>
+): List<MobileEpubImage> {
+    val listed = manifest.filter { it.mediaType.startsWith("image/") }.map { MobileEpubImage(it.absPath) }
+    val listedPaths = listed.map(MobileEpubImage::absPath).toSet()
+    val unlisted = archivePaths.filter { path ->
+        MobileEpubImageExtensions.any { path.lowercase().endsWith(it) } && path !in listedPaths
+    }.map(::MobileEpubImage)
+    return (listed + unlisted).distinctBy(MobileEpubImage::absPath)
+}
+
+/** Android's exact manifest-first then unlisted-archive CSS discovery order. */
+fun mobileEpubCssPaths(
+    manifest: List<MobileEpubManifestItem>,
+    archivePaths: List<String>
+): List<String> {
+    val listed = manifest.filter { it.mediaType == "text/css" }.map(MobileEpubManifestItem::absPath)
+    val listedPaths = listed.toSet()
+    return listed + archivePaths.filter { it.endsWith(".css", ignoreCase = true) && it !in listedPaths }
+}
+
+/** Android's metadata-first then conventional-name cover candidate order. */
+fun mobileEpubCoverCandidates(
+    metadataCoverId: String?,
+    manifest: List<MobileEpubManifestItem>,
+    archivePaths: Set<String>
+): List<String> = buildList {
+    manifest.firstOrNull { it.id == metadataCoverId }?.absPath?.let(::add)
+    listOf("cover.jpg", "cover.jpeg", "cover.png").forEach { name ->
+        listOf(
+            name, "images/$name", "Images/$name", "image/$name", "Image/$name",
+            "OEBPS/images/$name", "OEBPS/Images/$name", "OEBPS/image/$name", "OEBPS/Image/$name",
+            "OPS/images/$name", "OPS/Images/$name", "OPS/image/$name", "OPS/Image/$name"
+        ).forEach { path ->
+            if (path in archivePaths) add(path)
+            manifest.firstOrNull {
+                it.absPath.equals(path, ignoreCase = true) && it.mediaType.startsWith("image/")
+            }?.absPath?.let(::add)
+        }
+    }
+}
+
+/** Android's power-of-two cover decode sampling policy. */
+fun mobileEpubCoverBitmapSampleSize(
+    width: Int,
+    height: Int,
+    maxDimension: Int = 1024
+): Int {
+    if (width <= 0 || height <= 0 || maxDimension <= 0) return 1
+    var sampleSize = 1
+    while (width / sampleSize > maxDimension || height / sampleSize > maxDimension) {
+        sampleSize *= 2
+    }
+    return sampleSize
+}
+
+enum class MobileEpubSpineResourceKind {
+    HTML,
+    IMAGE,
+    UNSUPPORTED
+}
+
+/** Android's exact spine resource classification, including its XML document fallback. */
+fun mobileEpubSpineResourceKind(
+    mediaType: String,
+    absolutePath: String
+): MobileEpubSpineResourceKind = when {
+    mediaType.startsWith("application/xhtml+xml") ||
+        mediaType.startsWith("text/html") ||
+        absolutePath.endsWith(".html", ignoreCase = true) ||
+        absolutePath.endsWith(".xhtml", ignoreCase = true) ||
+        absolutePath.endsWith(".xml", ignoreCase = true) -> MobileEpubSpineResourceKind.HTML
+    mediaType.startsWith("image/") -> MobileEpubSpineResourceKind.IMAGE
+    else -> MobileEpubSpineResourceKind.UNSUPPORTED
+}
+
+fun mobileEpubSpineResourceKind(item: MobileEpubManifestItem): MobileEpubSpineResourceKind =
+    mobileEpubSpineResourceKind(item.mediaType, item.absPath)
+
+/** Android's exact NCX selection precedence: spine toc ID, NCX media type, then extension. */
+fun resolveMobileEpubNcxManifestId(
+    spineTocId: String?,
+    manifest: List<MobileEpubManifestItem>
+): String? {
+    spineTocId
+        ?.takeIf(String::isNotBlank)
+        ?.let { tocId -> manifest.firstOrNull { it.id == tocId }?.id }
+        ?.let { return it }
+    return manifest.firstOrNull {
+        it.mediaType.equals("application/x-dtbncx+xml", ignoreCase = true)
+    }?.id ?: manifest.firstOrNull {
+        it.absPath.endsWith(".ncx", ignoreCase = true)
+    }?.id
+}
+
+/** Android uses the first container rootfile and removes only leading slashes. */
+fun resolveMobileEpubOpfPath(rootfilePaths: List<String?>): String? =
+    rootfilePaths.firstOrNull()?.trimStart('/')

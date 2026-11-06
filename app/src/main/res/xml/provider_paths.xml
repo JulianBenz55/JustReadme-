@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Corresponds to context.cacheDir/shared_files/ -->
+    <cache-path name="shared_files" path="shared_files/" />
+</paths>

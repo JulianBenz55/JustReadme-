@@ -1,0 +1,4714 @@
+// epub_reader.js
+(function () {
+    var READER_VERTICAL_JITTER_TAG = "EpubVerticalJitter";
+    function logVerticalJitter(message) {
+        console.log(READER_VERTICAL_JITTER_TAG + ": " + message);
+    }
+    window.logReaderVerticalJitter = window.logReaderVerticalJitter || logVerticalJitter;
+
+    function applyMobileOptimizationsAndSelection() {
+        var viewport = document.querySelector("meta[name=viewport]");
+
+        if (!viewport) {
+            viewport = document.createElement("meta");
+            viewport.setAttribute("name", "viewport");
+            document.head.appendChild(viewport);
+        }
+
+        viewport.setAttribute("content", "width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes");
+
+        // Some Android WebViews resolve percentage heights on <html> against a zero-height
+        // initial containing block (observed with file-based loadDataWithBaseURL documents),
+        // collapsing the page to a zero-pixel scroll container that clips all content and
+        // pins window.scrollY to 0. Pin the root to a concrete pixel height derived from the
+        // real viewport and re-apply it on resize so scrolling and position tracking work
+        // regardless of publication CSS height traps (e.g. body { height: calc(100% - 40px) }).
+        var applyReaderViewportHeight = function () {
+            try {
+                var height = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
+                if (height <= 0) return;
+                document.documentElement.style.height = height + "px";
+                if (document.body) document.body.style.height = "auto";
+            } catch (e) { }
+        };
+        window.__applyReaderViewportHeight = applyReaderViewportHeight;
+        window.addEventListener("resize", applyReaderViewportHeight);
+        applyReaderViewportHeight();
+
+        var style = document.getElementById("customMobileStyle");
+
+        if (!style) {
+            style = document.createElement("style");
+            style.setAttribute("id", "customMobileStyle");
+            document.head.appendChild(style);
+        }
+
+        // CHANGED: Colors now use rgba() with 0.5 opacity for blending
+        style.innerHTML = ` html {
+                margin: 0; padding: 0; height: 100%; overflow-y: scroll; overflow-x: hidden;
+                width: 100%; max-width: 100%;
+            }
+
+            body {
+                margin: 0; padding: 0px !important;
+                word-wrap: break-word; overflow-wrap: break-word;
+                word-break: break-word; -webkit-text-size-adjust: 100%;
+                text-rendering: optimizeLegibility; -webkit-user-select: none;
+                -moz-user-select: none; -ms-user-select: none; user-select: none;
+                scroll-behavior: auto !important;
+                overflow-x: hidden !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+
+            #content-container {
+                will-change: transform;
+                transition: none !important;
+                box-sizing: border-box;
+                overflow-x: hidden !important;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+            }
+
+            #content-container *,
+            body > * {
+                max-width: 100% !important;
+                min-width: 0 !important;
+            }
+
+            p, div, li, blockquote, section, article, aside, header, footer, main, span, a {
+                overflow-wrap: break-word;
+                word-break: normal;
+            }
+
+            pre, code, samp, kbd, .reader-txt-preformatted {
+                white-space: pre-wrap !important;
+                overflow-wrap: anywhere !important;
+                word-break: break-word !important;
+                max-width: 100% !important;
+            }
+
+            table {
+                max-width: 100% !important;
+                border-collapse: collapse;
+            }
+
+            td, th {
+                overflow-wrap: normal;
+                word-break: normal;
+            }
+            p, div, li, td, th, span {
+                font-size: 1em; line-height: inherit;
+            }
+
+            p, ul, ol {
+                margin-top: 0.5em; margin-bottom: 0.5em;
+            }
+
+            li {
+                margin-bottom: 0.25em;
+            }
+
+            h1, h2, h3, h4, h5, h6 {
+                line-height: 1.3; margin-top: 1em; margin-bottom: 0.5em; font-weight: bold;
+            }
+
+            h1 {
+                font-size: 2em;
+            }
+
+            h2 {
+                font-size: 1.75em;
+            }
+
+            h3 {
+                font-size: 1.5em;
+            }
+
+            h4 {
+                font-size: 1.25em;
+            }
+
+            h5 {
+                font-size: 1.1em;
+            }
+
+            h6 {
+                font-size: 1em;
+            }
+
+            img, svg, video, canvas {
+                max-width: 100%; width: auto; height: auto; display: block; margin-left: auto; margin-right: auto; background-color: transparent; object-fit: contain;
+            }
+
+            #content-container a[href],
+            #content-container a[href]:link,
+            #content-container a[href]:visited,
+            body a[href],
+            body a[href]:link,
+            body a[href]:visited,
+            a[href],
+            a[href]:link,
+            a[href]:visited {
+                color: var(--reader-link, #005FCC) !important;
+                cursor: pointer;
+                text-decoration-line: underline !important;
+                text-decoration-color: var(--reader-link-decoration, var(--reader-link, #005FCC)) !important;
+                text-decoration-thickness: 0.08em;
+                text-decoration-thickness: max(1px, 0.08em);
+                text-underline-offset: 0.14em;
+                text-decoration-skip-ink: auto;
+                background-image: linear-gradient(transparent 62%, var(--reader-link-bg, rgba(0, 95, 204, 0.16)) 62%);
+                border-radius: 2px;
+            }
+
+            #content-container a[href] *,
+            body a[href] *,
+            a[href] * {
+                color: var(--reader-link, #005FCC) !important;
+                text-decoration-color: var(--reader-link-decoration, var(--reader-link, #005FCC)) !important;
+            }
+
+            figure img {
+                height: auto !important;
+            }
+
+            div:has(> img:only-child), p:has(> img:only-child) {
+                height: auto !important; line-height: normal !important;
+            }
+
+            .tts-highlight {
+                background-color: rgba(255, 236, 179, 0.8);
+                /* Semi-transparent Gold */
+                color: black !important;
+                display: inline !important;
+                text-align: initial !important;
+                text-align-last: auto !important;
+                letter-spacing: normal !important;
+                word-spacing: normal !important;
+                /* Vertical padding on inline markers grows the line box on
+                   WebKit and visibly shifts content when highlighting. */
+                padding: 0 !important;
+                margin: 0 !important;
+                border: 0 !important;
+                vertical-align: baseline !important;
+                border-radius: 3px;
+                -webkit-box-decoration-break: clone;
+                box-decoration-break: clone;
+            }
+
+            html.dark-theme span.tts-highlight {
+                background-color: rgba(160, 140, 90, 0.8) !important;
+                color: #E0E0E0 !important;
+            }
+
+            /* User Highlights: wrapping text must never change layout.
+               Publication CSS is injected verbatim, so pin every box/layout
+               property or a 'span padding' rule newly matches the
+               inserted marker and shifts content (iOS WebView report). */
+            span[class*="user-highlight-"],
+            mark.reader-user-highlight {
+                display: inline !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                border: 0 !important;
+                outline: 0 !important;
+                box-shadow: none !important;
+                vertical-align: baseline !important;
+                line-height: inherit !important;
+                letter-spacing: inherit !important;
+                word-spacing: inherit !important;
+                text-indent: 0 !important;
+                float: none !important;
+                clear: none !important;
+                position: static !important;
+                left: auto !important;
+                right: auto !important;
+                top: auto !important;
+                bottom: auto !important;
+                transform: none !important;
+                border-radius: 2px;
+                -webkit-box-decoration-break: clone;
+                box-decoration-break: clone;
+            }
+            .user-highlight-yellow {
+                    background-color: rgba(251, 192, 45, 0.4); cursor: pointer;
+                }
+                .user-highlight-green {
+                    background-color: rgba(56, 142, 60, 0.4); cursor: pointer;
+                }
+                .user-highlight-blue {
+                    background-color: rgba(25, 118, 210, 0.4); cursor: pointer;
+                }
+                .user-highlight-red {
+                    background-color: rgba(211, 47, 47, 0.4); cursor: pointer;
+                }
+                .user-highlight-purple {
+                    background-color: rgba(123, 31, 162, 0.4); cursor: pointer;
+                }
+                .user-highlight-orange {
+                    background-color: rgba(245, 124, 0, 0.4); cursor: pointer;
+                }
+                .user-highlight-cyan {
+                    background-color: rgba(0, 151, 167, 0.4); cursor: pointer;
+                }
+                .user-highlight-magenta {
+                    background-color: rgba(194, 24, 91, 0.4); cursor: pointer;
+                }
+                .user-highlight-lime {
+                    background-color: rgba(175, 180, 43, 0.4); cursor: pointer;
+                }
+                .user-highlight-pink {
+                    background-color: rgba(233, 30, 99, 0.4); cursor: pointer;
+                }
+                .user-highlight-teal {
+                    background-color: rgba(0, 121, 107, 0.4); cursor: pointer;
+                }
+                .user-highlight-indigo {
+                    background-color: rgba(48, 63, 159, 0.4); cursor: pointer;
+                }
+                .user-highlight-black {
+                    background-color: rgba(0, 0, 0, 0.4); cursor: pointer;
+                }
+                .user-highlight-white {
+                    background-color: rgba(255, 255, 255, 0.4); cursor: pointer;
+                    /* Optional: slight underline so white is visible on white paper.
+                       box-shadow (not border) so the marker stays layout-neutral. */
+                    box-shadow: inset 0 -1px 0 rgba(0,0,0,0.1);
+                }
+
+                /* Active State (Darkens slightly when pressed) */
+                span[class^="user-highlight-"]:active {
+                    filter: brightness(0.9);
+                }
+
+            mark.search-highlight {
+                background-color: rgba(160, 207, 241, 0.8);
+                color: black;
+                border-radius: 3px;
+                display: inline !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                border: 0 !important;
+                vertical-align: baseline !important;
+                -webkit-box-decoration-break: clone;
+                box-decoration-break: clone;
+            }
+
+            html.dark-theme mark.search-highlight {
+                background-color: rgba(0, 90, 156, 0.8);
+                color: #E0E0E0;
+            }
+
+            `;
+
+        window.setTextSelectionEnabled = function (enabled) {
+            var selectStyle = enabled ? "auto" : "none";
+
+            if (document.body) {
+                document.body.style.webkitUserSelect = selectStyle;
+                document.body.style.mozUserSelect = selectStyle;
+                document.body.style.msUserSelect = selectStyle;
+                document.body.style.userSelect = selectStyle;
+            }
+        };
+
+        window.setTextSelectionEnabled(true);
+        installReaderSelectionBridge();
+    }
+
+    function installReaderSelectionBridge() {
+        if (window.__readerSelectionBridgeInstalled) {
+            return;
+        }
+        window.__readerSelectionBridgeInstalled = true;
+
+        var pointerActive = false;
+        var lastPayloadJson = "";
+
+        function buildSelectionPayload() {
+            var selection = window.getSelection && window.getSelection();
+            if (!selection || selection.rangeCount === 0) {
+                return null;
+            }
+
+            var selectedText = selection.toString().trim();
+            if (!selectedText) {
+                return null;
+            }
+
+            var range = selection.getRangeAt(0);
+            var viewportLeft = 0;
+            var viewportTop = 0;
+            var viewportRight = window.innerWidth || document.documentElement.clientWidth || 0;
+            var viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0;
+            var rects = Array.prototype.slice.call(range.getClientRects ? range.getClientRects() : []);
+            rects = rects.filter(function (rect) {
+                if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+                return rect.right >= viewportLeft &&
+                    rect.left <= viewportRight &&
+                    rect.bottom >= viewportTop &&
+                    rect.top <= viewportBottom;
+            });
+
+            var rect = null;
+            if (rects.length > 0) {
+                var firstRect = rects[0];
+                rect = rects.reduce(function (acc, item) {
+                    return {
+                        left: Math.min(acc.left, item.left),
+                        top: Math.min(acc.top, item.top),
+                        right: Math.max(acc.right, item.right),
+                        bottom: Math.max(acc.bottom, item.bottom)
+                    };
+                }, {
+                    left: firstRect.left,
+                    top: firstRect.top,
+                    right: firstRect.right,
+                    bottom: firstRect.bottom
+                });
+                rect.width = rect.right - rect.left;
+                rect.height = rect.bottom - rect.top;
+            } else {
+                rect = range.getBoundingClientRect ? range.getBoundingClientRect() : null;
+                if (!rect || rect.width <= 0 || rect.height <= 0) {
+                    return null;
+                }
+            }
+
+            return {
+                text: selectedText,
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+                width: rect.width,
+                height: rect.height
+            };
+        }
+
+        function reportSelectionToBridge() {
+            if (pointerActive) {
+                return;
+            }
+            if (!window.ReaderSelectionBridge || !window.ReaderSelectionBridge.onSelectionChanged) {
+                return;
+            }
+
+            var payload = buildSelectionPayload();
+            if (!payload) {
+                lastPayloadJson = "";
+                return;
+            }
+
+            var payloadJson = JSON.stringify(payload);
+            if (payloadJson === lastPayloadJson) {
+                return;
+            }
+            lastPayloadJson = payloadJson;
+            window.ReaderSelectionBridge.onSelectionChanged(payloadJson);
+        }
+
+        function scheduleSelectionReport(delay) {
+            setTimeout(reportSelectionToBridge, delay == null ? 160 : delay);
+        }
+
+        function markPointerActive() {
+            pointerActive = true;
+        }
+
+        function markPointerReleased() {
+            pointerActive = false;
+            scheduleSelectionReport(80);
+            scheduleSelectionReport(220);
+            scheduleSelectionReport(520);
+        }
+
+        document.addEventListener("selectionchange", function () {
+            if (!pointerActive) {
+                scheduleSelectionReport(160);
+            }
+        });
+        document.addEventListener("pointerdown", markPointerActive, true);
+        document.addEventListener("pointerup", markPointerReleased, true);
+        document.addEventListener("pointercancel", markPointerReleased, true);
+        document.addEventListener("touchstart", markPointerActive, true);
+        document.addEventListener("touchend", markPointerReleased, true);
+        document.addEventListener("touchcancel", markPointerReleased, true);
+        document.addEventListener("mousedown", markPointerActive, true);
+        document.addEventListener("mouseup", markPointerReleased, true);
+        document.addEventListener("keyup", function () { scheduleSelectionReport(80); });
+        window.addEventListener("scroll", function () { scheduleSelectionReport(80); }, false);
+    }
+
+    window.VIEWPORT_PADDING_TOP = 0;
+    window.VIEWPORT_PADDING_BOTTOM = 0;
+
+    window.setViewportPadding = function (top, bottom) {
+        window.VIEWPORT_PADDING_TOP = top || 0;
+        window.VIEWPORT_PADDING_BOTTOM = bottom || 0;
+    };
+
+    window.applyReaderTheme = function (isDark, bgHex, textHex, textureBase64, textureAlpha) {
+        var styleId = "readerThemeStyle";
+        var themeStyleElement = document.getElementById(styleId);
+
+        if (!themeStyleElement) {
+            themeStyleElement = document.createElement("style");
+            themeStyleElement.setAttribute("id", styleId);
+            document.head.appendChild(themeStyleElement);
+        }
+
+        var themeClassName = isDark ? "dark-theme" : "light-theme";
+        var oppositeThemeClassName = isDark ? "light-theme" : "dark-theme";
+        document.documentElement.classList.remove(oppositeThemeClassName);
+        document.documentElement.classList.add(themeClassName);
+
+        var effectiveBg = bgHex || (isDark ? '#121212' : '#FFFFFF');
+        var effectiveText = textHex || (isDark ? '#E0E0E0' : '#000000');
+        var linkPalette = getReaderLinkPalette(isDark, effectiveBg, effectiveText);
+
+        var effectiveTextureAlpha = Math.max(0, Math.min(1, textureAlpha == null ? 0.55 : textureAlpha));
+        var bgMatch = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(effectiveBg);
+        var bgRgb = bgMatch
+            ? `${parseInt(bgMatch[1], 16)}, ${parseInt(bgMatch[2], 16)}, ${parseInt(bgMatch[3], 16)}`
+            : (isDark ? '18, 18, 18' : '255, 255, 255');
+
+        var textureCss = textureBase64
+            ? `background-image: linear-gradient(rgba(${bgRgb},${1 - effectiveTextureAlpha}), rgba(${bgRgb},${1 - effectiveTextureAlpha})), url('${textureBase64}'); background-repeat: repeat, repeat; background-blend-mode: normal, normal;`
+            : 'background-image: none;';
+
+        var css = `
+            :root {
+                --reader-bg: ${effectiveBg};
+                --reader-text: ${effectiveText};
+                --reader-link: ${linkPalette.color};
+                --reader-link-decoration: ${linkPalette.color};
+                --reader-link-bg: ${linkPalette.background};
+            }
+            html.${themeClassName}, html.${themeClassName} body {
+                background-color: var(--reader-bg) !important;
+                color: var(--reader-text) !important;
+                ${textureCss}
+            }
+
+            html.${themeClassName} body a[href],
+            html.${themeClassName} body a[href]:link,
+            html.${themeClassName} body a[href]:visited,
+            html.${themeClassName} a[href],
+            html.${themeClassName} a[href]:link,
+            html.${themeClassName} a[href]:visited {
+                color: var(--reader-link) !important;
+                cursor: pointer;
+                text-decoration-line: underline !important;
+                text-decoration-color: var(--reader-link-decoration) !important;
+                text-decoration-thickness: 0.08em;
+                text-decoration-thickness: max(1px, 0.08em);
+                text-underline-offset: 0.14em;
+                text-decoration-skip-ink: auto;
+                background-image: linear-gradient(transparent 62%, var(--reader-link-bg) 62%);
+                border-radius: 2px;
+            }
+
+            html.${themeClassName} body a[href] p,
+            html.${themeClassName} body a[href] div,
+            html.${themeClassName} body a[href] span,
+            html.${themeClassName} body a[href] li,
+            html.${themeClassName} body a[href] h1,
+            html.${themeClassName} body a[href] h2,
+            html.${themeClassName} body a[href] h3,
+            html.${themeClassName} body a[href] h4,
+            html.${themeClassName} body a[href] h5,
+            html.${themeClassName} body a[href] h6,
+            html.${themeClassName} a[href] p,
+            html.${themeClassName} a[href] div,
+            html.${themeClassName} a[href] span,
+            html.${themeClassName} a[href] li,
+            html.${themeClassName} a[href] h1,
+            html.${themeClassName} a[href] h2,
+            html.${themeClassName} a[href] h3,
+            html.${themeClassName} a[href] h4,
+            html.${themeClassName} a[href] h5,
+            html.${themeClassName} a[href] h6 {
+                color: var(--reader-link) !important;
+                text-decoration-color: var(--reader-link-decoration) !important;
+                background-color: transparent !important;
+            }
+
+            html.${themeClassName} blockquote, html.${themeClassName} pre,
+            html.${themeClassName} figcaption, html.${themeClassName} caption,
+            html.${themeClassName} label, html.${themeClassName} dt, html.${themeClassName} dd {
+                color: inherit !important;
+                background-color: transparent !important;
+            }
+
+            html.${themeClassName} hr {
+                border-color: ${isDark ? '#444444' : '#CCCCCC'} !important;
+                background-color: ${isDark ? '#444444' : '#CCCCCC'} !important;
+            }
+
+            html.${themeClassName} table, html.${themeClassName} tr, html.${themeClassName} td, html.${themeClassName} th {
+                background-color: transparent !important;
+                border-color: ${isDark ? '#555' : '#CCC'} !important;
+            }
+        `;
+
+        themeStyleElement.innerHTML = css;
+
+        if (window.readerAdjustAuthorColorsForContrast) {
+             window.readerAdjustAuthorColorsForContrast(isDark, effectiveBg, effectiveText);
+        } else if (window.adjustInlineColorsForContrast) {
+             window.adjustInlineColorsForContrast(isDark, effectiveBg, effectiveText);
+        }
+    };
+
+    function getLuminance(r, g, b) {
+        var a = [r, g, b].map(function (v) {
+            v /= 255;
+            return v <= 0.03928
+                ? v / 12.92
+                : Math.pow((v + 0.055) / 1.055, 2.4);
+        });
+        return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+    }
+
+    function hexToRgb(hex) {
+        var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? {
+            r: parseInt(result[1], 16),
+            g: parseInt(result[2], 16),
+            b: parseInt(result[3], 16)
+        } : {r:255,g:255,b:255};
+    }
+
+    function rgbToHex(rgb) {
+        function channel(value) {
+            var hex = Math.max(0, Math.min(255, value)).toString(16);
+            return hex.length < 2 ? '0' + hex : hex;
+        }
+        return '#' + channel(rgb.r) + channel(rgb.g) + channel(rgb.b);
+    }
+
+    function contrastRatio(first, second) {
+        var firstLum = getLuminance(first.r, first.g, first.b);
+        var secondLum = getLuminance(second.r, second.g, second.b);
+        var lighter = Math.max(firstLum, secondLum);
+        var darker = Math.min(firstLum, secondLum);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    function getReaderLinkPalette(isDark, bgHex, textHex) {
+        var bg = hexToRgb(bgHex);
+        var text = hexToRgb(textHex);
+        var bgLum = getLuminance(bg.r, bg.g, bg.b);
+        var textLum = getLuminance(text.r, text.g, text.b);
+        var candidates = (isDark || bgLum < 0.45)
+            ? [
+                { r: 125, g: 211, b: 252 },
+                { r: 94, g: 234, b: 212 },
+                { r: 165, g: 180, b: 252 },
+                { r: 253, g: 230, b: 138 },
+                { r: 255, g: 255, b: 255 }
+            ]
+            : [
+                { r: 0, g: 95, b: 204 },
+                { r: 0, g: 109, b: 117 },
+                { r: 122, g: 30, b: 82 },
+                { r: 74, g: 20, b: 140 },
+                { r: 17, g: 24, b: 39 }
+            ];
+
+        var best = candidates[0];
+        var bestScore = -1;
+        for (var i = 0; i < candidates.length; i++) {
+            var candidate = candidates[i];
+            var contrast = contrastRatio(candidate, bg);
+            var separation = Math.abs(getLuminance(candidate.r, candidate.g, candidate.b) - textLum);
+            if (contrast >= 4.5 && separation >= 0.08) {
+                best = candidate;
+                break;
+            }
+            var score = contrast * 10 + separation;
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        var alpha = bgLum < 0.45 ? 0.24 : 0.16;
+        return {
+            color: rgbToHex(best),
+            background: `rgba(${best.r}, ${best.g}, ${best.b}, ${alpha})`
+        };
+    }
+
+    function rgbStringToRgb(rgbStr) {
+        var parts = rgbStr.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+        if (parts) {
+            return { r: parseInt(parts[1]), g: parseInt(parts[2]), b: parseInt(parts[3]) };
+        }
+        return null;
+    }
+
+    function rgbToHsl(r, g, b) {
+        r /= 255; g /= 255; b /= 255;
+        var max = Math.max(r, g, b), min = Math.min(r, g, b);
+        var h, s, l = (max + min) / 2;
+
+        if(max == min){
+            h = s = 0; // achromatic
+        }else{
+            var d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+            switch(max){
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return[h, s, l];
+    }
+
+    function hslToRgb(h, s, l) {
+        var r, g, b;
+        if(s == 0){
+            r = g = b = l; // achromatic
+        }else{
+            var hue2rgb = function hue2rgb(p, q, t){
+                if(t < 0) t += 1;
+                if(t > 1) t -= 1;
+                if(t < 1/6) return p + (q - p) * 6 * t;
+                if(t < 1/2) return q;
+                if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                return p;
+            }
+            var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            var p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return[Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
+    // Contrast fixup shared with pagination (CssParser.adaptColorForTheme):
+    // stylesheet rules like p.P_Plat{color:#000} beat inherited body color, so we must
+    // walk computed styles for all elements, not just [style*="color"]. Neutral
+    // low-contrast text becomes the theme text color; saturated author colors are kept.
+    function readerContrastShouldSkip(el) {
+        if (!el || !el.tagName) return true;
+        var tag = el.tagName.toUpperCase();
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'META' ||
+            tag === 'IMG' || tag === 'VIDEO' || tag === 'CANVAS' ||
+            tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT' || tag === 'TEXTAREA') {
+            return true;
+        }
+        if (el.closest) {
+            if (el.closest('svg')) return true;
+            if (el.closest('a[href]')) return true;
+            if (el.closest('#reader-selection-menu, .reader-selection-handle, #reader-tts-highlight-layer')) return true;
+            if (el.closest('span[class*="user-highlight-"], mark.reader-user-highlight, .reader-highlight')) return true;
+        }
+        return false;
+    }
+
+    function readerContrastChroma(rgb) {
+        var max = Math.max(rgb.r, rgb.g, rgb.b) / 255;
+        var min = Math.min(rgb.r, rgb.g, rgb.b) / 255;
+        return max - min;
+    }
+
+    function readerContrastRestore(el) {
+        if (el.hasAttribute('data-reader-orig-color')) {
+            var origColor = el.getAttribute('data-reader-orig-color');
+            var origColorPriority = el.getAttribute('data-reader-orig-color-priority') || '';
+            if (origColor) {
+                el.style.setProperty('color', origColor, origColorPriority);
+            } else {
+                el.style.removeProperty('color');
+            }
+            el.removeAttribute('data-reader-orig-color');
+            el.removeAttribute('data-reader-orig-color-priority');
+        } else if (el.hasAttribute('data-reader-contrast-fg')) {
+            el.style.removeProperty('color');
+            el.removeAttribute('data-reader-contrast-fg');
+        }
+        if (el.hasAttribute('data-reader-orig-bg')) {
+            var origBg = el.getAttribute('data-reader-orig-bg');
+            var origBgPriority = el.getAttribute('data-reader-orig-bg-priority') || '';
+            if (origBg) {
+                el.style.setProperty('background-color', origBg, origBgPriority);
+            } else {
+                el.style.removeProperty('background-color');
+            }
+            el.removeAttribute('data-reader-orig-bg');
+            el.removeAttribute('data-reader-orig-bg-priority');
+        } else if (el.hasAttribute('data-reader-contrast-bg')) {
+            el.style.removeProperty('background-color');
+            el.removeAttribute('data-reader-contrast-bg');
+        }
+    }
+
+    function readerContrastRemember(el, kind) {
+        if (kind === 'color') {
+            if (!el.hasAttribute('data-reader-orig-color') && !el.hasAttribute('data-reader-contrast-fg')) {
+                el.setAttribute('data-reader-orig-color', el.style.getPropertyValue('color') || '');
+                el.setAttribute('data-reader-orig-color-priority', el.style.getPropertyPriority('color') || '');
+            }
+        } else {
+            if (!el.hasAttribute('data-reader-orig-bg') && !el.hasAttribute('data-reader-contrast-bg')) {
+                el.setAttribute('data-reader-orig-bg', el.style.getPropertyValue('background-color') || '');
+                el.setAttribute('data-reader-orig-bg-priority', el.style.getPropertyPriority('background-color') || '');
+            }
+        }
+    }
+
+    window.readerAdjustAuthorColorsForContrast = function(isDark, bgHex, textHex) {
+        try {
+            var effectiveText = textHex || (isDark ? '#E0E0E0' : '#000000');
+            var bgRgb = hexToRgb(bgHex);
+            var bgLum = getLuminance(bgRgb.r, bgRgb.g, bgRgb.b);
+            if (!document.body) return 0;
+            var previouslyFixed = document.querySelectorAll(
+                '[data-reader-orig-color], [data-reader-orig-bg], [data-reader-contrast-fg], [data-reader-contrast-bg]'
+            );
+            for (var restoreIndex = 0; restoreIndex < previouslyFixed.length; restoreIndex++) {
+                readerContrastRestore(previouslyFixed[restoreIndex]);
+            }
+            var fixed = 0;
+            var elements = document.body.querySelectorAll('*');
+            for (var index = 0; index < elements.length; index++) {
+                var el = elements[index];
+                if (readerContrastShouldSkip(el)) continue;
+                var style = null;
+                try {
+                    style = window.getComputedStyle(el);
+                } catch (e) {
+                    continue;
+                }
+                if (!style) continue;
+                var rgb = rgbStringToRgb(style.color);
+                if (rgb) {
+                    if (readerContrastChroma(rgb) < 0.2 && contrastRatio(rgb, bgRgb) < 4.5) {
+                        readerContrastRemember(el, 'color');
+                        el.style.setProperty('color', effectiveText, 'important');
+                        el.setAttribute('data-reader-contrast-fg', 'true');
+                        fixed++;
+                    }
+                }
+                var bgStr = style.backgroundColor;
+                if (bgStr && bgStr !== 'rgba(0, 0, 0, 0)' && bgStr !== 'transparent') {
+                    var bgImage = style.backgroundImage;
+                    if (!bgImage || bgImage === 'none') {
+                        var elementBg = rgbStringToRgb(bgStr);
+                        if (elementBg) {
+                            var lum = getLuminance(elementBg.r, elementBg.g, elementBg.b);
+                            var shouldClear = (isDark && lum > 0.5) || (!isDark && lum < 0.2);
+                            if (shouldClear) {
+                                readerContrastRemember(el, 'background');
+                                el.style.setProperty('background-color', 'transparent', 'important');
+                                el.setAttribute('data-reader-contrast-bg', 'true');
+                                fixed++;
+                            }
+                        }
+                    }
+                }
+            }
+            window.__readerLastContrastArgs = { isDark: !!isDark, bgHex: bgHex, textHex: effectiveText };
+            return fixed;
+        } catch (e) {
+            return 0;
+        }
+    };
+
+    // Legacy name kept for existing native callers; now covers stylesheet colors too.
+    window.adjustInlineColorsForContrast = function(isDark, bgHex, textHex) {
+        return window.readerAdjustAuthorColorsForContrast(isDark, bgHex, textHex);
+    };
+
+    (function installContrastMutationObserver() {
+        if (!window.MutationObserver || window.__readerContrastObserverInstalled) return;
+        window.__readerContrastObserverInstalled = true;
+        var debounce = null;
+        function schedule() {
+            if (debounce !== null) return;
+            debounce = window.setTimeout(function () {
+                debounce = null;
+                var args = window.__readerLastContrastArgs;
+                if (args && window.readerAdjustAuthorColorsForContrast) {
+                    window.readerAdjustAuthorColorsForContrast(args.isDark, args.bgHex, args.textHex);
+                }
+            }, 250);
+        }
+        function observe() {
+            if (!document.body) {
+                window.setTimeout(observe, 300);
+                return;
+            }
+            try {
+                var observer = new MutationObserver(function (mutations) {
+                    for (var i = 0; i < mutations.length; i++) {
+                        if (mutations[i].addedNodes && mutations[i].addedNodes.length) {
+                            schedule();
+                            return;
+                        }
+                    }
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+            } catch (e) {}
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', observe, { once: true });
+        } else {
+            observe();
+        }
+    })();
+
+    function handleHighlightInteraction(e) {
+        if (window.getSelection && window.getSelection().toString().trim().length > 0) {
+            return false;
+        }
+
+        var target = e.target;
+        var highlightSpan = null;
+
+        while (target && target !== document.body) {
+            var isHighlight = false;
+            if (target.nodeType === Node.ELEMENT_NODE && target.classList) {
+                for (var i = 0; i < target.classList.length; i++) {
+                    if (target.classList[i].startsWith("user-highlight-")) {
+                        isHighlight = true;
+                        break;
+                    }
+                }
+            }
+
+            if (isHighlight) {
+                highlightSpan = target;
+                break;
+            }
+
+            target = target.parentNode;
+        }
+
+        if (highlightSpan) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            if (window.getSelection) {
+                window.getSelection().removeAllRanges();
+            }
+
+            var text = highlightSpan.textContent;
+            var rect = highlightSpan.getBoundingClientRect();
+            var rawCfi = highlightSpan.getAttribute("data-cfi");
+
+            if (!rawCfi) {
+                var cfiResult = window.getCfiPathForElement(highlightSpan, 0);
+                rawCfi = cfiResult.cfi;
+            }
+
+            var cfiToReport = rawCfi;
+
+            if (rawCfi && rawCfi.includes(";;")) {
+                var cfiParts = rawCfi.split(";;");
+                cfiToReport = cfiParts[cfiParts.length - 1];
+            }
+
+            if (window.HighlightBridge) {
+                window.HighlightBridge.onHighlightClicked(cfiToReport, text, rect.left, rect.top, rect.right, rect.bottom);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    function hasSemanticToken(value, expected) {
+        var tokens = String(value || '').trim().split(/\s+/);
+        return tokens.some(function (token) {
+            return expected.indexOf(token.toLowerCase()) !== -1;
+        });
+    }
+
+    function isSemanticNoteElement(element) {
+        if (!element) return false;
+        if (hasSemanticToken(element.getAttribute('epub:type'), ['footnote', 'endnote'])) return true;
+        if (hasSemanticToken(element.getAttribute('role'), ['doc-footnote', 'doc-endnote'])) return true;
+        return Array.prototype.some.call(element.classList || [], function (name) {
+            var normalized = String(name).toLowerCase();
+            return normalized === 'footnote' || normalized === 'endnote';
+        });
+    }
+
+    function noteContainerForTarget(element) {
+        if (!element) return null;
+        var current = element;
+        while (current) {
+            if (isSemanticNoteElement(current)) return current;
+            current = current.parentElement;
+        }
+        current = element.parentElement;
+        while (current) {
+            if (/^(ASIDE|LI|P|DIV|SECTION)$/.test(current.tagName)) return current;
+            current = current.parentElement;
+        }
+        return element;
+    }
+
+    function getFootnoteContent(targetId, rootDocument) {
+        console.log("FootnoteDiag: Searching for footnote content with id: '" + targetId + "'");
+
+        var searchDocument = rootDocument || document;
+        var el = searchDocument.getElementById(targetId);
+        if (el) {
+            console.log("FootnoteDiag: Found element directly in DOM.");
+            var container = noteContainerForTarget(el);
+            return container ? container.innerHTML : null;
+        }
+
+        if (searchDocument !== document) return null;
+        console.log("FootnoteDiag: Element not in DOM, checking virtualized chunks.");
+        if (window.virtualization && window.virtualization.chunksData) {
+            for (var i = 0; i < window.virtualization.chunksData.length; i++) {
+                var chunkHtml = window.virtualization.chunksData[i];
+                if (chunkHtml && chunkHtml.indexOf('id="' + targetId + '"') !== -1) {
+                    console.log("FootnoteDiag: Found potential id match in chunk " + i);
+                    var tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = chunkHtml;
+                    var found = tempDiv.querySelector('#' + targetId);
+                    if (found) {
+                        console.log("FootnoteDiag: Successfully extracted note from chunk " + i + ".");
+                        var container = noteContainerForTarget(found);
+                        return container ? container.innerHTML : null;
+                    }
+                }
+            }
+        }
+        console.log("FootnoteDiag: Footnote content not found anywhere.");
+        return null;
+    }
+
+    function openFootnoteReference(anchor, href) {
+        var resolved = new URL(href, document.baseURI);
+        var targetId = decodeURIComponent((resolved.hash || '').replace(/^#/, ''));
+        if (!targetId) return Promise.resolve(false);
+
+        if (window.FootnoteBridge && window.FootnoteBridge.resolveFootnoteLink) {
+            var bridgedContent = window.FootnoteBridge.resolveFootnoteLink(resolved.href);
+            if (bridgedContent) return Promise.resolve(bridgedContent);
+        }
+
+        var currentDocumentUrl = new URL(document.location.href);
+        currentDocumentUrl.hash = '';
+        var targetDocumentUrl = new URL(resolved.href);
+        targetDocumentUrl.hash = '';
+        if (currentDocumentUrl.href === targetDocumentUrl.href) {
+            return Promise.resolve(getFootnoteContent(targetId, document));
+        }
+
+        return fetch(targetDocumentUrl.href)
+            .then(function (response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.text();
+            })
+            .then(function (html) {
+                var targetDocument = new DOMParser().parseFromString(html, 'text/html');
+                return getFootnoteContent(targetId, targetDocument);
+            })
+            .catch(function (error) {
+                console.log('FootnoteDiag: Cross-document note lookup failed: ' + error);
+                return null;
+            });
+    }
+
+    // 1. Handle Taps (Click)
+    document.addEventListener("click", function (e) {
+        if (handleHighlightInteraction(e)) return;
+
+        var target = e.target;
+        var anchor = target.closest('a');
+
+        if (anchor) {
+            var href = anchor.getAttribute('href');
+            var epubType = anchor.getAttribute('epub:type');
+            var linkText = (anchor.textContent || '').trim().substring(0, 80);
+
+            console.log("LINK_NAV: [JS-CLICK] href='" + href + "', epub:type='" + epubType + "', label='" + linkText + "'");
+
+            console.log("FootnoteDiag: Link clicked. href: '" + href + "', epub:type: '" + epubType + "'");
+
+            var isNoteref = hasSemanticToken(epubType, ['noteref']) ||
+                hasSemanticToken(anchor.getAttribute('role'), ['doc-noteref']);
+            if (isNoteref && href) {
+                console.log("LINK_NAV: [JS-CLASSIFY] type=NOTEREF, href='" + href + "'");
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                openFootnoteReference(anchor, href).then(function (content) {
+                    if (content && window.FootnoteBridge && window.FootnoteBridge.onFootnoteRequested) {
+                        console.log("FootnoteDiag: Content extracted, sending to Kotlin Bridge.");
+                        window.FootnoteBridge.onFootnoteRequested(content);
+                    } else if (window.LinkNavBridge && window.LinkNavBridge.onLinkClicked) {
+                        console.log("FootnoteDiag: Note lookup failed; falling back to navigation.");
+                        window.LinkNavBridge.onLinkClicked(anchor.href || href, epubType || '', linkText);
+                    }
+                });
+                return;
+            }
+
+            if (window.LinkNavBridge && window.LinkNavBridge.onLinkClicked) {
+                window.LinkNavBridge.onLinkClicked(href || '', epubType || '', linkText);
+            }
+        } else {
+            console.log("LINK_NAV: [JS-NO-ANCHOR] No <a> tag found in click target hierarchy");
+        }
+    }, true);
+
+    function getReaderImageElements() {
+        return Array.prototype.slice.call(document.querySelectorAll("img, svg, video, canvas, image"));
+    }
+
+    function rememberReaderImageAnchors() {
+        getReaderImageElements().forEach(function (image) {
+            if (image.getAttribute("data-reader-image-anchor")) return;
+
+            var parent = image.parentElement || document.body;
+            var imageRect = image.getBoundingClientRect();
+            var parentRect = parent.getBoundingClientRect();
+            var parentWidth = parentRect.width || document.documentElement.clientWidth || window.innerWidth || 0;
+
+            if (!parentWidth || imageRect.width <= 0) {
+                image.setAttribute("data-reader-image-anchor", "center");
+                return;
+            }
+
+            var imageCenter = imageRect.left + imageRect.width / 2;
+            var parentCenter = parentRect.left + parentWidth / 2;
+            var tolerance = Math.max(4, parentWidth * 0.08);
+            var anchor = "center";
+
+            if (Math.abs(imageCenter - parentCenter) <= tolerance || imageRect.width >= parentWidth - 2) {
+                anchor = "center";
+            } else if (imageCenter > parentCenter) {
+                anchor = "right";
+            } else {
+                anchor = "left";
+            }
+
+            image.setAttribute("data-reader-image-anchor", anchor);
+        });
+    }
+
+    function applyReaderImageAnchors() {
+        getReaderImageElements().forEach(function (image) {
+            var anchor = image.getAttribute("data-reader-image-anchor") || "center";
+
+            image.style.setProperty("display", window.__readerHideImages ? "none" : "block", "important");
+            image.style.setProperty("height", "auto", "important");
+            image.style.setProperty("object-fit", "contain", "important");
+
+            if (anchor === "right") {
+                image.style.setProperty("float", "none", "important");
+                image.style.setProperty("margin-left", "auto", "important");
+                image.style.setProperty("margin-right", "0", "important");
+            } else if (anchor === "left") {
+                image.style.setProperty("margin-left", "0", "important");
+                image.style.setProperty("margin-right", "auto", "important");
+            } else {
+                image.style.setProperty("float", "none", "important");
+                image.style.setProperty("margin-left", "auto", "important");
+                image.style.setProperty("margin-right", "auto", "important");
+            }
+        });
+    }
+
+    window.updateReaderStyles = function (fontSizeEm, lineHeight, fontFamily, textAlign, paragraphGap, imageSize, horizontalMargin, verticalMargin, fontWeight, letterSpacing, hideImages) {
+        var logTag = "ReaderFontDiagnosis";
+        console.log(
+            logTag +
+                ": updateReaderStyles called. Size: " +
+                fontSizeEm +
+                ", LineHeight: " +
+                lineHeight +
+                ", Font: '" +
+                fontFamily +
+                  "', Align: '" +
+                  textAlign +
+                  "', Gap: " +
+                  paragraphGap +
+                  ", ImageSize: " +
+                  imageSize +
+                  ", HorizontalMargin: " +
+                  horizontalMargin +
+                  ", VerticalMargin: " +
+                  verticalMargin
+          );
+
+        var dynamicStyleId = "dynamicReaderStyles";
+        var dynamicStyleElement = document.getElementById(dynamicStyleId);
+
+        if (!dynamicStyleElement) {
+            dynamicStyleElement = document.createElement("style");
+            dynamicStyleElement.setAttribute("id", dynamicStyleId);
+            document.head.appendChild(dynamicStyleElement);
+        }
+
+        var newFontSize = parseFloat(fontSizeEm);
+        var newLineHeight = parseFloat(lineHeight);
+        var newGap = parseFloat(paragraphGap);
+        var newImageSize = parseFloat(imageSize);
+        var newHorizontalMargin = parseFloat(horizontalMargin);
+        var newVerticalMargin = parseFloat(verticalMargin);
+        var newFontWeight = parseInt(fontWeight, 10);
+        var newLetterSpacing = parseFloat(letterSpacing);
+        // CSS vh units resolve to 0 in some Android WebViews (loadDataWithBaseURL +
+        // fixed documentElement height), which turned every `max-height: 92vh` image cap
+        // into a 0px collapse (cover appears, then vanishes once styles apply). Measure
+        // the viewport in JS instead; fall back to no cap rather than a bogus one.
+        var viewportHPx = window.innerHeight || document.documentElement.clientHeight || 0;
+        var newImageMaxHPx = viewportHPx > 0 ? Math.round(viewportHPx * 0.92) : 0;
+
+        if (isNaN(newFontSize) || newFontSize < 0.5 || newFontSize > 5.0) newFontSize = 1.0;
+        if (isNaN(newLineHeight) || newLineHeight < 1.0 || newLineHeight > 3.0) newLineHeight = 1.0;
+        if (isNaN(newGap) || newGap < 0.0 || newGap > 3.0) newGap = 1.0;
+        if (isNaN(newImageSize) || newImageSize < 0.5 || newImageSize > 2.0) newImageSize = 1.0;
+        if (isNaN(newHorizontalMargin) || newHorizontalMargin < 0.0 || newHorizontalMargin > 3.0) newHorizontalMargin = 1.0;
+        if (isNaN(newVerticalMargin) || newVerticalMargin < 0.0 || newVerticalMargin > 3.0) newVerticalMargin = 1.0;
+        if (isNaN(newFontWeight) || newFontWeight < 0 || newFontWeight > 1000) newFontWeight = 0;
+        if (isNaN(newLetterSpacing) || newLetterSpacing < -0.1 || newLetterSpacing > 0.5) newLetterSpacing = 0;
+
+        window.__readerHideImages = !!hideImages;
+
+        var styleSignature = [
+            newFontSize,
+            newLineHeight,
+            fontFamily || "",
+            textAlign || "",
+            newGap,
+            newImageSize,
+            newHorizontalMargin,
+            newVerticalMargin,
+            newFontWeight,
+            newLetterSpacing,
+            hideImages ? 1 : 0,
+        ].join("|");
+
+        if (window.__readerStyleSignature === styleSignature && dynamicStyleElement.innerHTML.trim().length > 0) {
+            logVerticalJitter(
+                "jsStyleSkip unchanged scrollY=" +
+                    Math.round(window.scrollY || window.pageYOffset || 0) +
+                    " signature=" +
+                    styleSignature,
+            );
+            return false;
+        }
+
+        var scrollYBeforeStyle = Math.round(window.scrollY || window.pageYOffset || 0);
+        var scrollHeightBeforeStyle = Math.round(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+        window.__readerStyleSignature = styleSignature;
+        rememberReaderImageAnchors();
+
+        var fontCss = "";
+        if (fontFamily && fontFamily !== "Original" && fontFamily !== "") {
+            var fallback = "sans-serif";
+            if (fontFamily === "Merriweather" || fontFamily === "Lora") {
+                fallback = "serif";
+            } else if (fontFamily === "Roboto Mono") {
+                fallback = "monospace";
+            }
+            fontCss = `
+            body, p, span, div, li, a, h1, h2, h3, h4, h5, h6, blockquote, td, th {
+                font-family: '${fontFamily}', ${fallback} !important;
+            }
+            `;
+        }
+
+        var alignCss = "";
+        var alignSelector = "body, p, li, div, h1, h2, h3, h4, h5, h6";
+        if (textAlign === "left") {
+            alignCss = alignSelector + " { text-align: left !important; }";
+        } else if (textAlign === "right") {
+            alignCss = alignSelector + " { text-align: right !important; }";
+        } else if (textAlign === "justify") {
+            alignCss = alignSelector + " { text-align: justify !important; -webkit-hyphens: auto !important; hyphens: auto !important; }";
+        }
+
+        var gapCss = "";
+        if (newGap !== 1.0) {
+            gapCss = `
+            body p, body ul, body ol, body blockquote {
+                margin-top: ${newGap}em !important;
+                margin-bottom: ${newGap}em !important;
+            }
+            body li {
+                margin-bottom: ${0.5 * newGap}em !important;
+            }
+            `;
+        }
+
+        var sizeCss = "";
+        if (newFontSize !== 1.0) {
+            sizeCss = `body { font-size: ${newFontSize}em !important; }`;
+        }
+
+        var lineHeightCss = "";
+        if (newLineHeight !== 1.0) {
+            lineHeightCss = `
+            body, p, div, span, li, a, h1, h2, h3, h4, h5, h6, blockquote, td, th {
+                line-height: ${newLineHeight} !important;
+            }
+            `;
+        }
+
+        var typographyDeclarations = [];
+        if (newFontWeight > 0) {
+            typographyDeclarations.push(`font-weight: ${newFontWeight} !important;`);
+        }
+        if (Math.abs(newLetterSpacing) > 0.0001) {
+            // Only override when the reader moved away from the default; otherwise
+            // publication letter-spacing must survive (parity with pagination engine).
+            typographyDeclarations.push(`letter-spacing: ${newLetterSpacing}em !important;`);
+        }
+        var typographyOverrideCss = typographyDeclarations.length > 0 ? `
+            body, p, div, span, li, a, h1, h2, h3, h4, h5, h6, blockquote, td, th {
+                ${typographyDeclarations.join("\n                ")}
+            }
+        ` : "";
+
+        var horizontalPaddingPx = Math.max(0, 16 * newHorizontalMargin);
+        var verticalPaddingPx = Math.max(0, 16 * newVerticalMargin);
+        var horizontalMarginCss = `
+            body {
+                box-sizing: border-box !important;
+                padding-left: ${horizontalPaddingPx}px !important;
+                padding-right: ${horizontalPaddingPx}px !important;
+                padding-top: ${verticalPaddingPx}px !important;
+                padding-bottom: ${verticalPaddingPx}px !important;
+                overflow-x: hidden !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+        `;
+
+        var viewportContainmentCss = `
+            html,
+            body,
+            #content-container {
+                overflow-x: hidden !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+            #content-container *,
+            body > * {
+                max-width: 100% !important;
+                min-width: 0 !important;
+            }
+            p, div, li, blockquote, section, article, aside, header, footer, main, span, a {
+                overflow-wrap: break-word !important;
+                word-break: normal !important;
+            }
+            /* Shoulder-note headings (Standard Ebooks div.aside: float right sidebar
+               in print) cannot survive single-column virtualized chunks: the float
+               context breaks across chunk boundaries and the headings vanish from
+               paint. Linearize them the way the publisher's own <=10em fallback
+               does; borders, margins and small-caps are preserved.
+               Visibility guards below are load-bearing: without explicit
+               display/visibility/overflow/position the linearized boxes have been
+               observed as 0-height or fully transparent in The_Path_to_Rome's
+               main chapter on Android WebView (see EpubBlankDiag asides). */
+            div.aside {
+                float: none !important;
+                clear: both !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
+                width: auto !important;
+                height: auto !important;
+                min-height: 0 !important;
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                position: static !important;
+                overflow: visible !important;
+                border: 1px solid currentColor !important;
+                padding: 1em !important;
+                margin: 1em 0 !important;
+                box-sizing: border-box !important;
+            }
+            pre, code, samp, kbd, .reader-txt-preformatted {
+                white-space: pre-wrap !important;
+                overflow-wrap: anywhere !important;
+                word-break: break-word !important;
+                max-width: 100% !important;
+            }
+            table {
+                max-width: 100% !important;
+            }
+            td, th {
+                overflow-wrap: normal;
+                word-break: normal;
+            }
+        `;
+
+        var imageCss = `
+            :root {
+                --reader-image-size: ${newImageSize};
+                --reader-image-max-h: ${newImageMaxHPx > 0 ? newImageMaxHPx + "px" : "none"};
+            }
+            body img,
+            body svg,
+            body video,
+            body canvas,
+            body image {
+                width: auto;
+                max-width: min(100%, calc(100% * var(--reader-image-size))) !important;
+                height: auto !important;
+                /* Book CSS (Standard Ebooks local.css) constrains figure images with
+                   parent-relative max-height (100%/60%). When the figure has no definite
+                   height yet (0px during first layout) that resolves to 0 and collapses
+                   the image to 0x0 even though the bitmap decoded (naturalWidth > 0).
+                   Cap via the JS-measured viewport instead of vh (vh is 0 in some
+                   WebViews): none first so images never collapse, then the px cap. */
+                max-height: none !important;
+                max-height: var(--reader-image-max-h, none) !important;
+                min-width: 0 !important;
+                min-height: 0 !important;
+                display: block !important;
+                float: none !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+                object-fit: contain !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+            /* An svg that asks for 100% width (Gutenberg SVG covers) has no intrinsic
+               dimensions, so width:auto above collapses it to 0x0. Honor the author
+               width; height stays auto (aspect from viewBox), still capped by the
+               max-width/max-height above. Fixed-size svgs (math) keep width:auto. */
+            body svg[width="100%"],
+            body .x-ebookmaker-cover svg {
+                width: 100%;
+            }
+            body p:has(> img:only-child),
+            body div:has(> img:only-child),
+            body figure {
+                text-align: center !important;
+            }
+            body figure {
+                height: auto !important;
+                min-height: 0 !important;
+                max-height: none !important;
+                width: auto !important;
+                max-width: 100% !important;
+                overflow: visible !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+            }
+            body figure img {
+                max-height: none !important;
+                max-height: var(--reader-image-max-h, none) !important;
+            }
+        `;
+
+        var hideImagesCss = hideImages
+            ? "body img { display: none !important; }"
+            : "";
+
+        dynamicStyleElement.innerHTML = [sizeCss, lineHeightCss, typographyOverrideCss, fontCss, alignCss, gapCss, viewportContainmentCss, imageCss, horizontalMarginCss, hideImagesCss].join("\n");
+        applyReaderImageAnchors();
+        setTimeout(applyReaderImageAnchors, 80);
+        // The stylesheet above is what collapses author-fixed-layout image wrappers, so a
+        // style change can break an image that was already laid out. Re-run the recovery
+        // once the new rules have been parsed instead of waiting for a reload.
+        if (window.recoverCollapsedReaderImages) {
+            window.recoverCollapsedReaderImages();
+            setTimeout(function () {
+                if (window.recoverCollapsedReaderImages) window.recoverCollapsedReaderImages();
+            }, 120);
+        }
+        logVerticalJitter(
+            "jsStyleApply scrollY=" +
+                scrollYBeforeStyle +
+                " scrollHeight=" +
+                scrollHeightBeforeStyle +
+                "->" +
+                Math.round(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)) +
+                " signature=" +
+                styleSignature,
+        );
+
+        setTimeout(
+            function () {
+                var computedBody = window.getComputedStyle(document.body).fontFamily;
+                console.log(logTag + ": [BODY] Computed font-family: " + computedBody);
+
+                var firstPara = document.querySelector("p");
+                if (firstPara) {
+                    var computedPara = window.getComputedStyle(firstPara).fontFamily;
+                    console.log(logTag + ":[PARAGRAPH] Computed font-family: " + computedPara);
+                }
+
+                if (fontFamily && fontFamily !== "") {
+                    var isCheckAvailable = document.fonts && document.fonts.check;
+                    if (isCheckAvailable) {
+                        var loaded = document.fonts.check("12px '" + fontFamily + "'");
+                        console.log(logTag + ": Font Loading Status -> document.fonts.check('" + fontFamily + "') = " + loaded);
+                    }
+                }
+            },
+            300
+        );
+
+        if (window.triggerInitialScrollStateReport) {
+            window.triggerInitialScrollStateReport();
+        } else if (window.reportScrollState) {
+            setTimeout(window.reportScrollState, 60);
+        }
+        return true;
+    };
+
+    window.TOC_FRAGMENTS = window.TOC_FRAGMENTS || [];
+
+    window.setTocFragments = function (jsonArray) {
+        var signature = JSON.stringify(jsonArray || []);
+        if (window.__readerTocFragmentsSignature === signature) {
+            logVerticalJitter("tocSkip unchanged count=" + ((jsonArray && jsonArray.length) || 0));
+            return false;
+        }
+        window.__readerTocFragmentsSignature = signature;
+        console.log("FRAG_NAV_DEBUG: window.setTocFragments called with " + jsonArray.length + " items.");
+        logVerticalJitter("tocApply count=" + jsonArray.length);
+        window.TOC_FRAGMENTS = jsonArray;
+        // Immediate audit and report
+        window.auditTocFragments();
+        window.reportScrollState();
+        return true;
+    };
+
+    var lastVerticalJitterScrollLogAt = 0;
+    var jitterProbeLastScrollY = null;
+    var jitterProbeLastScrollHeight = null;
+    var jitterProbeLastTime = 0;
+    var jitterProbeTrend = 0;
+    var jitterProbeLastAnomalyAt = 0;
+    var jitterProbeTouchActive = false;
+    var jitterProbeLastTouchY = null;
+    var jitterProbeExpectedScrollDirection = 0;
+
+    function updateVerticalJitterScrollProbe(scrollY, scrollHeight, clientHeight) {
+        var now = Date.now();
+        if (jitterProbeLastScrollY === null) {
+            jitterProbeLastScrollY = scrollY;
+            jitterProbeLastScrollHeight = scrollHeight;
+            jitterProbeLastTime = now;
+            return;
+        }
+
+        var deltaY = scrollY - jitterProbeLastScrollY;
+        var deltaHeight = scrollHeight - jitterProbeLastScrollHeight;
+        var elapsedMs = now - jitterProbeLastTime;
+        var direction = deltaY > 0 ? 1 : deltaY < 0 ? -1 : 0;
+        var wasOppositeToTouch =
+            jitterProbeTouchActive &&
+            jitterProbeExpectedScrollDirection !== 0 &&
+            direction !== 0 &&
+            direction !== jitterProbeExpectedScrollDirection;
+        var wasOppositeToTrend =
+            !jitterProbeTouchActive &&
+            jitterProbeTrend !== 0 &&
+            direction !== 0 &&
+            direction !== jitterProbeTrend;
+        var isSmallReverse = Math.abs(deltaY) >= 2 && Math.abs(deltaY) <= 96;
+        var canLogAnomaly = now - jitterProbeLastAnomalyAt >= 120;
+
+        if (deltaHeight !== 0 && canLogAnomaly) {
+            logVerticalJitter(
+                "scrollHeightChange y=" +
+                    jitterProbeLastScrollY +
+                    "->" +
+                    scrollY +
+                    " height=" +
+                    jitterProbeLastScrollHeight +
+                    "->" +
+                    scrollHeight +
+                    " touch=" +
+                    jitterProbeTouchActive,
+            );
+            jitterProbeLastAnomalyAt = now;
+        } else if ((wasOppositeToTouch || wasOppositeToTrend) && isSmallReverse && deltaHeight === 0 && canLogAnomaly) {
+            logVerticalJitter(
+                "scrollReverseSmall y=" +
+                    jitterProbeLastScrollY +
+                    "->" +
+                    scrollY +
+                    " dy=" +
+                    deltaY +
+                    " elapsedMs=" +
+                    elapsedMs +
+                    " expected=" +
+                    jitterProbeExpectedScrollDirection +
+                    " trend=" +
+                    jitterProbeTrend +
+                    " clientHeight=" +
+                    clientHeight,
+            );
+            jitterProbeLastAnomalyAt = now;
+        }
+
+        if (direction !== 0) {
+            jitterProbeTrend = direction;
+        }
+        jitterProbeLastScrollY = scrollY;
+        jitterProbeLastScrollHeight = scrollHeight;
+        jitterProbeLastTime = now;
+    }
+
+    window.reportScrollState = function () {
+        if (typeof PageInfoReporter !== "undefined" && PageInfoReporter.updateScrollState) {
+            var scrollY = Math.round(window.scrollY || window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0);
+            var scrollHeight = Math.round(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+            var clientHeight = Math.round(document.documentElement.clientHeight || window.innerHeight || 0);
+
+          if (clientHeight === 0) return;
+
+          var activeFragment = null;
+          var hasFoundVisible = false;
+
+          if (window.TOC_FRAGMENTS && window.TOC_FRAGMENTS.length > 0) {
+                var threshold = window.VIEWPORT_PADDING_TOP + 60;
+
+                for (var i = 0; i < window.TOC_FRAGMENTS.length; i++) {
+                    var id = window.TOC_FRAGMENTS[i];
+                    var el = document.getElementById(id) || document.querySelector('[name="' + id + '"]');
+
+                    if (el) {
+                        hasFoundVisible = true;
+                        var rect = el.getBoundingClientRect();
+
+                        console.log("FRAG_NAV_DEBUG: Checking #" + id + " | rect.top: " + Math.round(rect.top) + " | threshold: " + threshold);
+
+                        if (rect.top <= threshold) {
+                            activeFragment = id;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        if (!hasFoundVisible) {
+                            activeFragment = id;
+                        }
+                    }
+                }
+            }
+
+            // Fallback for the very start of the chapter
+            if (activeFragment === null && scrollY < 50 && window.TOC_FRAGMENTS && window.TOC_FRAGMENTS.length > 0) {
+                activeFragment = window.TOC_FRAGMENTS[0];
+            }
+
+            PageInfoReporter.updateScrollState(scrollY, scrollHeight, clientHeight, activeFragment);
+            updateVerticalJitterScrollProbe(scrollY, scrollHeight, clientHeight);
+            var now = Date.now();
+            if (now - lastVerticalJitterScrollLogAt >= 1000) {
+                logVerticalJitter(
+                    "scrollReport y=" +
+                        scrollY +
+                        " scrollHeight=" +
+                        scrollHeight +
+                        " clientHeight=" +
+                        clientHeight +
+                        " activeFragment=" +
+                        (activeFragment || ""),
+                );
+                lastVerticalJitterScrollLogAt = now;
+            }
+        }
+
+        window.reportTopChunk();
+    };
+
+    // ADD THIS NEW DIAGNOSTIC FUNCTION
+    window.auditTocFragments = function () {
+        console.log("FRAG_NAV_DEBUG: --- Starting DOM Audit ---");
+
+        if (!window.TOC_FRAGMENTS || window.TOC_FRAGMENTS.length === 0) {
+            console.log("FRAG_NAV_DEBUG: Audit failed - window.TOC_FRAGMENTS is empty.");
+            return;
+        }
+
+        var foundCount = 0;
+
+        window.TOC_FRAGMENTS.forEach((id) => {
+            var el = document.getElementById(id);
+
+            if (el) {
+                foundCount++;
+                console.log("FRAG_NAV_DEBUG: [FOUND] ID: " + id + " | Tag: " + el.tagName + " | OffsetTop: " + el.offsetTop);
+            } else {
+                console.log("FRAG_NAV_DEBUG: [MISSING] ID: " + id + " - Not in DOM.");
+            }
+        });
+        console.log("FRAG_NAV_DEBUG: Audit complete. Found " + foundCount + "/" + window.TOC_FRAGMENTS.length);
+
+        // Also log some random IDs from the DOM to see what's actually there
+        var allWithId = document.querySelectorAll("[id]");
+        console.log(
+            "FRAG_NAV_DEBUG: Sample IDs existing in DOM: " +
+                Array.from(allWithId)
+                    .slice(0, 5)
+                    .map((el) => el.id)
+                    .join(", "),
+        );
+    };
+
+    window.addEventListener(
+        "touchstart",
+        function (event) {
+            var touch = event.touches && event.touches[0];
+            jitterProbeTouchActive = true;
+            jitterProbeLastTouchY = touch ? touch.clientY : null;
+            jitterProbeExpectedScrollDirection = 0;
+        },
+        { passive: true },
+    );
+
+    window.addEventListener(
+        "touchmove",
+        function (event) {
+            var touch = event.touches && event.touches[0];
+            if (!touch || jitterProbeLastTouchY === null) return;
+            var fingerDeltaY = touch.clientY - jitterProbeLastTouchY;
+            if (Math.abs(fingerDeltaY) >= 1) {
+                jitterProbeExpectedScrollDirection = fingerDeltaY < 0 ? 1 : -1;
+            }
+            jitterProbeLastTouchY = touch.clientY;
+        },
+        { passive: true },
+    );
+
+    window.addEventListener(
+        "touchend",
+        function () {
+            jitterProbeLastTouchY = null;
+            setTimeout(function () {
+                jitterProbeTouchActive = false;
+                jitterProbeExpectedScrollDirection = 0;
+            }, 250);
+        },
+        { passive: true },
+    );
+
+    window.addEventListener(
+        "touchcancel",
+        function () {
+            jitterProbeTouchActive = false;
+            jitterProbeLastTouchY = null;
+            jitterProbeExpectedScrollDirection = 0;
+        },
+        { passive: true },
+    );
+
+    let scrollThrottleTimeout = null;
+     let lastScrollTime = 0;
+
+     window.addEventListener("scroll", function() {
+         const now = Date.now();
+         if (now - lastScrollTime >= 100) {
+             window.reportScrollState();
+             lastScrollTime = now;
+         } else {
+             if (scrollThrottleTimeout) clearTimeout(scrollThrottleTimeout);
+             scrollThrottleTimeout = setTimeout(function() {
+                 window.reportScrollState();
+                 lastScrollTime = Date.now();
+             }, 100);
+         }
+     }, { passive: true });
+
+     window.addEventListener("resize", window.reportScrollState);
+
+    window.triggerInitialScrollStateReport = function () {
+        var attempts = 0;
+        var maxAttempts = 15;
+
+        function tryReport() {
+            attempts++;
+            if (window.reportScrollState) {
+                window.reportScrollState();
+            }
+
+            if (attempts < maxAttempts) {
+                setTimeout(tryReport, 200);
+            }
+        }
+
+        setTimeout(tryReport, 50);
+    };
+
+    window.scrollToChapterStart = function () {
+        requestAnimationFrame(function () {
+            window.scrollTo(0, 0);
+
+            setTimeout(
+                function () {
+                    window.reportScrollState();
+                },
+
+                100,
+            );
+        });
+    };
+
+    window.scrollToChapterEnd = function () {
+        requestAnimationFrame(function () {
+            // body.scrollHeight can be shorter than documentElement.scrollHeight
+            // in valid XHTML. Use the same maximum reported to Android, or a
+            // chapter handoff lands visibly above its actual final edge.
+            var documentHeight = Math.max(
+                document.body ? document.body.scrollHeight : 0,
+                document.documentElement ? document.documentElement.scrollHeight : 0
+            );
+            var viewportHeight = Math.max(
+                window.innerHeight || 0,
+                document.documentElement ? document.documentElement.clientHeight : 0
+            );
+            var targetScrollY = documentHeight - viewportHeight;
+            if (targetScrollY < 0) targetScrollY = 0;
+            window.scrollTo(0, targetScrollY);
+
+            setTimeout(
+                function () {
+                    window.reportScrollState();
+                },
+
+                100,
+            );
+        });
+    };
+
+    window.scrollToSpecificY = function (yPosition) {
+        if (typeof yPosition === "number" && yPosition >= 0) {
+            window.scrollTo(0, yPosition);
+
+            setTimeout(
+                function () {
+                    window.reportScrollState();
+                },
+
+                100,
+            );
+        } else {
+            setTimeout(
+                function () {
+                    window.reportScrollState();
+                },
+
+                100,
+            );
+        }
+    };
+
+    function initializeReaderContent() {
+        applyMobileOptimizationsAndSelection();
+    }
+
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+        initializeReaderContent();
+    } else {
+        document.addEventListener("DOMContentLoaded", initializeReaderContent);
+    }
+
+    window.CURRENT_SEARCH_QUERY = "";
+
+    window.clearSearchHighlights = function () {
+        window.CURRENT_SEARCH_QUERY = "";
+        document.querySelectorAll("mark.search-highlight").forEach(function (el) {
+            var parent = el.parentNode;
+            if (parent) {
+                while (el.firstChild) {
+                    parent.insertBefore(el.firstChild, el);
+                }
+                parent.removeChild(el);
+                parent.normalize();
+            }
+        });
+        return "JS: Search highlights cleared.";
+    };
+
+    window.highlightAllOccurrences = function (query) {
+        window.clearSearchHighlights();
+        window.CURRENT_SEARCH_QUERY = query;
+
+        if (!query || query.length < 2) return "JS: Query too short for highlighting.";
+
+        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+        var nodesToModify =[];
+
+        while ((node = walker.nextNode())) {
+            if (node.nodeValue.toLowerCase().includes(query.toLowerCase())) {
+                nodesToModify.push(node);
+            }
+        }
+
+        var regex = new RegExp("(" + query.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&") + ")", "gi");
+
+        nodesToModify.forEach(function (textNode) {
+            if (textNode.parentNode && textNode.parentNode.tagName !== "SCRIPT" && textNode.parentNode.tagName !== "STYLE") {
+                var tempDiv = document.createElement("div");
+                tempDiv.innerHTML = textNode.nodeValue.replace(regex, '<mark class="search-highlight">$1</mark>');
+
+                var parent = textNode.parentNode;
+                while (tempDiv.firstChild) {
+                    parent.insertBefore(tempDiv.firstChild, textNode);
+                }
+                parent.removeChild(textNode);
+            }
+        });
+
+        return "JS: Highlighted " + document.querySelectorAll("mark.search-highlight").length + " occurrences.";
+    };
+
+    window.scrollToChunkOccurrence = function (chunkIndex, relativeIndex) {
+        console.log("NavDiag: scrollToChunkOccurrence chunk=" + chunkIndex + ", relativeIdx=" + relativeIndex);
+        var chunkDiv = document.querySelector(`.chunk-container[data-chunk-index='${chunkIndex}']`);
+
+        if (chunkDiv) {
+            let wasEmpty = false;
+
+            if (chunkDiv.innerHTML === "" && window.virtualization && window.virtualization.chunksData[chunkIndex]) {
+                console.log("NavDiag: Chunk was empty, restoring content before scrolling.");
+                chunkDiv.innerHTML = window.virtualization.chunksData[chunkIndex];
+                chunkDiv.style.height = "";
+                wasEmpty = true;
+            }
+
+            var highlights = chunkDiv.querySelectorAll("mark.search-highlight");
+
+            if ((wasEmpty || highlights.length === 0) && window.CURRENT_SEARCH_QUERY) {
+                window.highlightAllOccurrences(window.CURRENT_SEARCH_QUERY);
+                highlights = chunkDiv.querySelectorAll("mark.search-highlight");
+            }
+
+            if (highlights && highlights.length > 0) {
+                var targetIdx = (relativeIndex >= 0 && relativeIndex < highlights.length) ? relativeIndex : 0;
+                highlights[targetIdx].scrollIntoView({ behavior: "auto", block: "center", inline: "nearest" });
+                return "JS: Scrolled to relative occurrence " + targetIdx + " in chunk " + chunkIndex;
+            } else {
+                chunkDiv.scrollIntoView({ behavior: "auto", block: "center" });
+                return "JS: No highlights in chunk, scrolled to chunk center.";
+            }
+        }
+        return "JS: Chunk " + chunkIndex + " not found.";
+    };
+
+    /**
+     * The raw character position [node]:[offset] occupies inside [root].
+     *
+     * This is the walker's own coordinate system: it counts every character between elements,
+     * whitespace included. It is only ever a hint — the reader stores offsets in the text
+     * pagination produced, which is not this space.
+     */
+    function readerTtsRawOffsetForPosition(root, node, offset) {
+        if (!root || !node) return -1;
+        const nodes = readerTtsBlockTextNodes(root);
+        let raw = 0;
+        for (let i = 0; i < nodes.length; i++) {
+            if (nodes[i] === node) return raw + offset;
+            raw += (nodes[i].nodeValue || '').length;
+        }
+        return -1;
+    }
+
+    /**
+     * The range [text] occupies inside [root], or null when the text is not there.
+     *
+     * Whitespace is the one thing two coordinate systems disagree about: a stored offset is
+     * measured in the text pagination produced, while a DOM walk counts the raw characters between
+     * elements, so every whitespace run and every line break moves them apart. Comparing with
+     * whitespace removed lets either space find the same words, and [hintOffset] - the raw position
+     * the stored offset points at - keeps a repeated sentence on the occurrence the reader is
+     * actually reading rather than on the first one in the block.
+     */
+    function readerTtsRangeForText(root, text, hintOffset) {
+        if (!root || !text) return null;
+        const target = text.replace(/\s+/g, '');
+        if (!target) return null;
+
+        const nodes = readerTtsBlockTextNodes(root);
+        let flat = '';
+        const positions = [];
+        let rawCursor = 0;
+        for (let i = 0; i < nodes.length; i++) {
+            const value = nodes[i].nodeValue || '';
+            for (let j = 0; j < value.length; j++) {
+                if (/\s/.test(value.charAt(j))) continue;
+                flat += value.charAt(j);
+                positions.push({ node: nodes[i], offset: j, raw: rawCursor + j });
+            }
+            rawCursor += value.length;
+        }
+
+        let best = null;
+        let bestDistance = 0;
+        let from = 0;
+        for (;;) {
+            const found = flat.indexOf(target, from);
+            if (found < 0) break;
+            const start = positions[found];
+            const end = positions[found + target.length - 1];
+            if (start && end) {
+                const distance = hintOffset < 0 ? 0 : Math.abs(start.raw - hintOffset);
+                if (!best || distance < bestDistance) {
+                    const range = document.createRange();
+                    range.setStart(start.node, start.offset);
+                    range.setEnd(end.node, end.offset + 1);
+                    best = range;
+                    bestDistance = distance;
+                }
+            }
+            if (best && hintOffset < 0) break;
+            from = found + 1;
+        }
+        return best;
+    }
+
+    window.removeHighlight = function () {
+        var highlightNode;
+        var removedCount = 0;
+
+        while ((highlightNode = document.querySelector(".tts-highlight")) !== null) {
+            var parent = highlightNode.parentNode;
+
+            if (parent) {
+                try {
+                    while (highlightNode.firstChild) {
+                        parent.insertBefore(highlightNode.firstChild, highlightNode);
+                    }
+
+                    parent.removeChild(highlightNode);
+                    parent.normalize();
+                    removedCount++;
+                } catch (e) {
+                    if (highlightNode.parentNode) {
+                        // Check if it wasn't already removed by a concurrent process
+                        highlightNode.remove(); // Fallback removal
+                    }
+
+                    break; // Exit loop on error to prevent infinite loop on a problematic node
+                }
+            } else {
+                try {
+                    highlightNode.remove();
+                    removedCount++;
+                } catch (e_orphan) {
+                    // console.error("JS: Error removing orphaned highlight node: " + e_orphan.message, highlightNode);
+                }
+
+                break;
+            }
+        }
+    };
+
+    const TTS_HIGHLIGHT_LOG_TAG = "TTS_HIGHLIGHT_DIAGNOSIS";
+    const TTS_HIGHLIGHT_BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, td, th";
+
+    function getTtsHighlightBlock(node) {
+        if (!node) {
+            return document.body;
+        }
+
+        const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+        return (element && element.closest(TTS_HIGHLIGHT_BLOCK_SELECTOR)) || document.body;
+    }
+
+    window.highlightFromCfi = function (cfi, textToHighlight, startOffset) {
+        console.log(`$ {
+            TTS_HIGHLIGHT_LOG_TAG
+        }
+
+        : highlightFromCfi called. CFI='${cfi}', Offset=$ {
+            startOffset
+        }
+
+        , Text='${textToHighlight.substring(0, 50)}...' `);
+        console.log("TTS_LIST_DIAG: Attempting highlight. CFI: " + cfi + " Text: '" + textToHighlight.substring(0, 20) + "' Offset: " + startOffset);
+
+        window.removeHighlight();
+
+        if (!cfi || !textToHighlight) {
+            const errorMsg = "JS: CFI or text missing.";
+
+            console.log(`$ {
+                TTS_HIGHLIGHT_LOG_TAG
+            }
+
+            : $ {
+                errorMsg
+            }
+
+            `);
+            return errorMsg;
+        }
+
+        try {
+            console.log(`${TTS_HIGHLIGHT_LOG_TAG}: Resolving CFI to node...`);
+            const location = window.getNodeAndOffsetFromCfi(cfi, true);
+
+            if (!location || !location.node) {
+                const errorMsg = "JS: Could not find node for CFI.";
+
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : $ {
+                    errorMsg
+                }
+
+                `);
+                return errorMsg;
+            }
+
+            console.log(`$ {
+                TTS_HIGHLIGHT_LOG_TAG
+            }
+
+            : Node found for CFI. Node type: $ {
+                location.node.nodeName
+            }
+
+            , Text content: '${(location.node.textContent || "").substring(0, 50)}...' `);
+
+            const baseNode = location.node;
+            const highlightRoot = getTtsHighlightBlock(baseNode);
+
+            // 1. Find the range to highlight.
+            //
+            // The stored offset lands the range in the block but cannot place it exactly: it is
+            // measured in the text pagination produced, and a text-node walk counts raw
+            // characters, so the two drift by every whitespace run and <br> in between. The spoken
+            // text is present in the very same block, so it places the range itself, and the
+            // offset only chooses between repeated occurrences.
+            const hintOffset = readerTtsRawOffsetForPosition(highlightRoot, baseNode, startOffset);
+            let range = readerTtsRangeForText(highlightRoot, textToHighlight, hintOffset);
+            let remainingTextLength = 0;
+
+            if (range) {
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : Spoken text located directly. rawHint=$ {
+                    hintOffset
+                }
+
+                `);
+            } else {
+            let remainingOffset = startOffset;
+
+            const treeWalker = document.createTreeWalker(highlightRoot, NodeFilter.SHOW_TEXT, null, false);
+            treeWalker.currentNode = baseNode;
+
+            let currentNode = baseNode.nodeType === Node.TEXT_NODE ? baseNode : treeWalker.nextNode();
+
+            // 1. Find the starting text node and character position
+            while (currentNode && remainingOffset >= currentNode.nodeValue.length) {
+                remainingOffset -= currentNode.nodeValue.length;
+                currentNode = treeWalker.nextNode();
+            }
+
+            if (!currentNode) {
+                const errorMsg = "JS: Text offset is out of bounds for the CFI node.";
+
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : $ {
+                    errorMsg
+                }
+
+                `);
+                return errorMsg;
+            }
+
+            console.log(`$ {
+                TTS_HIGHLIGHT_LOG_TAG
+            }
+
+            : Start node for range found. Node: '${currentNode.nodeValue.substring(0, 50)}...', calculated offset: $ {
+                remainingOffset
+            }
+
+            `);
+
+            range = document.createRange();
+            range.setStart(currentNode, remainingOffset);
+
+            // 2. Find the ending text node and character position
+            remainingTextLength = textToHighlight.length;
+            let endNode = currentNode;
+            let endOffset = remainingOffset;
+            let sanityCheck = 0;
+
+            while (remainingTextLength > 0 && endNode && sanityCheck < 50) {
+                const availableLength = endNode.nodeValue.length - endOffset;
+
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : Finding end range. Remaining text: $ {
+                    remainingTextLength
+                }
+
+                , Current node: '${endNode.nodeValue.substring(0, 50)}...', available length: $ {
+                    availableLength
+                }
+
+                `);
+
+                if (availableLength >= remainingTextLength) {
+                    endOffset += remainingTextLength;
+                    remainingTextLength = 0;
+                } else {
+                    remainingTextLength -= availableLength;
+                    // Important: We need a fresh walker starting from the endNode to find the *next* text node reliably
+                    const nextNodeWalker = document.createTreeWalker(highlightRoot, NodeFilter.SHOW_TEXT, null, false);
+                    nextNodeWalker.currentNode = endNode;
+                    endNode = nextNodeWalker.nextNode();
+                    endOffset = 0; // Start from the beginning of the next node
+                }
+
+                sanityCheck++;
+            }
+
+            console.log(`$ {
+                TTS_HIGHLIGHT_LOG_TAG
+            }
+
+            : End node for range found. End node: '${endNode ? endNode.nodeValue.substring(0, 50) : "null"}', End offset: $ {
+                endOffset
+            }
+
+            `);
+
+            if (remainingTextLength > 0) {
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : Text to highlight was longer than found text nodes. Highlighting to end of last found node.`);
+
+                if (endNode) {
+                    range.setEnd(endNode, endNode.nodeValue.length);
+                } else {
+                    const lastKnownGoodNode = range.endContainer;
+                    range.setEnd(lastKnownGoodNode, lastKnownGoodNode.nodeValue.length);
+                }
+            } else {
+                range.setEnd(endNode, endOffset);
+            }
+            }
+
+            const highlightSpan = document.createElement("span");
+            highlightSpan.className = "tts-highlight";
+
+            try {
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : Attempting to surround content with highlight span.`);
+                range.surroundContents(highlightSpan);
+            } catch (e) {
+                console.log(`$ {
+                    TTS_HIGHLIGHT_LOG_TAG
+                }
+
+                : surroundContents failed, using same-block fallback. Error: $ {
+                    e.message
+                }
+
+                `);
+                if (!highlightRoot.contains(range.commonAncestorContainer)) {
+                    return "JS: Highlight range escaped current block.";
+                }
+                const contents = range.extractContents();
+                highlightSpan.appendChild(contents);
+                range.insertNode(highlightSpan);
+            }
+
+            console.log(`$ {
+                TTS_HIGHLIGHT_LOG_TAG
+            }
+
+            : Highlight successful. Scrolling into view.`);
+
+            highlightSpan.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+            return "JS: Highlight successful.";
+        } catch (e) {
+            const errorMsg = "JS: Error during highlightFromCfi: " + e.message;
+
+            console.log(`$ {
+            TTS_HIGHLIGHT_LOG_TAG
+        }
+
+        : $ {
+            errorMsg
+        }
+
+        `);
+            return errorMsg;
+        }
+    };
+
+    // --- EPUB media overlays: the publisher's own narration -------------------------------------
+    //
+    // Kept apart from the read-aloud highlight above on purpose. An overlay anchor is an element id
+    // resolved from the same parse that produced the text, so `getElementById` is exact and no CFI
+    // resolution or quote matching is involved. Painting by class on the element is also the only
+    // way the publisher's `media:active-class` can be honoured: the document here really is styled
+    // by the book's own stylesheet.
+    window.readerMediaOverlay = (function () {
+        var activeElement = null;
+        var publishedClass = null;
+        var FALLBACK_CLASS = "reader-media-overlay-active";
+        var STYLE_ID = "reader-media-overlay-style";
+
+        function ensureStyle() {
+            if (document.getElementById(STYLE_ID)) {
+                return;
+            }
+            var style = document.createElement("style");
+            style.id = STYLE_ID;
+            // A translucent fill that reads on paper and on a dark theme alike. The publisher's own
+            // class is applied in addition, and wins wherever the book declares a rule for it.
+            style.textContent = "." + FALLBACK_CLASS + " { background-color: rgba(255, 226, 102, 0.45); }";
+            (document.head || document.documentElement).appendChild(style);
+        }
+
+        /**
+         * True when the narrated line has left the viewport.
+         *
+         * A clip is a line and advances every couple of seconds, so this only has to guarantee the
+         * line is on screen at all — following on "not comfortably visible" would re-centre the
+         * page continuously.
+         */
+        function needsScroll(element) {
+            var rect = element.getBoundingClientRect();
+            if (!rect || (rect.top === 0 && rect.bottom === 0 && rect.height === 0)) {
+                return true;
+            }
+            var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            if (!viewportHeight) {
+                return true;
+            }
+            return rect.bottom <= 0 || rect.top >= viewportHeight;
+        }
+
+        function clear() {
+            if (!activeElement) {
+                return;
+            }
+            activeElement.classList.remove(FALLBACK_CLASS);
+            if (publishedClass) {
+                activeElement.classList.remove(publishedClass);
+            }
+            activeElement = null;
+            publishedClass = null;
+        }
+
+        /**
+         * Marks the narrated element. The follow flag asks for a scroll, and it only happens when
+         * the line is off screen — scrollIntoView with block: nearest never re-centres, which is
+         * what keeps a line-level clip from moving the page on every advance.
+         */
+        function show(elementId, activeClass, follow) {
+            try {
+                clear();
+                if (!elementId) {
+                    return "JS: no media overlay id";
+                }
+                var element = document.getElementById(elementId);
+                if (!element) {
+                    return "JS: no element for media overlay id " + elementId;
+                }
+                ensureStyle();
+                element.classList.add(FALLBACK_CLASS);
+                if (activeClass) {
+                    element.classList.add(activeClass);
+                    publishedClass = activeClass;
+                }
+                activeElement = element;
+                if (follow && needsScroll(element)) {
+                    element.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+                }
+                return "JS: media overlay fragment shown";
+            } catch (error) {
+                return "JS: media overlay show failed: " + (error && error.message ? error.message : error);
+            }
+        }
+
+        return { show: show, clear: clear };
+    })();
+
+    /**
+     * The text nodes of a block, in reading order.
+     */
+    function readerTtsBlockTextNodes(block) {
+        const nodes = [];
+        const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null, false);
+        let node;
+        while ((node = walker.nextNode()) !== null) {
+            if (node.nodeValue && node.nodeValue.length > 0) nodes.push(node);
+        }
+        return nodes;
+    }
+
+    /**
+     * The first line box that reaches past [readingTop].
+     *
+     * A block owns the viewport top once it starts there, but where inside the block the reading
+     * position is depends on the line, not the block: a chapter whose prose is a single element
+     * (fan-fiction and one-paragraph chapters are common) would otherwise always start from the
+     * chapter's first word, however far the reader had scrolled. Line boxes come back in reading
+     * order, so the first one reaching the top of the reading area is the line the reader is
+     * looking at, whether it straddles that top or starts below it.
+     */
+    function readerTtsFirstVisibleLineRect(nodes, readingTop) {
+        for (let i = 0; i < nodes.length; i++) {
+            const range = document.createRange();
+            range.selectNodeContents(nodes[i]);
+            const rects = range.getClientRects();
+            range.detach && range.detach();
+            for (let r = 0; r < rects.length; r++) {
+                const rect = rects[r];
+                // A zero-sized rect is collapsed or unrendered content and carries no line.
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                if (rect.bottom <= readingTop) continue;
+                return rect;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A collapsed caret position at the start of [lineRect].
+     *
+     * The point is placed at the line's leading edge, which snaps the caret to the first character
+     * of that line rather than to wherever the line's middle happens to be.
+     */
+    function readerTtsCaretAtLineStart(lineRect, block) {
+        let direction = 'ltr';
+        try {
+            direction = window.getComputedStyle(block).direction || 'ltr';
+        } catch (error) {}
+        const x = direction === 'rtl'
+            ? Math.max(0, lineRect.right - 1)
+            : Math.max(0, lineRect.left + 1);
+        const y = (lineRect.top + lineRect.bottom) / 2;
+        if (document.caretRangeFromPoint) {
+            return document.caretRangeFromPoint(x, y);
+        }
+        if (document.caretPositionFromPoint) {
+            const position = document.caretPositionFromPoint(x, y);
+            if (position && position.offsetNode) {
+                const range = document.createRange();
+                range.setStart(position.offsetNode, position.offset);
+                range.collapse(true);
+                return range;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Where [node]:[offset] sits in the block's rendered text.
+     *
+     * innerText collapses the whitespace a raw text-node walk counts and writes a newline for every
+     * line break element, so a DOM position cannot index the extracted text directly. Rendering the
+     * prefix and reading it back is the only way to measure it in the same coordinate system as the
+     * text being sliced, which is the coordinate system pagination stores offsets in.
+     */
+    function readerTtsRenderedTextOffset(block, node, offset) {
+        try {
+            const range = document.createRange();
+            range.setStart(block, 0);
+            range.setEnd(node, offset);
+            const holder = document.createElement('div');
+            // Rendered: innerText is a layout-dependent property, and an unrendered element
+            // answers with its raw text instead of the whitespace layout decided.
+            holder.setAttribute('style', 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;');
+            holder.style.whiteSpace = window.getComputedStyle(block).whiteSpace || 'normal';
+            holder.appendChild(range.cloneContents());
+            document.body.appendChild(holder);
+            let prefixLength = 0;
+            try {
+                prefixLength = (holder.innerText || '').length;
+            } finally {
+                document.body.removeChild(holder);
+            }
+            // A rendered prefix keeps none of the whitespace that separates it from what follows,
+            // so stepping over it lands on the first character of the line that was found.
+            const fullText = (block.innerText || '').trim();
+            let index = Math.max(0, Math.min(prefixLength, fullText.length));
+            while (index < fullText.length && /\s/.test(fullText.charAt(index))) index++;
+            return index;
+        } catch (error) {
+            return 0;
+        }
+    }
+
+    /**
+     * The offset in the block's own text where its first visible line begins, or 0 when the block
+     * starts at the top of the reading area. [readingTop] is where the reading area begins.
+     */
+    function topVisibleOffsetWithinBlock(block, readingTop) {
+        if (!Number.isFinite(readingTop)) {
+            readingTop = typeof window.VIEWPORT_PADDING_TOP === 'number' ? window.VIEWPORT_PADDING_TOP : 0;
+        }
+        const nodes = readerTtsBlockTextNodes(block);
+        if (!nodes.length) return 0;
+
+        const lineRect = readerTtsFirstVisibleLineRect(nodes, readingTop);
+        if (!lineRect) return 0;
+
+        const caret = readerTtsCaretAtLineStart(lineRect, block);
+        if (caret && caret.startContainer && block.contains(caret.startContainer)) {
+            const offset = readerTtsRenderedTextOffset(block, caret.startContainer, caret.startOffset);
+            if (offset > 0) {
+                console.log("TTS_CHAPTER_CHANGE_DIAG: Top visible line resolved at text offset " + offset);
+                return offset;
+            }
+        }
+
+        // Without a caret position the line's first text node is the closest answer there is.
+        for (let i = 0; i < nodes.length; i++) {
+            const range = document.createRange();
+            range.selectNodeContents(nodes[i]);
+            const rects = range.getClientRects();
+            range.detach && range.detach();
+            for (let r = 0; r < rects.length; r++) {
+                const rect = rects[r];
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                if (rect.bottom <= lineRect.top + 0.5 || rect.top >= lineRect.bottom - 0.5) continue;
+                return readerTtsRenderedTextOffset(block, nodes[i], 0);
+            }
+        }
+        return 0;
+    }
+
+    window.extractTextWithCfiFromTop = function () {
+        console.log("TTS_CHAPTER_CHANGE_DIAG: Starting extractTextWithCfiFromTop");
+        try {
+            const ttsNodeSelector = "p, h1, h2, h3, h4, h5, h6, li, blockquote";
+            const allContentNodesRaw = Array.from(document.body.querySelectorAll(ttsNodeSelector));
+            const allContentNodes = allContentNodesRaw.filter(node => node.querySelector(ttsNodeSelector) === null);
+
+            console.log("TTS_CHAPTER_CHANGE_DIAG: Total nodes found: " + allContentNodes.length);
+
+            // The reading area starts below the content's top padding, and the reading position is
+            // the first line that reaches past that point: a line straddling the top of the reading
+            // area is the line the reader is looking at, so it is chosen rather than the next one
+            // down. Block and line must use the same top, because a block rejected here is never
+            // searched for a visible line.
+            const viewportTop = typeof window.VIEWPORT_PADDING_TOP === 'number' ? window.VIEWPORT_PADDING_TOP : 0;
+            let startIndex = -1;
+
+            for (let i = 0; i < allContentNodes.length; i++) {
+                const rect = allContentNodes[i].getBoundingClientRect();
+
+                if (rect.bottom > viewportTop) {
+                    startIndex = i;
+                    break;
+                }
+            }
+
+            if (startIndex === -1) {
+                console.log("TTS_CHAPTER_CHANGE_DIAG: No visible start block found in viewport.");
+                return window.extractTextWithCfi();
+            }
+
+            console.log("TTS_CHAPTER_CHANGE_DIAG: Starting extraction from node index: " + startIndex);
+
+            const nodesToProcess = allContentNodes.slice(startIndex);
+            const results =[];
+
+            nodesToProcess.forEach((node, index) => {
+                const text = node.innerText ? node.innerText.trim() : "";
+                if (text.length === 0 || node.offsetParent === null) return;
+                try {
+                    const cfiObj = getCfiPathForElement(node, 0);
+                    if (!cfiObj || !cfiObj.cfi) return;
+                    // The block the viewport starts in is sliced at its first visible line, so a
+                    // chapter of one long element still begins reading where the reader is looking
+                    // rather than at the chapter's first word.
+                    if (index === 0) {
+                        const lineOffset = topVisibleOffsetWithinBlock(node, viewportTop);
+                        if (lineOffset > 0) {
+                            const sliced = text.substring(lineOffset);
+                            if (sliced.trim().length > 0) {
+                                results.push({ cfi: cfiObj, text: sliced, startOffset: lineOffset });
+                                return;
+                            }
+                        }
+                    }
+                    results.push({ cfi: cfiObj, text: text });
+                } catch (e) {}
+            });
+
+            return JSON.stringify(results);
+        } catch (e) {
+            console.log("TTS_CHAPTER_CHANGE_DIAG: Error in extractTextWithCfiFromTop: " + e.message);
+            return window.extractTextWithCfi();
+        }
+    };
+
+    window.extractTextWithCfi = function () {
+        const results =[];
+        const ttsNodeSelector = "p, h1, h2, h3, h4, h5, h6, li, blockquote";
+        const contentNodesRaw = Array.from(document.body.querySelectorAll(ttsNodeSelector));
+
+        const contentNodes = contentNodesRaw.filter(node => node.querySelector(ttsNodeSelector) === null);
+
+        contentNodes.forEach((node) => {
+            const text = node.innerText ? node.innerText.trim() : "";
+
+            if (text.length > 0 && node.offsetParent !== null) {
+                try {
+                    const cfi = getCfiPathForElement(node, 0);
+
+                    if (cfi) {
+                        results.push({ cfi: cfi, text: text });
+                    }
+                } catch (e) {}
+            }
+        });
+        return JSON.stringify(results);
+    };
+
+    window.extractTextWithCfiFromSelection = function() {
+        try {
+            var selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || selection.toString().trim() === "") {
+                return window.extractTextWithCfiFromTop(); // Fallback
+            }
+            var range = selection.getRangeAt(0);
+            var startNode = range.startContainer;
+            var startOffset = range.startOffset;
+
+            const ttsNodeSelector = "p, h1, h2, h3, h4, h5, h6, li, blockquote";
+            let startBlock = startNode.nodeType === Node.TEXT_NODE ? startNode.parentNode.closest(ttsNodeSelector) : startNode.closest(ttsNodeSelector);
+
+            if (!startBlock) return window.extractTextWithCfiFromTop(); // Fallback
+
+            let absoluteStartOffset = 0;
+            const treeWalker = document.createTreeWalker(startBlock, NodeFilter.SHOW_TEXT, null, false);
+            let currentNode = treeWalker.nextNode();
+            while (currentNode && currentNode !== startNode) {
+                absoluteStartOffset += currentNode.nodeValue.length;
+                currentNode = treeWalker.nextNode();
+            }
+            if (currentNode === startNode) {
+                absoluteStartOffset += startOffset;
+            }
+
+            const allContentNodesRaw = Array.from(document.body.querySelectorAll(ttsNodeSelector));
+            const allContentNodes = allContentNodesRaw.filter(node => node.querySelector(ttsNodeSelector) === null);
+
+            let startIndex = allContentNodes.findIndex(node => node === startBlock);
+
+            if (startIndex === -1) {
+                startIndex = allContentNodes.findIndex(node => startBlock.contains(node));
+            }
+
+            if (startIndex === -1) return window.extractTextWithCfiFromTop();
+
+            const nodesToProcess = allContentNodes.slice(startIndex);
+            const results =[];
+
+            nodesToProcess.forEach((node, index) => {
+                let fullText = node.textContent || "";
+                if (fullText.trim().length > 0 && node.offsetParent !== null) {
+                    if (node.tagName === 'LI' || node.closest('li')) {
+                        console.log("TTS_LIST_DIAG: Selection extracting node <" + node.tagName + "> inside LI. Text: '" + fullText.substring(0, 30) + "'");
+                    }
+                    try {
+                        const cfiObj = getCfiPathForElement(node, 0);
+                        if (cfiObj && cfiObj.cfi) {
+                            if (index === 0) {
+                                let sliced = fullText.substring(absoluteStartOffset);
+                                if (sliced.trim().length > 0) {
+                                    results.push({
+                                        cfi: cfiObj,
+                                        text: sliced,
+                                        startOffset: absoluteStartOffset
+                                    });
+                                }
+                            } else {
+                                results.push({
+                                    cfi: cfiObj,
+                                    text: fullText,
+                                    startOffset: 0
+                                });
+                            }
+                        }
+                    } catch(e){}
+                }
+            });
+            return JSON.stringify(results);
+        } catch(e) {
+            return window.extractTextWithCfiFromTop();
+        }
+    };
+
+    window.TtsBridgeHelper = {
+        extractAndRelayText: function () {
+            const traceId = Date.now();
+            console.log("TTS_CHAPTER_CHANGE_DIAG: [" + traceId + "] extractAndRelayText invoked.");
+            try {
+                const structuredTextJson = window.extractTextWithCfiFromTop();
+                const len = structuredTextJson ? structuredTextJson.length : 0;
+                console.log("TTS_CHAPTER_CHANGE_DIAG: [" + traceId + "] Relay text JSON length: " + len);
+
+                if (typeof TtsBridge !== "undefined" && TtsBridge.onStructuredTextExtracted) {
+                    TtsBridge.onStructuredTextExtracted(structuredTextJson);
+                } else {
+                    console.log("TTS_CHAPTER_CHANGE_DIAG: [" + traceId + "] Bridge missing!");
+                }
+            } catch (e) {
+                console.log("TTS_CHAPTER_CHANGE_DIAG: [" + traceId + "] Error: " + e.message);
+                if (typeof TtsBridge !== "undefined" && TtsBridge.onStructuredTextExtracted) {
+                    TtsBridge.onStructuredTextExtracted("[]");
+                }
+            }
+        },
+        extractAndRelayTextFromSelection: function() {
+            try {
+                const structuredTextJson = window.extractTextWithCfiFromSelection();
+                if (typeof TtsBridge !== "undefined" && TtsBridge.onStructuredTextExtracted) {
+                    TtsBridge.onStructuredTextExtracted(structuredTextJson);
+                }
+            } catch (e) {
+                if (typeof TtsBridge !== "undefined" && TtsBridge.onStructuredTextExtracted) {
+                    TtsBridge.onStructuredTextExtracted("[]");
+                }
+            }
+        }
+    };
+
+    window.reportTopChunk = function () {
+        if (typeof ProgressReporter === "undefined" || typeof ProgressReporter.updateTopChunk === "undefined") return;
+
+        const topElement = document.elementFromPoint(window.innerWidth / 2, window.VIEWPORT_PADDING_TOP + 1);
+
+        if (topElement) {
+            const chunkContainer = topElement.closest("[data-chunk-index]");
+
+            if (chunkContainer) {
+                const chunkIndex = parseInt(chunkContainer.dataset.chunkIndex, 10);
+
+                if (!isNaN(chunkIndex)) {
+                    ProgressReporter.updateTopChunk(chunkIndex);
+                }
+            } else {
+                ProgressReporter.updateTopChunk(0);
+            }
+        }
+    };
+
+    window.AiBridgeHelper = {
+        extractAndRelayTextForSummarization: function () {
+            var textContent = "";
+
+            try {
+                var mainElement = document.querySelector('article, [role="main"], main, body');
+
+                if (mainElement) {
+                    textContent = mainElement.innerText || mainElement.textContent || "";
+                } else {
+                    textContent = document.body.innerText || document.body.textContent || "";
+                }
+
+                if (typeof AiBridge !== "undefined" && AiBridge.onContentExtractedForSummarization) {
+                    AiBridge.onContentExtractedForSummarization(textContent.trim());
+                }
+            } catch (e) {
+                if (typeof AiBridge !== "undefined" && AiBridge.onContentExtractedForSummarization) {
+                    AiBridge.onContentExtractedForSummarization("");
+                }
+            }
+        },
+    };
+
+    function readerUsableContentWidth() {
+        var host = document.getElementById("content-container") || document.body;
+        var width = host && host.clientWidth ? host.clientWidth : 0;
+        if (!width) width = document.documentElement.clientWidth || window.innerWidth || 0;
+        return Math.max(1, Math.round(width - 32));
+    }
+
+    function readerImageScaleFactor() {
+        try {
+            var raw = parseFloat(
+                window.getComputedStyle(document.documentElement).getPropertyValue("--reader-image-size"),
+            );
+            if (!isNaN(raw) && raw > 0) return raw;
+        } catch (e) {}
+        return 1;
+    }
+
+    /**
+     * Releases degenerate wrappers between a decoded image and the content box.
+     *
+     * Fixed-layout publications (Calibre/Kobo comics and manga) wrap every page in
+     * position:absolute divs sized in absolute px. The reader's containment rule
+     * (max-width:100%!important on every descendant) plus width:auto on images
+     * makes those wrappers shrink-to-fit against a percentage that resolves through the
+     * image itself, so the whole chain collapses to 0x0 while the bitmap decodes fine.
+     * The direct wrapper always loses its author height cap (a figure with
+     * max-height:60% resolves against a figure that has no height yet); anything
+     * further up is only touched when it measured 0 wide, so reflowable chapters keep
+     * their authored geometry.
+     */
+    function releaseDegenerateReaderAncestors(img) {
+        var boundary = document.getElementById("content-container") || document.body;
+        var direct = img.parentElement;
+        var released = 0;
+
+        if (direct) {
+            direct.style.setProperty("height", "auto", "important");
+            direct.style.setProperty("max-height", "none", "important");
+            released++;
+        }
+
+        var node = direct;
+        while (node && node !== boundary && node !== document.body && node !== document.documentElement) {
+            var style = window.getComputedStyle(node);
+            var positioned = style.position === "absolute" || style.position === "fixed";
+            if (node.clientWidth === 0 && positioned) {
+                node.style.setProperty("width", "auto", "important");
+                node.style.setProperty("max-width", "100%", "important");
+                node.style.setProperty("min-width", "0", "important");
+                node.style.setProperty("height", "auto", "important");
+                node.style.setProperty("max-height", "none", "important");
+                node.style.setProperty("overflow", "visible", "important");
+                released++;
+            }
+            node = node.parentElement;
+        }
+        return released;
+    }
+
+    /**
+     * Gives a decoded-but-unlaid-out image an explicit box.
+     *
+     * Every size has to be pinned: the imageCss block caps the image with
+     * max-width:min(100%,..) which resolves against the (0 wide) author wrapper and
+     * re-clamps any width we set, so width/height plus their max/min counterparts are all
+     * written inline with !important. Inline !important outranks the injected stylesheet,
+     * which is what makes this stick.
+     */
+    function recoverCollapsedReaderImage(img) {
+        if (!img || img.naturalWidth <= 0 || img.naturalHeight <= 0) return false;
+
+        // A width the browser already laid out is authoritative: only the height is missing.
+        var heightOnly = img.clientWidth > 0 && img.clientHeight === 0;
+        if (!heightOnly && (img.clientWidth !== 0 || img.clientHeight !== 0)) return false;
+
+        var contentWidth = readerUsableContentWidth();
+        var scale = readerImageScaleFactor();
+        var width = heightOnly
+            ? img.clientWidth
+            : Math.max(1, Math.min(img.naturalWidth, Math.round(contentWidth * scale)));
+        var height = Math.round((width * img.naturalHeight) / img.naturalWidth);
+
+        // Cap to the viewport so a full-page scan never blows out the scroll range, then
+        // re-derive the width so the recovered box keeps the author's aspect ratio.
+        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (viewportHeight > 0 && height > Math.round(viewportHeight * 0.92)) {
+            height = Math.round(viewportHeight * 0.92);
+            width = Math.max(1, Math.round((height * img.naturalWidth) / img.naturalHeight));
+        }
+
+        var released = releaseDegenerateReaderAncestors(img);
+        img.style.setProperty("width", width + "px", "important");
+        img.style.setProperty("max-width", width + "px", "important");
+        img.style.setProperty("min-width", width + "px", "important");
+        img.style.setProperty("height", height + "px", "important");
+        img.style.setProperty("max-height", height + "px", "important");
+        img.style.setProperty("min-height", height + "px", "important");
+
+        try {
+            console.log(
+                "EpubBlankDiag: event=android_img_recovered src=" +
+                    ((img.getAttribute("src") || "").split("/").pop() || "").slice(-40) +
+                    " nat=" + img.naturalWidth + "x" + img.naturalHeight +
+                    " box=" + width + "x" + height +
+                    " releasedAncestors=" + released,
+            );
+        } catch (e) {}
+        return true;
+    }
+
+    window.recoverCollapsedReaderImages = function () {
+        var recovered = 0;
+        var candidates = document.querySelectorAll("img, image");
+        for (var i = 0; i < candidates.length; i++) {
+            if (recoverCollapsedReaderImage(candidates[i])) recovered++;
+        }
+        if (recovered > 0) {
+            if (window.reportScrollState) window.reportScrollState();
+            setTimeout(function () {
+                if (window.reportScrollState) window.reportScrollState();
+            }, 150);
+        }
+        return recovered;
+    };
+
+    window.checkImagesForDiagnosis = function () {
+        const images = document.querySelectorAll("img, image"); // 'image' for SVG images
+        const logTag = "ImageDiagnosis";
+        console.log(logTag + ": JS checkImagesForDiagnosis called. Found " + images.length + " image elements.");
+
+        images.forEach((img, index) => {
+            const src = img.src || img.getAttribute("xlink:href");
+            console.log(logTag + ": Image #" + index + " | src: '" + src + "'");
+
+            function processImage() {
+                console.log(logTag + ": Processing Image #" + index + " (complete=" + img.complete + ")");
+                console.log(logTag + ": Image #" + index + " | clientWidth: " + img.clientWidth + ", clientHeight: " + img.clientHeight);
+                console.log(logTag + ": Image #" + index + " | naturalWidth: " + img.naturalWidth + ", naturalHeight: " + img.naturalHeight);
+                console.log(logTag + ": Image #" + index + " | is visible (offsetParent): " + (img.offsetParent !== null));
+
+                const style = window.getComputedStyle(img);
+                console.log(
+                    logTag +
+                        ": Image #" +
+                        index +
+                        " | computed display: '" +
+                        style.display +
+                        "', visibility: '" +
+                        style.visibility +
+                        "', opacity: '" +
+                        style.opacity +
+                        "'",
+                );
+
+                // A decoded bitmap with no layout box is unambiguously broken, whatever the
+                // publication CSS did. Covers the historical clientWidth>0/height==0 case, the
+                // Standard Ebooks figure collapse (parent-relative max-height resolving against
+                // a 0-height figure) and the fixed-layout comic/manga chain collapse.
+                recoverCollapsedReaderImage(img);
+
+                img.onerror = function () {
+                    console.log(logTag + ": ERROR: Image #" + index + " FAILED to load. Src was: '" + src + "'");
+                };
+
+                if (img.complete && img.naturalWidth === 0) {
+                    console.log(
+                        logTag + ": WARNING: Image #" + index + " is complete but has 0 naturalWidth, may indicate loading error. Src: '" + src + "'",
+                    );
+                }
+            }
+
+            if (img.complete) {
+                processImage();
+            } else {
+                img.onload = processImage;
+            }
+        });
+    };
+
+    const CFI_LOG_TAG = "CFI_DIAGNOSIS";
+
+    function log(message) {
+        console.log(`$ {
+            CFI_LOG_TAG
+        }
+
+        : $ {
+            message
+        }
+
+        `);
+    }
+
+    function parseReaderChunkInt(value, fallback) {
+        const parsed = parseInt(value, 10);
+        return isNaN(parsed) ? fallback : parsed;
+    }
+
+    function getReaderChunkIndex(chunkElement) {
+        return parseReaderChunkInt(chunkElement && chunkElement.dataset ? chunkElement.dataset.chunkIndex : null, 0);
+    }
+
+    function getReaderChunkElementStartIndex(chunkElement) {
+        const chunkIndex = getReaderChunkIndex(chunkElement);
+        return parseReaderChunkInt(
+            chunkElement && chunkElement.dataset ? chunkElement.dataset.elementStartIndex : null,
+            chunkIndex * 20
+        );
+    }
+
+    function getReaderChunkElementCount(chunkElement) {
+        return parseReaderChunkInt(
+            chunkElement && chunkElement.dataset ? chunkElement.dataset.elementCount : null,
+            20
+        );
+    }
+
+    function findReaderChunkForElementIndex(container, childNodeIndex) {
+        const chunks = Array.from(container.querySelectorAll(".chunk-container"));
+        for (let i = 0; i < chunks.length; i++) {
+            const chunkElement = chunks[i];
+            const elementStartIndex = getReaderChunkElementStartIndex(chunkElement);
+            const elementCount = getReaderChunkElementCount(chunkElement);
+            if (elementCount <= 0) continue;
+            if (childNodeIndex >= elementStartIndex && childNodeIndex < elementStartIndex + elementCount) {
+                return {
+                    chunkElement: chunkElement,
+                    chunkIndex: getReaderChunkIndex(chunkElement),
+                    indexInChunk: childNodeIndex - elementStartIndex
+                };
+            }
+        }
+
+        const fallbackChunkIndex = Math.floor(childNodeIndex / 20);
+        const fallbackChunkElement = container.querySelector(`.chunk-container[data-chunk-index="${fallbackChunkIndex}"]`);
+        if (!fallbackChunkElement) return null;
+        return {
+            chunkElement: fallbackChunkElement,
+            chunkIndex: fallbackChunkIndex,
+            indexInChunk: childNodeIndex % 20
+        };
+    }
+
+    function resolveCfiPath(rootElement, path, requestChunkIfMissing = false) {
+        let currentNode = rootElement;
+        const steps = path.substring(1).split("/").map(Number);
+
+        for (let i = 0; i < steps.length; i++) {
+            const cfiIndex = steps[i];
+            if (!currentNode) return null;
+
+            // Handle virtualized content container specially
+            if (currentNode.id === 'content-container') {
+                const childNodeIndex = (cfiIndex - 2) / 2;
+                const chunkLookup = findReaderChunkForElementIndex(currentNode, childNodeIndex);
+                if (!chunkLookup) return null;
+
+                let chunkIndex = chunkLookup.chunkIndex;
+                let indexInChunk = chunkLookup.indexInChunk;
+                let chunkElement = chunkLookup.chunkElement;
+                if (chunkElement) {
+                    if (chunkElement.innerHTML === "") {
+                        if (window.virtualization && window.virtualization.chunksData[chunkIndex]) {
+                            console.log("CFI_DIAGNOSIS: Chunk " + chunkIndex + " was empty, restoring content for CFI resolution.");
+                            chunkElement.innerHTML = window.virtualization.chunksData[chunkIndex];
+                            chunkElement.style.height = "";
+                            if (window.CURRENT_HIGHLIGHTS) {
+                                window.HighlightBridgeHelper.restoreHighlights(window.CURRENT_HIGHLIGHTS);
+                            }
+                        } else {
+                            if (requestChunkIfMissing) {
+                                console.log("PosSaveDiag: Requesting missing chunk " + chunkIndex + " for CFI resolution.");
+                                if (window.ContentBridge && window.ContentBridge.requestChunk) {
+                                    if (!window._requestedChunksForCfi) window._requestedChunksForCfi = {};
+                                    if (!window._requestedChunksForCfi[chunkIndex]) {
+                                        window._requestedChunksForCfi[chunkIndex] = true;
+                                        window.ContentBridge.requestChunk(chunkIndex);
+                                    }
+                                }
+                            }
+                            return null;
+                        }
+                    }
+
+                    let elementsInChunk = Array.from(chunkElement.childNodes).filter(n => n.nodeType === Node.ELEMENT_NODE);
+                    if (indexInChunk >= 0 && indexInChunk < elementsInChunk.length) {
+                        currentNode = elementsInChunk[indexInChunk];
+                        continue;
+                    }
+                }
+                return null;
+            }
+
+            let elementChildren = Array.from(currentNode.childNodes).filter((node) => node.nodeType === Node.ELEMENT_NODE);
+            const childNodeIndex = (cfiIndex - 2) / 2;
+
+            if (childNodeIndex >= 0 && childNodeIndex < elementChildren.length) {
+                currentNode = elementChildren[childNodeIndex];
+            } else {
+                return null;
+            }
+        }
+        return currentNode;
+    }
+
+    window.getNodeAndOffsetFromCfi = function (cfi, requestChunkIfMissing = false) {
+        try {
+            var pathParts = cfi.split(":");
+            var nodePath = pathParts[0];
+            var charOffset = pathParts.length > 1 ? parseInt(pathParts[1], 10) : 0;
+
+            let cfiRoot = document.getElementById("content-container") || document.body;
+            let pathToResolve = nodePath;
+
+            // Strip the /4 prefix because cfiRoot (content-container or body) represents /4
+            if (pathToResolve.startsWith("/4/")) {
+                pathToResolve = "/" + pathToResolve.substring(3);
+            } else if (pathToResolve === "/4") {
+                pathToResolve = "";
+            }
+
+            if (!pathToResolve) {
+                return { node: cfiRoot, offset: charOffset };
+            }
+
+            let resolvedNode = resolveCfiPath(cfiRoot, pathToResolve, requestChunkIfMissing);
+
+            if (!resolvedNode) return null;
+
+            let currentNode = resolvedNode;
+
+            if (currentNode.nodeType === Node.ELEMENT_NODE) {
+                const treeWalker = document.createTreeWalker(currentNode, NodeFilter.SHOW_TEXT, null, false);
+                const firstTextNode = treeWalker.nextNode();
+                if (firstTextNode) {
+                    currentNode = firstTextNode;
+                }
+            }
+
+            return { node: currentNode, offset: charOffset };
+        } catch (e) {
+            return null;
+        }
+    };
+
+    window.getCfiPathForElement = function (element, charOffset) {
+        const logStack = [];
+        try {
+            var path =[];
+            var currentNode = element;
+
+            if (currentNode.nodeType === Node.TEXT_NODE) {
+                var accumulatedOffset = charOffset || 0;
+                var sibling = currentNode.previousSibling;
+                while (sibling) {
+                    if (sibling.nodeType === Node.TEXT_NODE) {
+                        accumulatedOffset += sibling.nodeValue.length;
+                    } else if (sibling.nodeType === Node.ELEMENT_NODE) {
+                        accumulatedOffset += (sibling.textContent || "").length;
+                    }
+                    sibling = sibling.previousSibling;
+                }
+                charOffset = accumulatedOffset;
+                currentNode = currentNode.parentNode;
+            }
+
+            const root = document.getElementById("content-container") || document.body;
+
+            while (currentNode && currentNode !== root && currentNode.parentNode) {
+                let parentNode = currentNode.parentNode;
+
+                if (parentNode.classList && parentNode.classList.contains('chunk-container')) {
+                    let trueParent = parentNode.parentNode;
+                    let elementSiblingsInChunk = Array.from(parentNode.childNodes).filter(node => node.nodeType === Node.ELEMENT_NODE);
+                    let indexInChunk = elementSiblingsInChunk.indexOf(currentNode);
+
+                    if (indexInChunk === -1) {
+                        currentNode = trueParent;
+                        continue;
+                    }
+
+                    let chunkIndex = getReaderChunkIndex(parentNode);
+                    let elementsInPrecedingChunks = getReaderChunkElementStartIndex(parentNode);
+
+                    let trueIndex = elementsInPrecedingChunks + indexInChunk;
+                    let cfiIndex = trueIndex * 2 + 2;
+                    path.unshift(cfiIndex);
+
+                    logStack.push(`Chunk ${chunkIndex}, IdxInChunk ${indexInChunk}, TrueIdx ${trueIndex} -> CFI /${cfiIndex}`);
+
+                    currentNode = trueParent;
+                    continue;
+                }
+
+                const elementSiblings = Array.from(parentNode.childNodes).filter((node) => node.nodeType === Node.ELEMENT_NODE);
+                const nodeIndex = elementSiblings.indexOf(currentNode);
+
+                if (nodeIndex === -1) {
+                    currentNode = parentNode;
+                    continue;
+                }
+
+                const cfiIndex = nodeIndex * 2 + 2;
+                path.unshift(cfiIndex);
+                currentNode = parentNode;
+            }
+
+            var cfi = "/4";
+            if (path.length > 0) {
+                 cfi += "/" + path.join("/");
+            }
+            if (charOffset !== undefined && charOffset > 0) {
+                cfi += ":" + charOffset;
+            }
+            logStack.push(`Generated CFI: ${cfi}`);
+            return { cfi: cfi, log: logStack };
+        } catch (e) {
+            logStack.push("Error: " + e.message);
+            return { cfi: "/4/2", log: logStack };
+        }
+    };
+
+    window.getCurrentCfi = function() {
+        const debugLog =[];
+        let finalCfi = "/4/2";
+
+        try {
+            const viewportX = window.innerWidth / 2;
+            let viewportY = window.VIEWPORT_PADDING_TOP + 5;
+            let topElement = null;
+
+            for (let i = 0; i < 10; i++) {
+                let el = document.elementFromPoint(viewportX, viewportY);
+                if (el && el.id !== 'content-container' &&
+                    !(el.classList && el.classList.contains('chunk-container') && el.innerText.trim() === "")) {
+                    topElement = el;
+                    break;
+                }
+                viewportY += 15;
+            }
+
+            if (!topElement || topElement.id === 'content-container' || (topElement.classList && topElement.classList.contains('chunk-container'))) {
+                const elements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, span');
+                for (let i = 0; i < elements.length; i++) {
+                    const el = elements[i];
+                    const rect = el.getBoundingClientRect();
+                    if (rect.bottom > window.VIEWPORT_PADDING_TOP && el.innerText.trim().length > 0) {
+                        topElement = el;
+                        break;
+                    }
+                }
+            }
+
+            if (!topElement) {
+                topElement = document.body.firstElementChild;
+            }
+
+            if (!topElement) {
+                 return JSON.stringify({ cfi: finalCfi, log: debugLog });
+            }
+
+            let range = null;
+            if (document.caretRangeFromPoint) {
+                range = document.caretRangeFromPoint(viewportX, viewportY);
+            }
+
+            let nodeForCfi;
+            let offsetForCfi = 0;
+
+            if (range && range.startContainer && range.startContainer.nodeType === Node.TEXT_NODE) {
+                 nodeForCfi = range.startContainer;
+                 offsetForCfi = range.startOffset;
+                 debugLog.push(`Caret range hit successfully at offset ${offsetForCfi}`);
+            } else {
+                 const treeWalker = document.createTreeWalker(topElement, NodeFilter.SHOW_TEXT, null, false);
+                 let firstTextNode = treeWalker.nextNode();
+                 nodeForCfi = (firstTextNode && firstTextNode.textContent.trim().length > 0) ? firstTextNode : topElement;
+                 offsetForCfi = 0;
+            }
+
+            const cfiResult = window.getCfiPathForElement(nodeForCfi, offsetForCfi);
+            finalCfi = cfiResult.cfi;
+            if (cfiResult.log) debugLog.push(...cfiResult.log);
+
+        } catch (e) {
+            debugLog.push("Error in getCurrentCfi: " + e.message);
+        }
+
+        return JSON.stringify({ cfi: finalCfi, log: debugLog });
+    };
+
+    const TAG_BM = "BookmarkDiagnosis";
+
+    function logBm(msg) {
+        console.log(TAG_BM + ": " + msg);
+    }
+
+    function normalizeReaderImageSourceForMatch(value) {
+        if (!value) return "";
+        var normalized = String(value).split("#")[0].split("?")[0].replace(/\\/g, "/");
+        try {
+            normalized = decodeURIComponent(normalized);
+        } catch (e) {}
+        if (normalized.indexOf("file://") === 0) {
+            normalized = normalized.substring("file://".length);
+        }
+        return normalized.toLowerCase();
+    }
+
+    function getReaderImageSourceCandidates(element) {
+        if (!element) return [];
+        var values = [
+            element.currentSrc,
+            element.src,
+            element.href && element.href.baseVal,
+            element.getAttribute && element.getAttribute("src"),
+            element.getAttribute && element.getAttribute("href"),
+            element.getAttribute && element.getAttribute("xlink:href"),
+            element.getAttribute && element.getAttribute("data-src"),
+        ];
+        return values.filter(function (value, index, array) {
+            return value && array.indexOf(value) === index;
+        });
+    }
+
+    function readerImageCandidateMatches(candidate, normalizedTargets) {
+        var normalizedCandidate = normalizeReaderImageSourceForMatch(candidate);
+        if (!normalizedCandidate) return false;
+        var candidateName = normalizedCandidate.substring(normalizedCandidate.lastIndexOf("/") + 1);
+
+        return normalizedTargets.some(function (target) {
+            if (!target) return false;
+            var targetName = target.substring(target.lastIndexOf("/") + 1);
+            return (
+                normalizedCandidate === target ||
+                normalizedCandidate.endsWith("/" + targetName) ||
+                target.endsWith("/" + candidateName) ||
+                (candidateName && targetName && candidateName === targetName)
+            );
+        });
+    }
+
+    function findReaderImageElementsBySource(source, originalSource) {
+        var normalizedTargets = [source, originalSource]
+            .map(normalizeReaderImageSourceForMatch)
+            .filter(Boolean);
+        return getReaderImageElements().filter(function (element) {
+            return getReaderImageSourceCandidates(element).some(function (candidate) {
+                return readerImageCandidateMatches(candidate, normalizedTargets);
+            });
+        });
+    }
+
+    function findReaderImageChunkIndex(source, originalSource) {
+        if (!window.virtualization || !window.virtualization.chunksData) return -1;
+        var normalizedTargets = [source, originalSource]
+            .map(normalizeReaderImageSourceForMatch)
+            .filter(Boolean);
+        var targetNames = normalizedTargets
+            .map(function (target) {
+                return target.substring(target.lastIndexOf("/") + 1);
+            })
+            .filter(Boolean);
+
+        for (var i = 0; i < window.virtualization.chunksData.length; i++) {
+            var chunkHtml = window.virtualization.chunksData[i];
+            if (!chunkHtml) continue;
+            var normalizedChunk = normalizeReaderImageSourceForMatch(chunkHtml);
+            if (
+                normalizedTargets.some(function (target) {
+                    return normalizedChunk.indexOf(target) !== -1;
+                }) ||
+                targetNames.some(function (name) {
+                    return normalizedChunk.indexOf(name) !== -1;
+                })
+            ) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    window.scrollToReaderImageSource = function(source, ordinal, originalSource) {
+        var safeOrdinal = Math.max(0, parseInt(ordinal || 0, 10) || 0);
+        var matches = findReaderImageElementsBySource(source, originalSource);
+
+        if (!matches.length) {
+            var chunkIndex = findReaderImageChunkIndex(source, originalSource);
+            if (chunkIndex >= 0) {
+                var chunkDiv = document.querySelector('.chunk-container[data-chunk-index="' + chunkIndex + '"]');
+                if (chunkDiv && chunkDiv.innerHTML === "" && window.virtualization && window.virtualization.chunksData[chunkIndex]) {
+                    chunkDiv.innerHTML = window.virtualization.chunksData[chunkIndex];
+                    chunkDiv.style.height = "";
+                }
+                matches = findReaderImageElementsBySource(source, originalSource);
+            }
+        }
+
+        var target = matches[Math.min(safeOrdinal, Math.max(0, matches.length - 1))];
+        if (!target) return false;
+
+        var rect = target.getBoundingClientRect();
+        var targetScrollY = window.scrollY + rect.top - (window.VIEWPORT_PADDING_TOP + 10);
+        window.scrollTo({ top: Math.max(0, targetScrollY), behavior: "auto" });
+        setTimeout(function () {
+            if (window.reportScrollState) window.reportScrollState();
+        }, 80);
+        return true;
+    };
+
+    window.scrollToCfi = function(cfi) {
+        let cleanCfi = cfi;
+
+        if (cfi && cfi.includes('@')) {
+            cleanCfi = cfi.substring(cfi.indexOf('@') + 1);
+        }
+
+        console.log("NavDiag: JS scrollToCfi called with cleanCfi=" + cleanCfi);
+        window._requestedChunksForCfi = {}; // Reset the requested cache
+
+        if (!cleanCfi || !cleanCfi.startsWith('/')) {
+            if (window.CfiBridge && window.CfiBridge.onScrollFinished) {
+                 window.CfiBridge.onScrollFinished(false);
+            }
+            return;
+        }
+
+        let attempts = 0;
+        const maxAttempts = 40; // Increased to 40 attempts (4 seconds) to give Kotlin time to inject chunks
+        let stabilizingFrames = 0;
+        const maxStabilizingFrames = 8;
+
+        function attemptScroll() {
+            attempts++;
+
+            try {
+                // Pass 'true' to dynamically request any missing chunks needed to resolve the position
+                const location = window.getNodeAndOffsetFromCfi(cleanCfi, true);
+
+                if (location && location.node) {
+                    if (!document.body.contains(location.node)) {
+                         if (attempts < maxAttempts) setTimeout(attemptScroll, 100);
+                         return;
+                    }
+
+                    let targetScrollY = 0;
+                    if (location.node.nodeType === Node.TEXT_NODE && location.offset > 0) {
+                        try {
+                            console.log("PosSaveDiag: Initial text node length=" + location.node.nodeValue.length + ", location.offset=" + location.offset);
+                            let currentNode = location.node;
+                            let remainingOffset = location.offset;
+
+                            // Traverse sibling text nodes to find the exact offset
+                            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                            walker.currentNode = currentNode;
+
+                            while (currentNode && remainingOffset > currentNode.nodeValue.length) {
+                                remainingOffset -= currentNode.nodeValue.length;
+                                const next = walker.nextNode();
+                                if (!next) {
+                                    console.log("PosSaveDiag: Reached end of text nodes while traversing.");
+                                    break;
+                                }
+                                currentNode = next;
+                            }
+
+                            console.log("PosSaveDiag: Traversed to node with text: '" + currentNode.nodeValue.substring(0, 20) + "', remainingOffset=" + remainingOffset + ", actual length=" + currentNode.nodeValue.length);
+
+                            const range = document.createRange();
+                            const validOffset = Math.min(remainingOffset, currentNode.nodeValue.length);
+
+                            const endOffset = Math.min(validOffset + 1, currentNode.nodeValue.length);
+                            if (validOffset < endOffset) {
+                                range.setStart(currentNode, validOffset);
+                                range.setEnd(currentNode, endOffset);
+                            } else if (validOffset > 0) {
+                                range.setStart(currentNode, validOffset - 1);
+                                range.setEnd(currentNode, validOffset);
+                            } else {
+                                range.setStart(currentNode, validOffset);
+                                range.collapse(true);
+                            }
+
+                            let rect = range.getBoundingClientRect();
+                            const rects = range.getClientRects();
+                            if (rects && rects.length > 0) {
+                                rect = rects[0];
+                            }
+
+                            if (rect.top !== 0 || rect.bottom !== 0) {
+                                targetScrollY = window.scrollY + rect.top - (window.VIEWPORT_PADDING_TOP + 5);
+                            }
+                        } catch (e) {
+                            console.log("PosSaveDiag: Error calculating range bounding rect: " + e.message);
+                        }
+                    }
+
+                    if (targetScrollY === 0) {
+                        const targetElement = (location.node.nodeType === Node.TEXT_NODE) ? location.node.parentNode : location.node;
+                        const rect = targetElement.getBoundingClientRect();
+                        targetScrollY = window.scrollY + rect.top - (window.VIEWPORT_PADDING_TOP + 5);
+                    }
+
+                    if (Math.abs(window.scrollY - targetScrollY) > 1) {
+                        console.log("NavDiag: Scrolling to targetY=" + targetScrollY);
+                        window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+                    }
+
+                    stabilizingFrames++;
+                    if (stabilizingFrames < maxStabilizingFrames) {
+                        setTimeout(attemptScroll, 100);
+                    } else {
+                        setTimeout(() => {
+                            window.reportScrollState();
+                            if (window.CfiBridge && window.CfiBridge.onScrollFinished) {
+                                window.CfiBridge.onScrollFinished(true);
+                            }
+                        }, 50);
+                    }
+
+                } else {
+                    if (attempts < maxAttempts) {
+                        setTimeout(attemptScroll, 100);
+                    } else {
+                        console.log("PosSaveDiag: attemptScroll failed after " + maxAttempts + " attempts for CFI: " + cleanCfi);
+                        if (window.CfiBridge && window.CfiBridge.onScrollFinished) {
+                            window.CfiBridge.onScrollFinished(false);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log("PosSaveDiag: attemptScroll exception: " + e.message);
+                if (window.CfiBridge && window.CfiBridge.onScrollFinished) {
+                    window.CfiBridge.onScrollFinished(false);
+                }
+            }
+        }
+
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(function() {
+                attemptScroll();
+            });
+        } else {
+            attemptScroll();
+        }
+    };
+
+    window.getElementByCfi = function(cfi) {
+        logBm("getElementByCfi called with: " + cfi);
+        try {
+            const location = window.getNodeAndOffsetFromCfi(cfi);
+            if (location && location.node) {
+                logBm("Found node: " + location.node.nodeName);
+                return (location.node.nodeType === Node.TEXT_NODE) ? location.node.parentNode : location.node;
+            }
+            logBm("Node not found.");
+            return null;
+        } catch (e) {
+            logBm("Error: " + e.message);
+            return null;
+        }
+    };
+
+    window.isElementInViewport = function (el) {
+        if (!el || typeof el.getBoundingClientRect !== "function") return false;
+        const rect = el.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        return rect.top >= 0 && rect.top <= viewportHeight;
+    };
+
+    window.getSnippetForCfi = function (cfi) {
+        var TAG_DIAG = "BookmarkDiagnosis";
+        console.log(TAG_DIAG + ": getSnippetForCfi called with CFI: " + cfi);
+        const location = window.getNodeAndOffsetFromCfi(cfi);
+
+        if (location && location.node) {
+            let textNode = location.node.nodeType === Node.TEXT_NODE ? location.node : null;
+            let offset = location.offset;
+
+            if (!textNode) {
+                const treeWalker = document.createTreeWalker(location.node, NodeFilter.SHOW_TEXT, null, false);
+                textNode = treeWalker.nextNode();
+                offset = 0;
+            } else if (offset > 0) {
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                walker.currentNode = textNode;
+                while (textNode && offset > textNode.nodeValue.length) {
+                    offset -= textNode.nodeValue.length;
+                    const next = walker.nextNode();
+                    if (!next) break;
+                    textNode = next;
+                }
+            }
+
+            if (textNode) {
+                const fullText = textNode.textContent;
+                const lastSpace = fullText.lastIndexOf(" ", offset);
+                const startIndex = lastSpace === -1 ? 0 : lastSpace + 1;
+
+                let snippet = fullText.substring(startIndex);
+
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                walker.currentNode = textNode;
+
+                while (snippet.length < 160) {
+                    const nextNode = walker.nextNode();
+
+                    if (nextNode) {
+                        snippet += " " + nextNode.textContent;
+                    } else {
+                        break;
+                    }
+                }
+
+                const finalSnippet = snippet.trim().replace(/\s+/g, " ").substring(0, 150);
+                console.log(TAG_DIAG + ": Snippet generated: '" + finalSnippet + "'");
+                return finalSnippet;
+            }
+        }
+
+        console.log(TAG_DIAG + ": No usable text found for CFI. Returning empty snippet.");
+        return "";
+    };
+
+    window.findFirstVisibleCfi = function (cfiArray) {
+        if (!Array.isArray(cfiArray)) {
+            return null;
+        }
+
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const activationZoneEnd = window.VIEWPORT_PADDING_TOP + (viewportHeight - window.VIEWPORT_PADDING_TOP) * 0.6;
+
+        for (const cfi of cfiArray) {
+            const location = window.getNodeAndOffsetFromCfi(cfi);
+
+            if (location && location.node) {
+                try {
+                    const node = location.node;
+                    // Use the element's rect for stability, not a potentially zero-height range rect.
+                    const elementForRect = node.nodeType === Node.TEXT_NODE ? node.parentNode : node;
+                    const rect = elementForRect.getBoundingClientRect();
+                    const nodeName = elementForRect.nodeName;
+
+                    // The element is "active" if:
+                    // 1. It's positioned at the top of the content, even if under the padding.
+                    const isAtContentTop = rect.top >= 0 && rect.top < window.VIEWPORT_PADDING_TOP;
+                    // 2. Any part of it overlaps with the main "reading zone" below the padding.
+                    const isInReadingZone = rect.bottom > window.VIEWPORT_PADDING_TOP && rect.top < activationZoneEnd;
+
+                    if ((isAtContentTop && rect.height > 0) || isInReadingZone) {
+                        return cfi;
+                    }
+                } catch (e) {
+                    console.log(TAG + ": Error processing CFI " + cfi + ": " + e.message);
+                }
+            } else {
+                console.log(TAG + ": No node found for CFI: " + cfi);
+            }
+        }
+
+        console.log(TAG + ": No visible bookmarked element found in viewport. Returning null.");
+        return null;
+    };
+})();
+
+(function () {
+    // --- VIRTUALIZATION LOGIC ---
+    if (window.virtualization) return;
+    const logVerticalJitter =
+        window.logReaderVerticalJitter ||
+        function (message) {
+            console.log("EpubVerticalJitter: " + message);
+        };
+
+    let currentBottomChunkIndex = 0;
+    let totalChunks = 0;
+    let isLoading = false;
+    let observer;
+
+    window.virtualization = {
+        totalChunks: 0,
+        chunksData: [],
+        chunkHeights: [],
+        observer: null,
+
+        init: function (initialChunkIndex, total) {
+            console.log(`Virtualization: Init with ${total} chunks. Anchor: ${initialChunkIndex}`);
+            logVerticalJitter(
+                "virtInit total=" +
+                    total +
+                    " anchor=" +
+                    initialChunkIndex +
+                    " scrollY=" +
+                    Math.round(window.scrollY || window.pageYOffset || 0) +
+                    " scrollHeight=" +
+                    Math.round(Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)),
+            );
+            this.totalChunks = total;
+            this.chunksData = new Array(total).fill(null);
+            this.chunkHeights = new Array(total).fill(0);
+
+            const container = document.getElementById("content-container");
+
+            if (container) {
+                container.querySelectorAll(".chunk-container").forEach((div) => {
+                    let idx = parseInt(div.dataset.chunkIndex, 10);
+                    let content = div.innerHTML;
+
+                    if (content.trim().length > 0) {
+                        this.chunksData[idx] = content;
+                        this.chunkHeights[idx] = div.getBoundingClientRect().height;
+                    }
+                });
+            }
+
+            this.setupObserver();
+        },
+
+        setupObserver: function () {
+            if (this.observer) this.observer.disconnect();
+
+            this.observer = new IntersectionObserver(
+                (entries) => {
+                    let scrollAdjust = 0;
+                    let domChanged = false;
+
+                    entries.forEach((entry) => {
+                        let div = entry.target;
+                        let idx = parseInt(div.dataset.chunkIndex, 10);
+
+                        if (entry.isIntersecting) {
+                            if (!this.chunksData[idx]) {
+                                logVerticalJitter("virtRequestChunk idx=" + idx);
+                                if (window.ContentBridge && window.ContentBridge.requestChunk) {
+                                    window.ContentBridge.requestChunk(idx);
+                                }
+                            } else if (div.innerHTML === "") {
+                                let oldHeight = div.getBoundingClientRect().height;
+                                div.innerHTML = this.chunksData[idx];
+                                div.style.height = "";
+
+                                let newHeight = div.getBoundingClientRect().height;
+                                this.chunkHeights[idx] = newHeight;
+                                domChanged = true;
+
+                                if (div.getBoundingClientRect().top < 0) {
+                                    scrollAdjust += (newHeight - oldHeight);
+                                }
+                                logVerticalJitter(
+                                    "virtRestore idx=" +
+                                        idx +
+                                        " oldHeight=" +
+                                        Math.round(oldHeight) +
+                                        " newHeight=" +
+                                        Math.round(newHeight) +
+                                        " top=" +
+                                        Math.round(div.getBoundingClientRect().top) +
+                                        " pendingAdjust=" +
+                                        Math.round(scrollAdjust),
+                                );
+                                if (window.CURRENT_HIGHLIGHTS) {
+                                    window.HighlightBridgeHelper.restoreHighlights(window.CURRENT_HIGHLIGHTS);
+                                }
+                                if (window.CURRENT_SEARCH_QUERY) {
+                                    window.highlightAllOccurrences(window.CURRENT_SEARCH_QUERY);
+                                }
+                            }
+                        } else {
+                            if (div.innerHTML !== "") {
+                                let oldHeight = div.getBoundingClientRect().height;
+                                this.chunkHeights[idx] = oldHeight;
+                                div.style.height = oldHeight + "px";
+                                div.innerHTML = "";
+                                domChanged = true;
+                                logVerticalJitter(
+                                    "virtUnload idx=" +
+                                        idx +
+                                        " placeholderHeight=" +
+                                        Math.round(oldHeight) +
+                                        " top=" +
+                                        Math.round(div.getBoundingClientRect().top),
+                                );
+                            }
+                        }
+                    });
+
+                    if (scrollAdjust !== 0) {
+                        let before = Math.round(window.scrollY || window.pageYOffset || 0);
+                        window.scrollBy(0, scrollAdjust);
+                        logVerticalJitter(
+                            "virtScrollAdjust dy=" +
+                                Math.round(scrollAdjust) +
+                                " scrollY=" +
+                                before +
+                                "->" +
+                                Math.round(window.scrollY || window.pageYOffset || 0),
+                        );
+                    }
+
+                    if (domChanged && window.reportScrollState) {
+                        setTimeout(window.reportScrollState, 50);
+                    }
+                },
+                { rootMargin: "2500px 0px" }
+            );
+
+            document.querySelectorAll(".chunk-container").forEach((div) => {
+                this.observer.observe(div);
+            });
+        },
+
+        appendChunk: function (index, htmlContent) {
+            console.log(`Virtualization: Receiving chunk ${index} from Kotlin`);
+            logVerticalJitter(
+                "virtAppend idx=" +
+                    index +
+                    " existingData=" +
+                    Boolean(Array.isArray(this.chunksData) && this.chunksData[index]) +
+                    " scrollY=" +
+                    Math.round(window.scrollY || window.pageYOffset || 0),
+            );
+
+            if (Array.isArray(this.chunksData)) {
+                this.chunksData[index] = htmlContent;
+            }
+
+            let div = document.querySelector(`.chunk-container[data-chunk-index="${index}"]`);
+
+            if (div && div.innerHTML === "") {
+                let oldHeight = div.getBoundingClientRect().height;
+                div.innerHTML = htmlContent;
+                div.style.height = "";
+
+                let newHeight = div.getBoundingClientRect().height;
+                if (Array.isArray(this.chunkHeights)) {
+                    this.chunkHeights[index] = newHeight;
+                }
+
+                if (div.getBoundingClientRect().bottom < 0) {
+                    let before = Math.round(window.scrollY || window.pageYOffset || 0);
+                    window.scrollBy(0, newHeight - oldHeight);
+                    logVerticalJitter(
+                        "virtAppendScrollAdjust idx=" +
+                            index +
+                            " dy=" +
+                            Math.round(newHeight - oldHeight) +
+                            " scrollY=" +
+                            before +
+                            "->" +
+                            Math.round(window.scrollY || window.pageYOffset || 0),
+                    );
+                }
+
+                if (window.reportScrollState) {
+                    setTimeout(window.reportScrollState, 50);
+                }
+
+                if (window.CURRENT_HIGHLIGHTS) {
+                    window.HighlightBridgeHelper.restoreHighlights(window.CURRENT_HIGHLIGHTS);
+                }
+
+                if (window.CURRENT_SEARCH_QUERY) {
+                    window.highlightAllOccurrences(window.CURRENT_SEARCH_QUERY);
+                }
+            }
+
+            if (window.checkImagesForDiagnosis) {
+                setTimeout(window.checkImagesForDiagnosis, 100);
+            }
+            setTimeout(applyReaderImageAnchors, 80);
+        },
+    };
+
+    const HL_LOG_TAG = "HIGHLIGHT_DEBUG";
+    const HL_RENDER_LOG_TAG = "AndroidHighlightRenderDiag";
+
+    function hlRenderPreview(value, maxLength) {
+        if (value === undefined || value === null) return "";
+        var text = String(value).replace(/\s+/g, " ");
+        var max = maxLength || 100;
+        return text.length > max ? text.substring(0, max) : text;
+    }
+
+    function hlRenderLocatorLabel(locator) {
+        locator = locator || {};
+        return "locatorChapter=" + (locator.chapterIndex === undefined || locator.chapterIndex === null ? "null" : locator.chapterIndex) +
+            " locatorPage=" + (locator.pageIndex === undefined || locator.pageIndex === null ? "null" : locator.pageIndex) +
+            " locatorOffsets=" + (locator.startOffset === undefined || locator.startOffset === null ? "null" : locator.startOffset) +
+            ".." + (locator.endOffset === undefined || locator.endOffset === null ? "null" : locator.endOffset) +
+            " locatorBlock=" + (locator.blockIndex === undefined || locator.blockIndex === null ? "null" : locator.blockIndex) +
+            " locatorChar=" + (locator.charOffset === undefined || locator.charOffset === null ? "null" : locator.charOffset) +
+            " locatorCfi=" + hlRenderPreview(locator.cfi || "", 120);
+    }
+
+    function hlRenderLog(message) {
+        console.log(HL_RENDER_LOG_TAG + ": " + message);
+    }
+
+    window.HighlightBridgeHelper = {
+        updateHighlightStyle: function (cfi, newColorClass, colorId, colorCss, highlightStyle) {
+            console.log(`${HL_LOG_TAG}: updateHighlightStyle called. CFI: ${cfi}, Class: ${newColorClass}`);
+
+            var allSpans = document.querySelectorAll('span[class*="user-highlight-"]');
+
+            allSpans.forEach((span) => {
+                var currentCfiAttr = span.getAttribute("data-cfi") || "";
+                var cfis = currentCfiAttr.split(";;");
+
+                if (cfis.includes(cfi)) {
+                    var classesToRemove = [];
+                    for (var i = 0; i < span.classList.length; i++) {
+                        if (span.classList[i].startsWith("user-highlight-")) {
+                            classesToRemove.push(span.classList[i]);
+                        }
+                    }
+
+                    classesToRemove.forEach((cls) => span.classList.remove(cls));
+
+                    span.classList.add(newColorClass);
+                    this.applyHighlightVisualStyle(span, colorCss, highlightStyle);
+                }
+            });
+
+            if (window.HighlightBridge) {
+                var sampleSpan = document.querySelector(`span[data-cfi*='${cfi}']`);
+                var text = sampleSpan ? sampleSpan.textContent : "";
+                window.HighlightBridge.onHighlightCreated(cfi, text, colorId, highlightStyle || "background");
+            }
+        },
+
+
+        applyHighlightVisualStyle: function (span, colorCss, highlightStyle) {
+            var style = highlightStyle || "background";
+            span.setAttribute("data-highlight-style", style);
+            span.setAttribute("data-reader-highlight-style", style);
+            span.style.removeProperty("background-color");
+            span.style.removeProperty("text-decoration-line");
+            span.style.removeProperty("text-decoration-style");
+            span.style.removeProperty("text-decoration-color");
+            span.style.removeProperty("text-decoration-thickness");
+            span.style.removeProperty("text-underline-offset");
+            if (style === "underline" || style === "wavy_underline") {
+                span.style.setProperty("background-color", "transparent", "important");
+                span.style.setProperty("text-decoration-line", "underline", "important");
+                span.style.setProperty("text-decoration-style", style === "wavy_underline" ? "wavy" : "solid", "important");
+                if (colorCss) span.style.setProperty("text-decoration-color", colorCss, "important");
+                span.style.setProperty("text-decoration-thickness", "0.12em", "important");
+                span.style.setProperty("text-underline-offset", "0.18em", "important");
+            } else if (style === "strikethrough") {
+                span.style.setProperty("background-color", "transparent", "important");
+                span.style.setProperty("text-decoration-line", "line-through", "important");
+                span.style.setProperty("text-decoration-style", "solid", "important");
+                if (colorCss) span.style.setProperty("text-decoration-color", colorCss, "important");
+                span.style.setProperty("text-decoration-thickness", "0.12em", "important");
+            } else if (colorCss) {
+                span.style.setProperty("background-color", colorCss, "important");
+            }
+        },
+
+        createUserHighlight: function (colorClass, colorId, colorCss, highlightStyle) {
+            console.log(`$ {
+                    HL_LOG_TAG
+                }
+
+                : createUserHighlight. Class: $ {
+                    colorClass
+                }
+
+                `);
+            var selection = window.getSelection();
+
+            if (!selection || selection.rangeCount === 0 || selection.toString().trim() === "") {
+                return;
+            }
+
+            try {
+                var range = selection.getRangeAt(0);
+                var text = range.toString();
+
+                var safeStartNode = range.startContainer;
+                var safeStartOffset = range.startOffset;
+                var safeEndNode = range.endContainer;
+                var safeEndOffset = range.endOffset;
+
+                console.log(`$ {
+                        HL_LOG_TAG
+                    }
+
+                    : [CREATE] Raw Selection - Text: '${text}' `);
+
+                console.log(`$ {
+                        HL_LOG_TAG
+                    }
+
+                    : [CREATE] StartContainer Type: $ {
+                        safeStartNode.nodeType
+                    }
+
+                    , Name: $ {
+                        safeStartNode.nodeName
+                    }
+
+                    `);
+
+                var startResult = getCfiPathForElement(safeStartNode, safeStartOffset);
+                var startCfi = startResult.cfi;
+
+                var endResult = getCfiPathForElement(safeEndNode, safeEndOffset);
+                var endCfi = endResult.cfi;
+
+                var finalCfi = startCfi;
+
+                if (startCfi !== endCfi) {
+                    finalCfi = startCfi + "|" + endCfi;
+
+                    console.log(`$ {
+                            HL_LOG_TAG
+                        }
+
+                        : [CREATE] Range CFI Detected. Start: $ {
+                            startCfi
+                        }
+
+                        , End: $ {
+                            endCfi
+                        }
+
+                        `);
+                }
+
+                console.log(`$ {
+                        HL_LOG_TAG
+                    }
+
+                    : [CREATE] Final CFI: $ {
+                        finalCfi
+                    }
+
+                    `);
+
+                range = this.normalizeRangeBoundaries(range);
+                this.highlightRangeSafe(range, colorClass, finalCfi, colorCss, highlightStyle);
+
+                selection.removeAllRanges();
+
+                if (window.HighlightBridge) {
+                    window.HighlightBridge.onHighlightCreated(finalCfi, text, colorId, highlightStyle || "background");
+                }
+            } catch (e) {
+                console.log(
+                    `$ {
+                        HL_LOG_TAG
+                    }
+
+                    : Create Error: ` + e.message,
+                );
+            }
+        },
+
+        normalizeRangeBoundaries: function (range) {
+            var startContainer = range.startContainer;
+            var startOffset = range.startOffset;
+            var endContainer = range.endContainer;
+            var endOffset = range.endOffset;
+
+            if (startContainer.nodeType === Node.TEXT_NODE && startOffset > 0 && startOffset < startContainer.length) {
+                var newStartNode = startContainer.splitText(startOffset);
+                range.setStart(newStartNode, 0);
+
+                if (endContainer === startContainer) {
+                    endContainer = newStartNode;
+                    endOffset = endOffset - startOffset;
+                }
+            }
+
+            if (endContainer.nodeType === Node.TEXT_NODE && endOffset > 0 && endOffset < endContainer.length) {
+                endContainer.splitText(endOffset);
+                range.setEnd(endContainer, endOffset);
+            }
+
+            return range;
+        },
+
+        highlightRangeSafe: function (range, className, newCfi, colorCss, highlightStyle) {
+            var nodes = this.getTextNodesInRange(range);
+
+            nodes.forEach((node) => {
+                var parent = node.parentNode;
+                var existingCfiList = parent && parent.tagName === "SPAN" && parent.classList.contains(className)
+                    ? (parent.getAttribute("data-cfi") || "").split(";;")
+                    : null;
+
+                if (existingCfiList && existingCfiList.includes(newCfi)) {
+                    // The same highlight being restored or repainted. Keep it on the existing span so
+                    // the DOM matches the stored list instead of growing a duplicate span per pass.
+                    this.applyHighlightVisualStyle(parent, colorCss, highlightStyle);
+                    return;
+                }
+
+                if (node.nodeValue.trim().length === 0) return;
+
+                // A different highlight lands on text that is already highlighted. Wrap it in its own
+                // span rather than folding it into the existing one: a shared span has a single CSS
+                // class and a single inline colour, so merging made the second highlight overwrite the
+                // first's colour and made deleting one of them hide the other.
+                var span = document.createElement("span");
+                span.className = className;
+                span.setAttribute("data-cfi", newCfi);
+                this.applyHighlightVisualStyle(span, colorCss, highlightStyle);
+                node.parentNode.insertBefore(span, node);
+                span.appendChild(node);
+            });
+        },
+
+        getTextNodesInRange: function (range) {
+            var textNodes = [];
+            var container = range.commonAncestorContainer;
+            var root = container.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+
+            var walker = document.createTreeWalker(
+                root,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function (node) {
+                        return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    },
+                },
+
+                false,
+            );
+
+            while (walker.nextNode()) {
+                textNodes.push(walker.currentNode);
+            }
+
+            return textNodes;
+        },
+
+        removeHighlightByCfi: function (cfiToRemove, optionalCssClass) {
+            console.log(`$ {
+                HL_LOG_TAG
+            }
+
+            : removeHighlightByCfi called.`);
+
+            console.log(`$ {
+                HL_LOG_TAG
+            }
+
+            : -> Target CFI: '${cfiToRemove}' `);
+
+            console.log(`$ {
+                HL_LOG_TAG
+            }
+
+            : -> Optional Class: '${optionalCssClass}' `);
+
+            // 1. Select all highlight spans manually to avoid selector syntax errors
+            var allSpans = document.querySelectorAll("span[data-cfi]");
+
+            console.log(`$ {
+                HL_LOG_TAG
+            }
+
+            : Total highlight spans found in DOM: $ {
+                allSpans.length
+            }
+
+            `);
+
+            var foundCount = 0;
+            var removedCount = 0;
+            var updatedCount = 0;
+
+            allSpans.forEach((span) => {
+                var currentCfiAttr = span.getAttribute("data-cfi") || "";
+                var cfiList = currentCfiAttr.split(";;");
+
+                // Detailed check for match
+                if (cfiList.includes(cfiToRemove)) {
+                    foundCount++;
+
+                    console.log(`$ {
+                            HL_LOG_TAG
+                        }
+
+                        : Match found on span. Current CFIs: [$ {
+                            currentCfiAttr
+                        }
+
+                        ]`);
+
+                    var newCfiList = cfiList.filter((c) => c !== cfiToRemove);
+
+                    if (newCfiList.length === 0) {
+                        // CASE 1: No other highlights on this span -> Remove entirely
+                        console.log(`$ {
+                                HL_LOG_TAG
+                            }
+
+                            : -> Removing span entirely (no remaining CFIs).`);
+                        var parent = span.parentNode;
+                        while (span.firstChild) parent.insertBefore(span.firstChild, span);
+                        parent.removeChild(span);
+                        parent.normalize();
+                        removedCount++;
+                    } else {
+                        console.log(`$ {
+                                HL_LOG_TAG
+                            }
+
+                            : -> Updating span (remaining CFIs: $ {
+                                    newCfiList.join(';;')
+                                }).`);
+                        span.setAttribute("data-cfi", newCfiList.join(";;"));
+
+                        // The span's styling is deliberately left alone. It is shared by every CFI
+                        // still on it, and removing the CSS class made a surviving highlight go
+                        // invisible while it remained in the stored list. Newly created highlights no
+                        // longer share a span; this path only runs for spans written by an older build.
+                        if (optionalCssClass && newCfiList.length === 0) {
+                            span.classList.remove(optionalCssClass);
+                        }
+
+                        updatedCount++;
+                    }
+                }
+            });
+
+            console.log(`$ {
+                HL_LOG_TAG
+            }
+
+            : Removal Summary -> Matched: $ {
+                foundCount
+            }
+
+            , Removed: $ {
+                removedCount
+            }
+
+            , Updated: $ {
+                updatedCount
+            }
+
+            `);
+
+            if (foundCount === 0) {
+                console.log(`$ {
+                    HL_LOG_TAG
+                }
+
+                : No exact matches found. Attempting legacy fallback.`);
+                this.removeHighlightByCfiLegacy(cfiToRemove);
+            }
+        },
+
+        removeHighlightByCfiLegacy: function (cfi) {
+            try {
+                var location = window.getNodeAndOffsetFromCfi(cfi);
+
+                if (location && location.node) {
+                    var target = location.node;
+                    if (target.nodeType === Node.TEXT_NODE) target = target.parentNode;
+
+                    if (target.tagName === "SPAN" && target.className.startsWith("user-highlight-")) {
+                        var parent = target.parentNode;
+                        while (target.firstChild) parent.insertBefore(target.firstChild, target);
+                        parent.removeChild(target);
+                        parent.normalize();
+                    }
+                }
+            } catch (e) {}
+        },
+
+        restoreHighlights: function (jsonArrayString) {
+            try {
+                var highlights = JSON.parse(jsonArrayString);
+                var self = this;
+                hlRenderLog("webview_restore_start count=" + highlights.length);
+
+                highlights.forEach(function (h) {
+                    self.applyHighlightObject(h);
+                });
+            } catch (e) {
+                hlRenderLog("webview_restore_error error=" + hlRenderPreview(e && e.message ? e.message : e, 160));
+                console.log(
+                    `$ {
+                    HL_LOG_TAG
+                }
+
+                : Error restoring: ` + e.message,
+                );
+            }
+        },
+
+        applyHighlightObject: function (highlight) {
+            if (!highlight) return;
+            hlRenderLog(
+                "webview_apply_object id=" + (highlight.id || "") +
+                " cfi=" + hlRenderPreview(highlight.cfi || "", 120) +
+                " textLen=" + String(highlight.text || "").length +
+                " text='" + hlRenderPreview(highlight.text || "", 80) + "' " +
+                hlRenderLocatorLabel(highlight.locator || {})
+            );
+            this.applyHighlight(highlight.cfi, highlight.text, highlight.cssClass, highlight.locator || null, highlight.colorCss || null, highlight.style || "background");
+        },
+
+        highlightTextRoot: function () {
+            return document.getElementById("content-container") || document.body;
+        },
+
+        highlightTextNodes: function (root) {
+            var nodes = [];
+            if (!root) return nodes;
+            var walker = document.createTreeWalker(
+                root,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode: function (node) {
+                        if (!node || !node.nodeValue) return NodeFilter.FILTER_REJECT;
+                        var parent = node.parentElement;
+                        if (!parent) return NodeFilter.FILTER_REJECT;
+                        if (parent.closest && parent.closest("script, style, noscript")) return NodeFilter.FILTER_REJECT;
+                        return NodeFilter.FILTER_ACCEPT;
+                    },
+                },
+                false,
+            );
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+            return nodes;
+        },
+
+        rangeFromTextOffsets: function (root, startOffset, endOffset) {
+            var start = parseInt(startOffset, 10);
+            var end = parseInt(endOffset, 10);
+            if (!root || !isFinite(start) || !isFinite(end) || end <= start) {
+                hlRenderLog(
+                    "webview_range_offsets_skip reason=invalid_offsets start=" + startOffset +
+                    " end=" + endOffset + " hasRoot=" + !!root
+                );
+                return null;
+            }
+
+            var nodes = this.highlightTextNodes(root);
+            var cursor = 0;
+            var startNode = null;
+            var startInNode = 0;
+            var endNode = null;
+            var endInNode = 0;
+
+            for (var i = 0; i < nodes.length; i++) {
+                var value = nodes[i].nodeValue || "";
+                var next = cursor + value.length;
+                if (!startNode && start >= cursor && start <= next) {
+                    startNode = nodes[i];
+                    startInNode = Math.max(0, Math.min(value.length, start - cursor));
+                }
+                if (startNode && end >= cursor && end <= next) {
+                    endNode = nodes[i];
+                    endInNode = Math.max(0, Math.min(value.length, end - cursor));
+                    break;
+                }
+                cursor = next;
+            }
+
+            if (!startNode || !endNode) {
+                hlRenderLog(
+                    "webview_range_offsets_skip reason=missing_boundary start=" + start +
+                    " end=" + end + " nodes=" + nodes.length + " textCursor=" + cursor
+                );
+                return null;
+            }
+            var range = document.createRange();
+            range.setStart(startNode, startInNode);
+            range.setEnd(endNode, endInNode);
+            if (range.collapsed) {
+                hlRenderLog("webview_range_offsets_skip reason=collapsed start=" + start + " end=" + end);
+                return null;
+            }
+            hlRenderLog(
+                "webview_range_offsets_result start=" + start + " end=" + end +
+                " text='" + hlRenderPreview(range.toString(), 80) + "'"
+            );
+            return range;
+        },
+
+        rangeMatchesText: function (range, text) {
+            if (!range || !text) return true;
+            var actual = (range.toString() || "").trim();
+            var expected = String(text || "").trim();
+            if (!expected) return true;
+            return actual === expected || actual.replace(/\s+/g, " ") === expected.replace(/\s+/g, " ");
+        },
+
+        rangeFromVisibleTextSearch: function (text, locator) {
+            if (!text) {
+                hlRenderLog("webview_text_search_skip reason=empty_text " + hlRenderLocatorLabel(locator));
+                return null;
+            }
+            var root = this.highlightTextRoot();
+            var nodes = this.highlightTextNodes(root);
+            if (!nodes.length) {
+                hlRenderLog("webview_text_search_skip reason=no_nodes " + hlRenderLocatorLabel(locator));
+                return null;
+            }
+
+            var fullText = nodes.map(function (node) { return node.nodeValue || ""; }).join("");
+            var expected = String(text);
+            var candidates = [];
+            var index = fullText.indexOf(expected);
+            while (index !== -1) {
+                candidates.push(index);
+                index = fullText.indexOf(expected, index + 1);
+            }
+            if (!candidates.length) {
+                var lowerFull = fullText.toLowerCase();
+                var lowerExpected = expected.toLowerCase();
+                index = lowerFull.indexOf(lowerExpected);
+                while (index !== -1) {
+                    candidates.push(index);
+                    index = lowerFull.indexOf(lowerExpected, index + 1);
+                }
+            }
+            if (!candidates.length && expected.length > 20) {
+                var partial = expected.substring(0, Math.min(expected.length, 40));
+                index = fullText.indexOf(partial);
+                while (index !== -1) {
+                    candidates.push(index);
+                    index = fullText.indexOf(partial, index + 1);
+                }
+            }
+            if (!candidates.length) {
+                hlRenderLog(
+                    "webview_text_search_skip reason=no_candidates textLen=" + expected.length +
+                    " text='" + hlRenderPreview(expected, 80) + "' " + hlRenderLocatorLabel(locator)
+                );
+                return null;
+            }
+
+            var preferred = locator && locator.startOffset !== undefined && locator.startOffset !== null
+                ? parseInt(locator.startOffset, 10)
+                : candidates[0];
+            if (!isFinite(preferred)) preferred = candidates[0];
+            var best = candidates.reduce(function (currentBest, candidate) {
+                return Math.abs(candidate - preferred) < Math.abs(currentBest - preferred) ? candidate : currentBest;
+            }, candidates[0]);
+            hlRenderLog(
+                "webview_text_search_candidate count=" + candidates.length +
+                " preferred=" + preferred + " best=" + best +
+                " text='" + hlRenderPreview(expected, 80) + "' " + hlRenderLocatorLabel(locator)
+            );
+            return this.rangeFromTextOffsets(root, best, best + expected.length);
+        },
+
+        rangeFromLocator: function (locator, text) {
+            if (!locator) {
+                hlRenderLog("webview_locator_skip reason=missing_locator");
+                return null;
+            }
+            if (locator.cfi && String(locator.cfi).charAt(0) === "/") {
+                hlRenderLog(
+                    "webview_locator_skip reason=structural_cfi_prefers_cfi " +
+                    hlRenderLocatorLabel(locator)
+                );
+                return null;
+            }
+            var root = this.highlightTextRoot();
+            var range = this.rangeFromTextOffsets(root, locator.startOffset, locator.endOffset);
+            if (range && this.rangeMatchesText(range, text)) {
+                hlRenderLog(
+                    "webview_locator_result matched=true text='" + hlRenderPreview(range.toString(), 80) + "' " +
+                    hlRenderLocatorLabel(locator)
+                );
+                return range;
+            }
+            hlRenderLog(
+                "webview_locator_skip reason=" + (range ? "text_mismatch" : "range_missing") +
+                " rangeText='" + hlRenderPreview(range ? range.toString() : "", 80) + "' " +
+                "expected='" + hlRenderPreview(text || "", 80) + "' " + hlRenderLocatorLabel(locator)
+            );
+            return null;
+        },
+
+        rangeFromCfi: function (cfi, text) {
+            if (!cfi || cfi.indexOf("desktop:") === 0) {
+                hlRenderLog("webview_cfi_skip reason=unsupported cfi=" + hlRenderPreview(cfi || "", 120));
+                return null;
+            }
+            var sourceCfi = String(cfi).split("|")[0];
+            const location = window.getNodeAndOffsetFromCfi(sourceCfi);
+            if (!location || !location.node) {
+                hlRenderLog("webview_cfi_skip reason=missing_location cfi=" + hlRenderPreview(cfi, 120));
+                return null;
+            }
+
+            let startNode = location.node;
+            let startOffset = location.offset;
+
+            if (startNode.nodeType === Node.TEXT_NODE) {
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                walker.currentNode = startNode;
+
+                while (startNode && startOffset >= startNode.nodeValue.length) {
+                    if (startOffset === startNode.nodeValue.length) {
+                        const next = walker.nextNode();
+
+                        if (next) {
+                            startOffset -= startNode.nodeValue.length;
+                            startNode = next;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        startOffset -= startNode.nodeValue.length;
+                        startNode = walker.nextNode();
+                    }
+                }
+            }
+
+            if (text && text.length > 0 && startNode && startNode.nodeType === Node.TEXT_NODE) {
+                const nodeVal = startNode.nodeValue;
+                const substring = nodeVal.substring(startOffset, startOffset + text.length);
+
+                if (substring !== text && substring.trim() !== text.trim()) {
+                    hlRenderLog(
+                        "webview_cfi_text_mismatch cfi=" + hlRenderPreview(cfi, 120) +
+                        " startOffset=" + startOffset +
+                        " actual='" + hlRenderPreview(substring, 80) + "'" +
+                        " expected='" + hlRenderPreview(text, 80) + "'"
+                    );
+                    console.log("HIGHLIGHT_DEBUG: Text mismatch at CFI. Searching nearby.");
+                    const foundIndex = nodeVal.indexOf(text);
+
+                    if (foundIndex !== -1) {
+                        hlRenderLog(
+                            "webview_cfi_text_adjust reason=full_match oldStartOffset=" + startOffset +
+                            " newStartOffset=" + foundIndex + " cfi=" + hlRenderPreview(cfi, 120)
+                        );
+                        startOffset = foundIndex;
+                    } else {
+                        const partial = text.substring(0, Math.min(text.length, 20));
+                        const partialIndex = nodeVal.indexOf(partial);
+
+                        if (partialIndex !== -1) {
+                            hlRenderLog(
+                                "webview_cfi_text_adjust reason=partial_match oldStartOffset=" + startOffset +
+                                " newStartOffset=" + partialIndex + " cfi=" + hlRenderPreview(cfi, 120)
+                            );
+                            startOffset = partialIndex;
+                        }
+                    }
+                }
+            }
+
+            if (!startNode) {
+                hlRenderLog("webview_cfi_skip reason=missing_start_node cfi=" + hlRenderPreview(cfi, 120));
+                return null;
+            }
+
+            const range = document.createRange();
+
+            if (startNode.nodeType === Node.TEXT_NODE && startOffset > startNode.nodeValue.length) {
+                startOffset = Math.max(0, startNode.nodeValue.length - 1);
+            }
+
+            range.setStart(startNode, startOffset);
+
+            const treeWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+            treeWalker.currentNode = startNode;
+
+            let remainingLen = text.length;
+            let endNode = treeWalker.currentNode;
+            let endOffset = startOffset;
+
+            while (remainingLen > 0 && endNode) {
+                let avail = endNode.nodeValue.length - endOffset;
+
+                if (avail >= remainingLen) {
+                    endOffset += remainingLen;
+                    remainingLen = 0;
+                } else {
+                    remainingLen -= avail;
+                    endNode = treeWalker.nextNode();
+                    endOffset = 0;
+                }
+            }
+
+            if (!endNode) {
+                hlRenderLog("webview_cfi_skip reason=missing_end_node cfi=" + hlRenderPreview(cfi, 120));
+                return null;
+            }
+            range.setEnd(endNode, endOffset);
+            if (range.collapsed) {
+                hlRenderLog("webview_cfi_skip reason=collapsed cfi=" + hlRenderPreview(cfi, 120));
+                return null;
+            }
+            hlRenderLog(
+                "webview_cfi_result cfi=" + hlRenderPreview(cfi, 120) +
+                " text='" + hlRenderPreview(range.toString(), 80) + "'"
+            );
+            return range;
+        },
+
+        applyHighlight: function (cfi, text, cssClass, locator, colorCss, highlightStyle) {
+            try {
+                cssClass = cssClass || "user-highlight-yellow";
+                var alreadyApplied = false;
+                var spans = document.querySelectorAll(`span[data-cfi]`);
+                for (var i = 0; i < spans.length; i++) {
+                    if (cfi && (spans[i].getAttribute("data-cfi") || "").split(";;").includes(cfi)) {
+                        alreadyApplied = true;
+                        break;
+                    }
+                }
+                if (alreadyApplied) {
+                    hlRenderLog(
+                        "webview_apply_skip reason=already_applied cfi=" + hlRenderPreview(cfi || "", 120) +
+                        " textLen=" + String(text || "").length + " " + hlRenderLocatorLabel(locator)
+                    );
+                    return;
+                }
+
+                var hasPreciseLocator = locator &&
+                    locator.startOffset !== undefined && locator.startOffset !== null &&
+                    locator.endOffset !== undefined && locator.endOffset !== null &&
+                    parseInt(locator.endOffset, 10) > parseInt(locator.startOffset, 10);
+                hlRenderLog(
+                    "webview_apply_start cfi=" + hlRenderPreview(cfi || "", 120) +
+                    " textLen=" + String(text || "").length +
+                    " cssClass=" + cssClass +
+                    " hasPreciseLocator=" + !!hasPreciseLocator + " " +
+                    hlRenderLocatorLabel(locator)
+                );
+                var rangeSource = "locator";
+                var sourceCfi = (locator && locator.cfi) || cfi;
+                var hasSourceCfi = sourceCfi && String(sourceCfi).charAt(0) === "/";
+                var range = hasSourceCfi ? null : this.rangeFromLocator(locator, text);
+                if (!range && hasSourceCfi) {
+                    rangeSource = "cfi";
+                    range = this.rangeFromCfi(sourceCfi, text || "");
+                }
+                if (!range) {
+                    rangeSource = "locator";
+                    range = this.rangeFromLocator(locator, text);
+                }
+                if (!range && !hasPreciseLocator && !hasSourceCfi) {
+                    rangeSource = "text_search";
+                    range = this.rangeFromVisibleTextSearch(text || "", locator);
+                }
+                if (!range) {
+                    hlRenderLog(
+                        "webview_apply_skip reason=no_range cfi=" + hlRenderPreview(cfi || "", 120) +
+                        " hasPreciseLocator=" + !!hasPreciseLocator + " " + hlRenderLocatorLabel(locator)
+                    );
+                    return;
+                }
+                var normalizedRange = this.normalizeRangeBoundaries(range);
+                this.highlightRangeSafe(normalizedRange, cssClass, cfi, colorCss, highlightStyle);
+                hlRenderLog(
+                    "webview_apply_result applied=true cfi=" + hlRenderPreview(cfi || "", 120) +
+                    " source=" + rangeSource +
+                    " renderedText='" + hlRenderPreview(normalizedRange.toString(), 80) + "'"
+                );
+            } catch (e) {
+                hlRenderLog("webview_apply_error error=" + hlRenderPreview(e && e.message ? e.message : e, 160));
+                console.log(e);
+            }
+        },
+    };
+})();
+
+(function () {
+    const TAG_AUTO_SCROLL = "AutoScrollDiagnosis";
+
+    window.autoScroll = {
+        active: false,
+        speed: 1.0,
+        accumulator: 0.0,
+        animationId: null,
+
+        start: function (speed) {
+            console.log(`$ {
+                        TAG_AUTO_SCROLL
+                    }
+
+                    : Starting auto-scroll. Speed: $ {
+                        speed
+                    }
+
+                    `);
+            this.active = true;
+            this.speed = speed || this.speed;
+            this.accumulator = 0.0;
+            if (this.animationId) cancelAnimationFrame(this.animationId);
+            this.loop();
+        },
+
+        stop: function () {
+            this.active = false;
+            if (this.animationId) {
+                cancelAnimationFrame(this.animationId);
+                this.animationId = null;
+            }
+
+            const container = document.getElementById("content-container") || document.body;
+            if (container) {
+                container.style.transform = "none";
+                window.scrollBy(0, 0);
+            }
+        },
+
+        updateSpeed: function (newSpeed) {
+            console.log(`$ {
+                        TAG_AUTO_SCROLL
+                    }
+
+                    : Speed updated to $ {
+                        newSpeed
+                    }
+
+                    `);
+            this.speed = newSpeed;
+        },
+
+        loop: function () {
+            if (!this.active) return;
+
+            this.accumulator += this.speed;
+
+            const totalPixelsToScroll = Math.floor(this.accumulator);
+
+            if (totalPixelsToScroll >= 1) {
+                const prevScrollY = window.scrollY;
+                window.scrollBy(0, totalPixelsToScroll);
+
+                this.accumulator -= totalPixelsToScroll;
+
+                const scrollY = window.scrollY;
+                const docHeight = document.documentElement.scrollHeight;
+                const innerH = window.innerHeight;
+                const isAtBottom = scrollY + innerH >= docHeight - 3;
+                const isStuck = totalPixelsToScroll > 0 && scrollY === prevScrollY && prevScrollY > 0;
+
+                if (isAtBottom || isStuck) {
+                    this.stop();
+                    if (window.AutoScrollBridge && window.AutoScrollBridge.onChapterEnd) {
+                        window.AutoScrollBridge.onChapterEnd();
+                    }
+                    return;
+                }
+            }
+
+            const container = document.getElementById("content-container") || document.body;
+            if (container) {
+                container.style.transform = `translate3d(0, -${this.accumulator}px, 0)`;
+            }
+
+            this.animationId = requestAnimationFrame(this.loop.bind(this));
+        },
+    };
+})();

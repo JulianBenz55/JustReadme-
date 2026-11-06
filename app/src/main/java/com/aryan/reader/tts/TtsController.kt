@@ -1,0 +1,543 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.tts
+
+import android.content.ComponentName
+import android.content.Context
+import android.os.Bundle
+import android.os.Looper
+import timber.log.Timber
+import androidx.annotation.OptIn
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.aryan.reader.BuildConfig
+import com.aryan.reader.epubreader.loadTtsPitch
+import com.aryan.reader.epubreader.loadTtsSpeechRate
+import com.aryan.reader.isByokCloudTtsAvailable
+import com.aryan.reader.tts.TtsPlaybackManager.TtsState
+import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+@OptIn(UnstableApi::class)
+fun loadTtsMode(context: Context): TtsPlaybackManager.TtsMode {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    val savedModeName = prefs.getString("tts_mode", TtsPlaybackManager.TtsMode.BASE.name)
+        ?: TtsPlaybackManager.TtsMode.BASE.name
+
+    return resolveTtsModeForCurrentBuild(context, savedModeName)
+}
+
+@OptIn(UnstableApi::class)
+internal fun resolveTtsModeForCurrentBuild(
+    context: Context,
+    requestedModeName: String?
+): TtsPlaybackManager.TtsMode {
+    return resolveTtsModeForBuild(
+        requestedModeName = requestedModeName,
+        isOfflineBuild = BuildConfig.IS_OFFLINE,
+        isProBuild = BuildConfig.IS_PRO,
+        workerUrl = BuildConfig.TTS_WORKER_URL,
+        byokCloudAvailable = isByokCloudTtsAvailable(context)
+    )
+}
+
+@OptIn(UnstableApi::class)
+internal fun resolveTtsModeForBuild(
+    requestedModeName: String?,
+    isOfflineBuild: Boolean,
+    isProBuild: Boolean,
+    workerUrl: String,
+    byokCloudAvailable: Boolean
+): TtsPlaybackManager.TtsMode {
+    val requestedMode = try {
+        TtsPlaybackManager.TtsMode.valueOf(
+            requestedModeName ?: TtsPlaybackManager.TtsMode.BASE.name
+        )
+    } catch (_: Exception) {
+        TtsPlaybackManager.TtsMode.BASE
+    }
+
+    if (requestedMode != TtsPlaybackManager.TtsMode.CLOUD) {
+        return requestedMode
+    }
+
+    return if (isCloudTtsAllowedForBuild(
+            isOfflineBuild = isOfflineBuild,
+            isProBuild = isProBuild,
+            workerUrl = workerUrl,
+            byokCloudAvailable = byokCloudAvailable
+        )
+    ) {
+        TtsPlaybackManager.TtsMode.CLOUD
+    } else {
+        TtsPlaybackManager.TtsMode.BASE
+    }
+}
+
+internal fun isCloudTtsAllowedForBuild(
+    isOfflineBuild: Boolean,
+    isProBuild: Boolean,
+    workerUrl: String,
+    byokCloudAvailable: Boolean
+): Boolean {
+    if (isOfflineBuild) return false
+    return (isProBuild && workerUrl.isNotBlank()) || byokCloudAvailable
+}
+
+internal fun ttsControllerApplicationLooper(): Looper {
+    return Looper.getMainLooper()
+}
+
+@UnstableApi
+class TtsController(context: Context) : Player.Listener {
+    
+    private val context = context.applicationContext
+
+    private val _ttsState = MutableStateFlow(TtsState())
+    val ttsState = _ttsState.asStateFlow()
+
+    private var mediaController: MediaController? = null
+    private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var pendingStartArgs: Bundle? = null
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var pollingJob: Job? = null
+
+    init {
+        val initialSpeakerId = loadTtsSpeaker(this.context)
+        _ttsState.value = _ttsState.value.copy(speakerId = initialSpeakerId)
+    }
+
+    fun connect() {
+        if (mediaController != null || controllerFuture != null) {
+            Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+                "TtsController.connect skipped. hasController=${mediaController != null}, hasFuture=${controllerFuture != null}"
+            )
+            return
+        }
+
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i("TtsController.connect building MediaController.")
+        val sessionToken = SessionToken(context, ComponentName(context, TtsService::class.java))
+        val future = MediaController.Builder(context, sessionToken)
+            .setApplicationLooper(ttsControllerApplicationLooper())
+            .buildAsync()
+        controllerFuture = future
+
+        future.addListener(
+            {
+                try {
+                    if (future.isCancelled) return@addListener
+
+                    val controller = future.get()
+
+                    if (controllerFuture != future) {
+                        Timber.d("MediaController connected after release. Releasing immediately.")
+                        controller.release()
+                        return@addListener
+                    }
+
+                    mediaController = controller
+                    controllerFuture = null
+
+                    mediaController?.addListener(this)
+                    Timber.d("MediaController connected.")
+                    Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+                        "MediaController connected. playbackState=${controller.playbackState}, isPlaying=${controller.isPlaying}, mediaItems=${controller.mediaItemCount}, customLayout=${controller.customLayout.size}"
+                    )
+                    updateStateFromController()
+                    startPolling()
+                    pendingStartArgs?.let { args ->
+                        pendingStartArgs = null
+                        sendStartCommand(controller, args)
+                    }
+                } catch (e: Exception) {
+                    Timber.w("Failed to connect MediaController: ${e.message}")
+                    Timber.tag(TTS_NOTIFICATION_DIAG_TAG).e(e, "MediaController connection failed.")
+                    if (controllerFuture == future) {
+                        controllerFuture = null
+                    }
+                }
+            },
+            ContextCompat.getMainExecutor(context)
+        )
+    }
+
+    private fun startPolling() {
+        if (pollingJob?.isActive == true) return
+        pollingJob = scope.launch {
+            while (isActive) {
+                updateStateFromController()
+                delay(150)
+            }
+        }
+    }
+
+    fun start(
+        chunks: List<com.aryan.reader.paginatedreader.TtsChunk>,
+        bookTitle: String,
+        chapterTitle: String?,
+        coverImageUri: String?,
+        bookId: String? = null,
+        chapterIndex: Int? = null,
+        totalChapters: Int? = null,
+        pageIndex: Int? = null,
+        startChunkIndex: Int = 0,
+        continueSession: Boolean = false,
+        ttsMode: TtsPlaybackManager.TtsMode,
+        playbackSource: String = "READER",
+        authToken: String? = null
+    ) {
+        if (chunks.isEmpty()) {
+            Timber.w("TtsController: start called with empty chunks!")
+            Timber.tag(TTS_NOTIFICATION_DIAG_TAG).w("TtsController.start aborted because chunks is empty.")
+            return
+        }
+        val effectiveTtsMode = resolveTtsModeForCurrentBuild(context, ttsMode.name)
+        Timber.d("UI sending START command with mode: $effectiveTtsMode")
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "TtsController.start. hasController=${mediaController != null}, chunks=${chunks.size}, continueSession=$continueSession, source=$playbackSource, mode=$effectiveTtsMode, requestedMode=$ttsMode, book='${bookTitle.take(60)}', chapter='${chapterTitle.orEmpty().take(60)}', chapterIndex=$chapterIndex, totalChapters=$totalChapters"
+        )
+
+        val textList = ArrayList(chunks.map { it.text })
+        val spokenTextList = ArrayList(chunks.map { it.spokenText.ifBlank { it.text } })
+        val cfiList = ArrayList(chunks.map { it.sourceCfi })
+        val offsetList = ArrayList(chunks.map { it.startOffsetInSource })
+
+        val args = Bundle().apply {
+            putStringArrayList(KEY_TEXT_CHUNKS, textList)
+            putStringArrayList(KEY_SPOKEN_TEXT_CHUNKS, spokenTextList)
+            putStringArrayList(KEY_SOURCE_CFIS, cfiList)
+            putIntegerArrayList(KEY_START_OFFSETS, offsetList)
+            putString(KEY_SPEAKER_ID, _ttsState.value.speakerId)
+            putString(KEY_BOOK_TITLE, bookTitle)
+            putString(KEY_CHAPTER_TITLE, chapterTitle)
+            putString(KEY_COVER_IMAGE_URI, coverImageUri)
+            bookId?.let { putString(KEY_BOOK_ID, it) }
+            chapterIndex?.let { putInt(KEY_CHAPTER_INDEX, it) }
+            totalChapters?.let { putInt(KEY_TOTAL_CHAPTERS, it) }
+            pageIndex?.let { putInt(KEY_PAGE_INDEX, it) }
+            putInt(KEY_START_CHUNK_INDEX, startChunkIndex)
+            putBoolean(KEY_CONTINUE_SESSION, continueSession)
+            putString(KEY_TTS_MODE, effectiveTtsMode.name)
+            putString(KEY_PLAYBACK_SOURCE, playbackSource)
+            putString(KEY_AUTH_TOKEN, authToken)
+            putFloat("playback_speed", loadTtsSpeechRate(context))
+            putFloat("playback_pitch", loadTtsPitch(context))
+        }
+        val controller = mediaController
+        if (controller == null) {
+            // Opening a reader must not bind the service or initialize a system
+            // TTS engine. Retain only the user's actual start request until the
+            // controller connection completes.
+            pendingStartArgs = args
+            connect()
+        } else {
+            sendStartCommand(controller, args)
+        }
+    }
+
+    fun pause() {
+        mediaController?.pause()
+    }
+
+    fun resume() {
+        mediaController?.play()
+    }
+
+    fun stop() {
+        Timber.d("UI sending STOP command.")
+        pendingStartArgs = null
+        _ttsState.value = _ttsState.value.copy(
+            isPlaying = false,
+            isLoading = false,
+            sessionEndedByStop = true,
+            sessionFinished = false
+        )
+        val controller = mediaController ?: run {
+            // Cancel a just-started connection too; otherwise tapping Stop
+            // during startup could still create and warm up the service.
+            disconnect()
+            return
+        }
+        controller.sendCustomCommand(STOP_TTS_COMMAND, Bundle.EMPTY).addListener(
+            {
+                // The service receives an explicit-stop callback and calls
+                // stopSelf(). Releasing our binding lets onDestroy shut down the
+                // heavyweight system engine without affecting Pause or handoffs.
+                if (mediaController === controller) disconnect()
+            },
+            ContextCompat.getMainExecutor(context)
+        )
+    }
+
+    @Suppress("unused")
+    fun changeSpeaker(speakerId: String) {
+        Timber.d("UI sending CHANGE_SPEAKER command.")
+        val safeSpeakerId = normalizeTtsSpeakerId(speakerId)
+        saveTtsSpeaker(context, safeSpeakerId)
+        _ttsState.value = _ttsState.value.copy(speakerId = safeSpeakerId)
+
+        val args = Bundle().apply {
+            putString(KEY_SPEAKER_ID, safeSpeakerId)
+        }
+        mediaController?.sendCustomCommand(CHANGE_SPEAKER_COMMAND, args)
+    }
+
+    @Suppress("unused")
+    fun changeTtsMode(mode: String) {
+        Timber.d("UI sending CHANGE_TTS_MODE command.")
+        val effectiveMode = resolveTtsModeForCurrentBuild(context, mode)
+        val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+        prefs.edit { putString("tts_mode", effectiveMode.name) }
+        _ttsState.value = _ttsState.value.copy(ttsMode = effectiveMode.name)
+
+        val args = Bundle().apply {
+            putString(KEY_TTS_MODE, effectiveMode.name)
+        }
+        mediaController?.sendCustomCommand(CHANGE_TTS_MODE_COMMAND, args)
+    }
+
+    fun flushPrefetch() {
+        Timber.d("UI sending FLUSH_PREFETCH command.")
+        mediaController?.sendCustomCommand(FLUSH_PREFETCH_COMMAND, Bundle.EMPTY)
+    }
+
+    fun sliceAndRetainPosition() {
+        Timber.d("UI sending SLICE_CURRENT_AND_RELOAD command.")
+        mediaController?.sendCustomCommand(SLICE_CURRENT_AND_RELOAD_COMMAND, Bundle.EMPTY)
+    }
+
+    fun skipToPreviousChunk() {
+        Timber.d("UI sending SKIP_TO_PREVIOUS_TTS_CHUNK command.")
+        mediaController?.sendCustomCommand(SKIP_TO_PREVIOUS_TTS_CHUNK_COMMAND, Bundle.EMPTY)
+    }
+
+    fun skipToNextChunk() {
+        Timber.d("UI sending SKIP_TO_NEXT_TTS_CHUNK command.")
+        mediaController?.sendCustomCommand(SKIP_TO_NEXT_TTS_CHUNK_COMMAND, Bundle.EMPTY)
+    }
+
+    override fun onEvents(player: Player, events: Player.Events) {
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "Controller onEvents. playbackState=${player.playbackState}, isPlaying=${player.isPlaying}, playWhenReady=${player.playWhenReady}, mediaItems=${player.mediaItemCount}, currentIndex=${player.currentMediaItemIndex}, events=$events"
+        )
+        updateStateFromController()
+    }
+
+    private fun updateStateFromController() {
+        mediaController?.let { controller ->
+            val customState = controller.customLayout.firstOrNull()?.extras ?: Bundle.EMPTY
+            val currentMediaItem = controller.currentMediaItem
+            val mediaItemExtras = currentMediaItem?.mediaMetadata?.extras
+            val currentMediaBookTitle = currentMediaItem?.mediaMetadata?.title?.toString()
+            val currentTextFromMediaItem = mediaItemExtras?.getString("ttsText")
+                ?: currentMediaItem?.mediaMetadata?.subtitle?.toString()
+            val serviceSpeaker = customState.getString("speakerId", _ttsState.value.speakerId)
+            val sessionEndedByStop = customState.getBoolean("sessionEndedByStop", false)
+            val isLoading = customState.getBoolean("isLoading", false)
+            val sessionFinished = customState.getBoolean("sessionFinished", false)
+            val serviceMode = customState.getString("ttsMode", _ttsState.value.ttsMode)
+            val isDirectLocalPlayback = serviceMode == TtsPlaybackManager.TtsMode.BASE.name
+            val effectivePlaybackState = if (isDirectLocalPlayback) {
+                customState.getInt("playbackState", controller.playbackState)
+            } else {
+                controller.playbackState
+            }
+            val effectiveIsPlaying = if (isDirectLocalPlayback) {
+                customState.getBoolean("isPlaying", false)
+            } else {
+                controller.isPlaying
+            }
+            val isPlaybackActive = effectiveIsPlaying ||
+                effectivePlaybackState == Player.STATE_READY ||
+                effectivePlaybackState == Player.STATE_BUFFERING
+            val playbackSource = customState.getString("playbackSource")
+            val serviceBookTitle = customState.getString("bookTitle")
+            val serviceChapterTitle = customState.getString("chapterTitle")
+            val serviceChapterIndex = customState.getInt("chapterIndex", -1).takeIf { it >= 0 }
+            val serviceTotalChapters = customState.getInt("totalChapters", -1).takeIf { it > 0 }
+            val serviceBookId = customState.getString("bookId") ?: mediaItemExtras?.getString("bookId")
+            val servicePageIndex = customState.getInt("pageIndex", -1)
+                .takeIf { it >= 0 }
+                ?: mediaItemExtras?.getInt("pageIndex", -1)?.takeIf { it >= 0 }
+            val serviceCurrentChunkIndex = customState.getInt("currentChunkIndex", -1)
+            val serviceTotalChunks = customState.getInt("totalChunks", 0)
+            val serviceBookProgressPercent = customState.getInt("bookProgressPercent", -1).takeIf { it >= 0 }
+            val transcriptStartIndex = customState.getInt("transcriptStartIndex", 0)
+            val transcriptChunks = customState.getStringArrayList("transcriptChunks").orEmpty()
+
+            val sourceCfi = mediaItemExtras?.getString("sourceCfi") ?: customState.getString("sourceCfi")
+            val startOffset = mediaItemExtras?.getInt("startOffset", -1)
+                ?: customState.getInt("startOffset", -1)
+            val currentWordSourceCfi = customState.getString("currentWordSourceCfi")
+            val currentWordStartOffset = customState.getInt("currentWordStartOffset", -1)
+            val currentState = _ttsState.value
+            _ttsState.value = currentState.copy(
+                isPlaying = effectiveIsPlaying,
+                isLoading = isLoading,
+                currentText = if (isPlaybackActive) {
+                    currentTextFromMediaItem
+                } else {
+                    if (isLoading) currentState.currentText else null
+                },
+                errorMessage = customState.getString("errorMessage"),
+                bookId = if (isPlaybackActive || isLoading) {
+                    serviceBookId ?: currentState.bookId
+                } else {
+                    serviceBookId
+                },
+                bookTitle = if (isPlaybackActive) {
+                    currentMediaBookTitle ?: serviceBookTitle
+                } else {
+                    if (isLoading) currentState.bookTitle else serviceBookTitle
+                },
+                chapterTitle = if (isPlaybackActive || isLoading) {
+                    serviceChapterTitle ?: currentState.chapterTitle
+                } else {
+                    serviceChapterTitle
+                },
+                chapterIndex = if (isPlaybackActive || isLoading) {
+                    serviceChapterIndex ?: currentState.chapterIndex
+                } else {
+                    serviceChapterIndex
+                },
+                totalChapters = if (isPlaybackActive || isLoading) {
+                    serviceTotalChapters ?: currentState.totalChapters
+                } else {
+                    serviceTotalChapters
+                },
+                pageIndex = if (isPlaybackActive || isLoading) {
+                    servicePageIndex ?: currentState.pageIndex
+                } else {
+                    servicePageIndex
+                },
+                currentChunkIndex = serviceCurrentChunkIndex,
+                totalChunks = serviceTotalChunks,
+                bookProgressPercent = serviceBookProgressPercent,
+                speakerId = serviceSpeaker,
+                sourceCfi = if (isPlaybackActive) {
+                    sourceCfi
+                } else {
+                    if (isLoading) currentState.sourceCfi else null
+                },
+                startOffsetInSource = if (isPlaybackActive) {
+                    startOffset
+                } else {
+                    if (isLoading) currentState.startOffsetInSource else -1
+                },
+                playbackState = effectivePlaybackState,
+                sessionEndedByStop = sessionEndedByStop,
+                currentWordSourceCfi = if (isPlaybackActive) currentWordSourceCfi else null,
+                currentWordStartOffset = if (isPlaybackActive) currentWordStartOffset else -1,
+                sessionFinished = sessionFinished,
+                playbackSource = playbackSource,
+                ttsMode = serviceMode,
+                transcriptStartIndex = transcriptStartIndex,
+                transcriptChunks = transcriptChunks
+            )
+            if (sessionEndedByStop) {
+                // Every observer releases its binding after an explicit stop so stopSelf()
+                // can reach onDestroy and tear down the local engine and media resources.
+                scope.launch {
+                    delay(1)
+                    if (_ttsState.value.sessionEndedByStop) disconnect()
+                }
+            }
+        }
+    }
+
+
+
+    fun setPlaybackParameters(speed: Float, pitch: Float) {
+        val args = Bundle().apply {
+            putFloat("speed", speed)
+            putFloat("pitch", pitch)
+        }
+        mediaController?.sendCustomCommand(SET_PLAYBACK_PARAMS_COMMAND, args)
+    }
+
+    private fun sendStartCommand(controller: MediaController, args: Bundle) {
+        Timber.tag("TTS_CLOUD_DIAG").d(
+            "TtsController sending START. Mode: ${args.getString(KEY_TTS_MODE)}, " +
+                "Chunks: ${args.getStringArrayList(KEY_TEXT_CHUNKS)?.size ?: 0}, " +
+                "Token present: ${!args.getString(KEY_AUTH_TOKEN).isNullOrBlank()}"
+        )
+        val result = controller.sendCustomCommand(START_TTS_COMMAND, args)
+        Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
+            "START command sent. playbackState=${controller.playbackState}, isPlaying=${controller.isPlaying}, mediaItems=${controller.mediaItemCount}, resultDone=${result.isDone}"
+        )
+    }
+
+    private fun disconnect() {
+        pollingJob?.cancel()
+        pollingJob = null
+
+        val future = controllerFuture
+        controllerFuture = null
+        if (future != null && !future.isDone) {
+            future.cancel(true)
+        }
+
+        mediaController?.removeListener(this)
+        mediaController?.release()
+        mediaController = null
+        Timber.d("MediaController released.")
+    }
+
+    fun release() {
+        pendingStartArgs = null
+        disconnect()
+        scope.cancel()
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+fun rememberTtsController(): TtsController {
+    val context = LocalContext.current
+    val controller = remember {
+        TtsController(context)
+    }
+
+    DisposableEffect(controller) {
+        onDispose {
+            controller.release()
+        }
+    }
+
+    return controller
+}

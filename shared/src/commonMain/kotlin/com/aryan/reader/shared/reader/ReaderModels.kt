@@ -1,0 +1,473 @@
+package com.aryan.reader.shared.reader
+
+import com.aryan.reader.paginatedreader.SemanticBlock
+import com.aryan.reader.shared.PageInfoMode
+import com.aryan.reader.shared.PageInfoPosition
+import com.aryan.reader.shared.SystemUiMode
+import com.aryan.reader.shared.pdf.PdfReverseColorMode
+
+data class SharedEpubBook(
+    val id: String,
+    val fileName: String,
+    val title: String,
+    val author: String? = null,
+    val chapters: List<SharedEpubChapter>,
+    val css: Map<String, String> = emptyMap(),
+    val tableOfContents: List<SharedEpubTocEntry> = emptyList(),
+    val pageList: List<MobileEpubPageTarget> = emptyList(),
+    val images: List<MobileEpubImage> = emptyList(),
+    val coverImagePath: String? = null,
+    val language: String = "en",
+    val seriesName: String? = null,
+    val seriesIndex: Double? = null,
+    val description: String? = null,
+    /**
+     * EPUB media overlay facts, read from the OPF without parsing any SMIL body.
+     *
+     * `EMPTY` for the overwhelming majority of books. Built for every book, so it must stay cheap:
+     * it reuses the manifest and OPF metas the package loader already has.
+     */
+    val mediaOverlays: SharedMediaOverlayIndex = SharedMediaOverlayIndex.EMPTY
+)
+
+data class SharedEpubTocEntry(
+    val label: String,
+    val href: String,
+    val fragmentId: String? = null,
+    val depth: Int = 0
+)
+
+data class SharedEpubChapter(
+    val id: String,
+    val title: String,
+    val plainText: String,
+    val semanticBlocks: List<SemanticBlock> = emptyList(),
+    val htmlContent: String = "",
+    val baseHref: String? = null,
+    /** Fragment that identifies this logical section within [baseHref]. */
+    val fragmentId: String? = null,
+    val depth: Int = 0,
+    val isInToc: Boolean = true
+)
+
+typealias ReaderLocator = com.aryan.reader.shared.ReaderLocator
+
+enum class ReaderReadingMode {
+    PAGINATED,
+    VERTICAL
+}
+
+enum class ReaderScreenOrientationMode(val title: String) {
+    FOLLOW_SYSTEM("Follow system"),
+    PORTRAIT("Portrait"),
+    LANDSCAPE("Landscape")
+}
+
+enum class ReaderPageSpreadMode {
+    SINGLE,
+    TWO_PAGE
+}
+
+enum class ReaderPaginationMode {
+    FULL,
+    ANCHOR_CHAPTER_ONLY
+}
+
+enum class ReaderSettingsUpdateMode {
+    FULL_REPAGINATE,
+    DEFER_LAYOUT_PAGINATION
+}
+
+enum class SharedReaderTextAlign {
+    START,
+    LEFT,
+    RIGHT,
+    JUSTIFY,
+    CENTER
+}
+
+data class ReaderSettings(
+    val fontSize: Int = 18,
+    val fontWeight: Int = 0,
+    val letterSpacing: Float = 0f,
+    val lineSpacing: Float = 1.45f,
+    /**
+     * Default page margin in px. Matches the Android benchmark: both Android
+     * surfaces render a 1.0x margin as 16 (native 16.dp, WebView 16px), so the
+     * shared default and [AndroidEpubFormatBenchmark.baseMarginPx] use 16.
+     */
+    val margin: Int = 16,
+    val darkMode: Boolean = false,
+    val readingMode: ReaderReadingMode = ReaderReadingMode.VERTICAL,
+    val textAlign: SharedReaderTextAlign = SharedReaderTextAlign.START,
+    val pageWidth: Int = 760,
+    val fontFamily: String = "Default",
+    val paragraphSpacing: Float = 1.0f,
+    val imageScale: Float = 1.0f,
+    val horizontalMargin: Int? = null,
+    val verticalMargin: Int? = null,
+    val themeId: String? = null,
+    val textureId: String? = null,
+    val textureAlpha: Float = 0.55f,
+    val customFontPath: String? = null,
+    val backgroundColorArgb: Long? = null,
+    val textColorArgb: Long? = null,
+    val systemUiMode: SystemUiMode = SystemUiMode.DEFAULT,
+    val pageInfoMode: PageInfoMode = PageInfoMode.DEFAULT,
+    val pageInfoPosition: PageInfoPosition = PageInfoPosition.BOTTOM,
+    val pageSpreadMode: ReaderPageSpreadMode = ReaderPageSpreadMode.SINGLE,
+    val pageSpreadGutterDp: Float = DefaultReaderPageSpreadGutterDp,
+    val rightToLeftPagination: Boolean = false,
+    val tapToNavigateEnabled: Boolean = true,
+    val pageTurnAnimationEnabled: Boolean = false,
+    val pdfVerticalPageGapVisible: Boolean = true,
+    val pdfPageNumberOverlayVisible: Boolean = true,
+    val pdfFirstPageStandaloneInSpread: Boolean = false,
+    /** Okular-compatible colour transform used by the PDF reverse theme. */
+    val pdfReverseColorMode: PdfReverseColorMode = PdfReverseColorMode.RGB,
+    val pdfPreserveImageColors: Boolean = false,
+    val seamlessChapterNavigation: Boolean = true,
+    val chapterTurnDragMultiplier: Float = 1.0f,
+    val hideImages: Boolean = false
+) {
+    val resolvedHorizontalMargin: Int get() = horizontalMargin ?: margin
+    val resolvedVerticalMargin: Int get() = verticalMargin ?: margin
+}
+
+/**
+ * Android benchmark parity: the native Android paginated reader
+ * (`PaginatedReaderScreen`) has no page-width cap and fills
+ * `maxWidth - 2 * margin`. Shared mobile (iOS) must ignore the persisted
+ * [ReaderSettings.pageWidth] (default 760, desktop-adjustable 520..1100) so it
+ * renders full-width like Android instead of letterboxing on wide screens
+ * such as iPad. Desktop keeps the adjustable cap.
+ *
+ * The value is larger than any real viewport (even scaled by [densityScale] in
+ * `scaleCssPx`: 100_000 * 4 = 400_000 < Int.MAX_VALUE) so the shared
+ * `min(available, configured)` / `coerceAtMost(configured)` geometry becomes a
+ * no-op and pagination stays identical to rendering.
+ */
+const val UncappedReaderPageWidthPx = 100_000
+
+/**
+ * Default gap between the two pages of a two-page spread, in dp. Applies to
+ * both the shared measured paginator slot math and the Android paginated
+ * reader. Adjustable via the format settings' Spread Gap control.
+ */
+const val DefaultReaderPageSpreadGutterDp = 20f
+
+fun ReaderSettings.withUncappedPageWidth(): ReaderSettings =
+    copy(pageWidth = UncappedReaderPageWidthPx)
+
+/**
+ * Defaults for a new PDF reader session.
+ *
+ * PDF tap-to-turn is opt-in on Android (the benchmark implementation). Keep
+ * that format-specific default separate from [ReaderSettings]' generic EPUB
+ * defaults, where tap navigation remains enabled by default.
+ */
+val DefaultPdfReaderSettings: ReaderSettings = ReaderSettings(
+    themeId = "no_theme",
+    tapToNavigateEnabled = false,
+    systemUiMode = SystemUiMode.SYNC,
+)
+
+/**
+ * iOS default for a new PDF reader session.
+ *
+ * Android remains the benchmark with [SystemUiMode.SYNC]; iOS defaults to
+ * [SystemUiMode.DEFAULT] (Always Show) so the status bar stays visible.
+ */
+val DefaultIosPdfReaderSettings: ReaderSettings = DefaultPdfReaderSettings.copy(
+    systemUiMode = SystemUiMode.DEFAULT,
+)
+
+data class ReaderLayoutSignature(
+    val fontSize: Int,
+    val fontWeight: Int,
+    val letterSpacing: Float,
+    val lineSpacing: Float,
+    val horizontalMargin: Int,
+    val verticalMargin: Int,
+    val readingMode: ReaderReadingMode,
+    val textAlign: SharedReaderTextAlign,
+    val pageWidth: Int,
+    val fontFamily: String,
+    val paragraphSpacing: Float,
+    val imageScale: Float,
+    val pageSpreadMode: ReaderPageSpreadMode,
+    val pageSpreadGutterDp: Float,
+    val customFontPath: String?,
+    val hideImages: Boolean
+)
+
+data class ReaderAppearanceSignature(
+    val darkMode: Boolean,
+    val themeId: String?,
+    val textureId: String?,
+    val textureAlpha: Float,
+    val backgroundColorArgb: Long?,
+    val textColorArgb: Long?,
+    val pdfReverseColorMode: PdfReverseColorMode = PdfReverseColorMode.RGB,
+)
+
+fun ReaderSettings.layoutSignature(): ReaderLayoutSignature {
+    return ReaderLayoutSignature(
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        letterSpacing = letterSpacing,
+        lineSpacing = lineSpacing,
+        horizontalMargin = resolvedHorizontalMargin,
+        verticalMargin = resolvedVerticalMargin,
+        readingMode = readingMode,
+        textAlign = textAlign,
+        pageWidth = pageWidth,
+        fontFamily = fontFamily,
+        paragraphSpacing = paragraphSpacing,
+        imageScale = imageScale,
+        pageSpreadMode = pageSpreadMode,
+        pageSpreadGutterDp = pageSpreadGutterDp,
+        customFontPath = customFontPath,
+        hideImages = hideImages
+    )
+}
+
+fun ReaderSettings.appearanceSignature(): ReaderAppearanceSignature {
+    return ReaderAppearanceSignature(
+        darkMode = darkMode,
+        themeId = themeId,
+        textureId = textureId,
+        textureAlpha = textureAlpha,
+        backgroundColorArgb = backgroundColorArgb,
+        textColorArgb = textColorArgb,
+        pdfReverseColorMode = pdfReverseColorMode
+    )
+}
+
+data class ReaderViewportSpec(
+    val widthPx: Int,
+    val heightPx: Int
+) {
+    val isSpecified: Boolean get() = widthPx > 0 && heightPx > 0
+}
+
+data class ReaderPage(
+    val pageIndex: Int,
+    val chapterIndex: Int,
+    val chapterTitle: String,
+    val text: String,
+    val startOffset: Int,
+    val endOffset: Int,
+    val semanticBlocks: List<SemanticBlock> = emptyList()
+)
+
+data class ReaderPageInfo(
+    val currentPageInChapter: Int,
+    val totalPagesInChapter: Int,
+    val progressPercent: Double
+)
+
+/**
+ * Builds the same page label and character-based progress used by Android's EPUB reader.
+ *
+ * Page-count progress is noticeably inaccurate when chapters have very different amounts of
+ * text, so progress is based on completed chapter text plus the current page's start offset.
+ */
+fun sharedReaderPageInfo(
+    book: SharedEpubBook,
+    pages: List<ReaderPage>,
+    currentPageIndex: Int,
+    locator: ReaderLocator? = null
+): ReaderPageInfo? {
+    if (pages.isEmpty()) return null
+    val locatorChapterIndex = locator?.chapterIndex
+    val locatorOffset = locator?.startOffset
+    val locatorPage = if (locatorChapterIndex != null && locatorOffset != null) {
+        pages.lastOrNull { candidate ->
+            candidate.chapterIndex == locatorChapterIndex &&
+                candidate.startOffset <= locatorOffset
+        }?.takeIf { candidate ->
+            candidate.chapterIndex == locatorChapterIndex &&
+                (locatorOffset < candidate.endOffset || candidate == pages.lastOrNull { it.chapterIndex == locatorChapterIndex })
+        }
+    } else {
+        null
+    }
+    val page = locatorPage ?: pages[currentPageIndex.coerceIn(0, pages.lastIndex)]
+    val safePageIndex = pages.indexOf(page).coerceAtLeast(0)
+    val chapterPages = pages.filter { it.chapterIndex == page.chapterIndex }
+    val pageInChapterIndex = chapterPages.indexOfFirst { it.pageIndex == page.pageIndex }
+        .takeIf { it >= 0 }
+        ?: 0
+    val totalCharacters = book.chapters.sumOf { it.plainText.length.toLong() }
+    val completedCharacters = book.chapters
+        .take(page.chapterIndex.coerceIn(0, book.chapters.size))
+        .sumOf { it.plainText.length.toLong() }
+    val currentChapterOffset = locatorOffset
+        ?.takeIf { locatorChapterIndex == page.chapterIndex }
+        ?: page.startOffset
+    val calculatedProgress = if (totalCharacters > 0L) {
+        ((completedCharacters + currentChapterOffset.coerceAtLeast(0)).toDouble() /
+            totalCharacters.toDouble()) * 100.0
+    } else {
+        ((safePageIndex + 1).toDouble() / pages.size.toDouble()) * 100.0
+    }
+    val displayProgress = if (safePageIndex == pages.lastIndex) {
+        100.0
+    } else {
+        kotlin.math.floor(calculatedProgress.coerceIn(0.0, 100.0) * 10.0) / 10.0
+    }
+    return ReaderPageInfo(
+        currentPageInChapter = pageInChapterIndex + 1,
+        totalPagesInChapter = chapterPages.size.coerceAtLeast(1),
+        progressPercent = displayProgress
+    )
+}
+
+data class PaginatedReaderState(
+    val book: SharedEpubBook,
+    val pages: List<ReaderPage>,
+    val currentPageIndex: Int = 0,
+    val settings: ReaderSettings = ReaderSettings()
+) {
+    val currentPage: ReaderPage? get() = pages.getOrNull(currentPageIndex)
+    val progress: Float
+        get() {
+            if (pages.isEmpty()) return 0f
+            val visibleEnd = ReaderSpreadLayout.visiblePageIndices(currentPageIndex, pages.size, settings)
+                .lastOrNull()
+                ?: currentPageIndex
+            return ((visibleEnd + 1).toFloat() / pages.size) * 100f
+        }
+    val canGoPrevious: Boolean get() = currentPageIndex > 0
+    val canGoNext: Boolean get() = ReaderSpreadLayout.canGoNext(currentPageIndex, pages.size, settings)
+    val currentSpreadStartIndex: Int get() = ReaderSpreadLayout.normalizePageIndex(currentPageIndex, pages.size, settings)
+    val visiblePages: List<ReaderPage>
+        get() = ReaderSpreadLayout.visiblePageIndicesForDisplay(currentPageIndex, pages.size, settings)
+            .mapNotNull { pages.getOrNull(it) }
+}
+
+object ReaderSpreadLayout {
+    fun pageStep(settings: ReaderSettings): Int =
+        ReaderSpreadMath.pageStep(settings.isTwoPageSpreadEnabled())
+
+    fun normalizePageIndex(pageIndex: Int, pageCount: Int, settings: ReaderSettings): Int =
+        ReaderSpreadMath.normalizePageIndex(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun canGoNext(pageIndex: Int, pageCount: Int, settings: ReaderSettings): Boolean =
+        ReaderSpreadMath.canGoNext(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun nextPageIndex(pageIndex: Int, pageCount: Int, settings: ReaderSettings): Int =
+        ReaderSpreadMath.nextPageIndex(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun previousPageIndex(pageIndex: Int, pageCount: Int, settings: ReaderSettings): Int =
+        ReaderSpreadMath.previousPageIndex(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun visiblePageIndices(pageIndex: Int, pageCount: Int, settings: ReaderSettings): List<Int> =
+        ReaderSpreadMath.visiblePageIndices(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun visiblePageIndicesForDisplay(pageIndex: Int, pageCount: Int, settings: ReaderSettings): List<Int> =
+        ReaderSpreadMath.visiblePageIndicesForDisplay(
+            pageIndex = pageIndex,
+            pageCount = pageCount,
+            isTwoPageSpread = settings.isTwoPageSpreadEnabled(),
+            isRightToLeft = settings.isRightToLeftPaginationEnabled()
+        )
+
+    fun pageRangeLabel(pageIndex: Int, pageCount: Int, settings: ReaderSettings): String =
+        ReaderSpreadMath.pageRangeLabel(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun sliderStepCount(pageCount: Int, settings: ReaderSettings): Int =
+        ReaderSpreadMath.sliderStepCount(pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun sliderPositionForPage(pageIndex: Int, pageCount: Int, settings: ReaderSettings): Int =
+        ReaderSpreadMath.sliderPositionForPage(pageIndex, pageCount, settings.isTwoPageSpreadEnabled())
+
+    fun pageNumberForSliderPosition(position: Int, pageCount: Int, settings: ReaderSettings): Int =
+        ReaderSpreadMath.pageNumberForSliderPosition(position, pageCount, settings.isTwoPageSpreadEnabled())
+}
+
+fun ReaderSettings.isTwoPageSpreadEnabled(): Boolean {
+    return readingMode == ReaderReadingMode.PAGINATED && pageSpreadMode == ReaderPageSpreadMode.TWO_PAGE
+}
+
+/**
+ * Android-parity spread chapter for the page info bar: the chapter owning the
+ * first book page of the current spread (even-aligned in two-page mode).
+ * Using the normalized spread start — not the drawer-selected TOC row — keeps
+ * the bar in sync when turning spreads, instead of lagging a spread behind.
+ */
+fun sharedPaginatedSpreadChapterIndex(
+    pages: List<ReaderPage>,
+    currentPageIndex: Int,
+    settings: ReaderSettings
+): Int? {
+    if (pages.isEmpty()) return null
+    val start = ReaderSpreadLayout.normalizePageIndex(currentPageIndex, pages.size, settings)
+    return pages.getOrNull(start)?.chapterIndex
+}
+
+/**
+ * Android-parity position label inside the spread's chapter.
+ * Single page returns "3"; a two-page spread with both pages in the same
+ * chapter returns "3-4"; a spread straddling a chapter boundary shows only the
+ * pages in the first page's chapter (e.g. "5/5" tail).
+ */
+fun sharedPaginatedSpreadPositionLabel(
+    pages: List<ReaderPage>,
+    currentPageIndex: Int,
+    settings: ReaderSettings
+): String? {
+    if (pages.isEmpty()) return null
+    val start = ReaderSpreadLayout.normalizePageIndex(currentPageIndex, pages.size, settings)
+    val firstPage = pages.getOrNull(start) ?: return null
+    val chapterIndex = firstPage.chapterIndex
+    val chapterPages = pages.filter { it.chapterIndex == chapterIndex }
+    if (chapterPages.isEmpty()) return null
+    val chapterStartPageIndex = chapterPages.minOf { it.pageIndex }
+    fun positionInChapter(pageIndex: Int): Int? {
+        val pos = pageIndex - chapterStartPageIndex + 1
+        return if (pos in 1..chapterPages.size) pos else null
+    }
+    val visibleInSpread = ReaderSpreadLayout.visiblePageIndices(start, pages.size, settings)
+        .mapNotNull(::positionInChapter)
+    if (visibleInSpread.isEmpty()) {
+        val fallback = positionInChapter(start) ?: return null
+        return "$fallback"
+    }
+    val first = visibleInSpread.first()
+    val last = visibleInSpread.last()
+    return if (visibleInSpread.size > 1 && first != last) "$first-$last" else "$first"
+}
+
+fun ReaderSettings.isRightToLeftPaginationEnabled(): Boolean {
+    return readingMode == ReaderReadingMode.PAGINATED && rightToLeftPagination
+}
+
+/**
+ * Heading font scale, single-sourced for both platforms (parity item B1).
+ *
+ * Benchmark: Android's `PaginatedReaderSelection.kt` `headerFontScale`. This table used to
+ * exist three times with two different values -- Android's, and a copy in each of
+ * `SharedNativeSelectionMapping.kt` and `SharedMeasuredEpubPaginator.kt` -- and the shared
+ * copies were wrong at every level below h1:
+ *
+ * | level | Android | shared (was) |
+ * | --- | --- | --- |
+ * | 1 | 1.5 | 1.5 |
+ * | 2 | 1.4 | 1.35 |
+ * | 3 | 1.3 | 1.2 |
+ * | 4 | 1.2 | 1.1 |
+ * | 5 | 1.1 | no case -> 1.0 |
+ *
+ * So iOS rendered h2-h5 headings visibly smaller than Android, and h5 completely unscaled.
+ * Android is the benchmark, so the shared table takes Android's values.
+ */
+fun sharedHeadingFontScale(level: Int): Float = when (level) {
+    1 -> 1.5f
+    2 -> 1.4f
+    3 -> 1.3f
+    4 -> 1.2f
+    5 -> 1.1f
+    else -> 1.0f
+}

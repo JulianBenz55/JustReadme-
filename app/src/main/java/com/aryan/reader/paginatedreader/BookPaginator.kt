@@ -1,0 +1,2170 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.paginatedreader
+
+import android.content.Context
+import android.os.Build
+import timber.log.Timber
+import androidx.annotation.RequiresApi
+import androidx.collection.LruCache
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.isSpecified
+import com.aryan.reader.shared.SearchResult
+import com.aryan.reader.applyBookReplacementsToHtmlDocument
+import com.aryan.reader.epub.EpubChapter
+import com.aryan.reader.epub.contentFilePath
+import com.aryan.reader.epub.plainTextCharacterCount
+import com.aryan.reader.paginatedreader.data.BookCacheDao
+import com.aryan.reader.paginatedreader.data.BookProcessingInput
+import com.aryan.reader.paginatedreader.data.BookProcessingWorker
+import com.aryan.reader.paginatedreader.data.ConfigurationCache
+import com.aryan.reader.paginatedreader.data.LATEST_PAGE_CACHE_VERSION
+import com.aryan.reader.paginatedreader.data.LATEST_PROCESSING_VERSION
+import com.aryan.reader.paginatedreader.data.PageCacheEntry
+import com.aryan.reader.paginatedreader.data.PageIndexEntry
+import com.aryan.reader.paginatedreader.data.ProcessedBook
+import com.aryan.reader.paginatedreader.data.ProcessedChapter
+import com.aryan.reader.paginatedreader.data.SerializableEpubChapter
+import com.aryan.reader.shared.ReaderBookReplacementPreferences
+import com.aryan.reader.shared.ReaderBookReplacementPreferencesJson
+import com.aryan.reader.tts.PageCharacterRange
+import com.aryan.reader.tts.splitTextIntoChunksWithSourceOffsets
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.encodeToByteArray
+import kotlinx.serialization.protobuf.ProtoBuf
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import java.net.URI
+import java.net.URLDecoder
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.zip.CRC32
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
+
+private const val PRIORITY_HIGHEST = 0
+private const val PRIORITY_HIGH = 1
+private const val PRIORITY_MEDIUM = 2
+private const val PRIORITY_LOW = 3
+private const val TAG_STABLE_PAGE_NAV = "StablePageNav"
+
+data class TimedWord(val word: String, val startTime: Double, val startOffset: Int)
+
+data class TtsChunk(
+    val text: String,
+    val sourceCfi: String,
+    val startOffsetInSource: Int,
+    val timedWords: List<TimedWord> = emptyList(),
+    val spokenText: String = text
+)
+
+private data class PaginationRequest(val chapterIndex: Int, val priority: Int) : Comparable<PaginationRequest> {
+    override fun compareTo(other: PaginationRequest): Int {
+        val priorityCompare = this.priority.compareTo(other.priority)
+        return if (priorityCompare == 0) {
+            this.chapterIndex.compareTo(other.chapterIndex)
+        } else {
+            priorityCompare
+        }
+    }
+}
+
+private const val PAGE_INDEX_ANCHOR_SEPARATOR = "\u001F"
+
+private fun String.normalizedImageSourceForNavigation(): String {
+    return substringBefore('#')
+        .substringBefore('?')
+        .replace('\\', '/')
+        .removePrefix("file://")
+        .lowercase()
+}
+
+private data class TextRangeIndex(
+    val pageInChapter: Int,
+    val blockIndex: Int,
+    val startOffset: Int,
+    val endOffset: Int
+)
+
+private data class PageNavigationEntry(
+    val pageInChapter: Int,
+    val firstBlockIndex: Int,
+    val lastBlockIndex: Int,
+    val firstTextBlockIndex: Int?,
+    val firstTextCharOffset: Int,
+    val firstTextEndOffset: Int,
+    val firstCfi: String?,
+    val anchors: Set<String>
+)
+
+private const val TxtFormatTraceTag = "TxtFormatTrace"
+private const val NATIVE_VERTICAL_LOAD_LOG_TAG = "NativeVerticalLoad"
+private val DurablePaginationCacheWriteScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+private fun String.txtFormatTracePreview(maxLength: Int = 220): String {
+    // Truncate first: previews must stay allocation-bounded even when the
+    // caller passes a chapter-sized string.
+    val truncated = take(maxLength)
+    val suffix = if (length > maxLength) "..." else ""
+    return truncated
+        .replace("\\", "\\\\")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+        .plus(suffix)
+        .replace("\"", "\\\"")
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+@RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+@Stable
+class BookPaginator(
+    coroutineScope: CoroutineScope,
+    private val chapters: List<EpubChapter>,
+    private val textMeasurer: TextMeasurer,
+    private val constraints: Constraints,
+    private val textStyle: TextStyle,
+    private val extractionBasePath: String,
+    private val density: Density,
+    private val fontFamilyMap: Map<String, FontFamily>,
+    private val isDarkTheme: Boolean,
+    private val themeBackgroundColor: Color,
+    private val themeTextColor: Color,
+    private val bookId: String,
+    private val initialChapterToPaginate: Int,
+    private val bookCss: Map<String, String>,
+    private val userAgentStylesheet: String,
+    private val bookCacheDao: BookCacheDao,
+    private val proto: ProtoBuf,
+    private val allFontFaces: List<FontFaceInfo>,
+    private val context: Context,
+    private val mathMLRenderer: MathMLRenderer,
+    private val userTextAlign: TextAlign?,
+    private val paragraphGapMultiplier: Float,
+    private val userLineHeightMultiplier: Float,
+    private val imageSizeMultiplier: Float,
+    private val hideImages: Boolean = false,
+    private val verticalMarginMultiplier: Float,
+    private val bookReplacementPreferences: ReaderBookReplacementPreferences = ReaderBookReplacementPreferences(),
+    private val bookReplacementFileId: String? = null
+) : IPaginator {
+    override var totalPageCount by mutableIntStateOf(0)
+        private set
+
+    override var isLoading by mutableStateOf(true)
+        private set
+
+    override var generation by mutableIntStateOf(0)
+        private set
+
+    override val pageShiftRequest = MutableSharedFlow<Int>(extraBufferCapacity = 100, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val currentUserChapterIndex = MutableStateFlow(initialChapterToPaginate)
+
+    internal val chapterPageCounts = ConcurrentHashMap<Int, Int>()
+    val chapterStartPageIndices = ConcurrentHashMap<Int, Int>()
+
+    private val pageCache = object : LruCache<Int, List<Page>>(12) {
+        override fun entryRemoved(evicted: Boolean, key: Int, oldValue: List<Page>, newValue: List<Page>?) {
+            Timber.d("Chapter $key pages removed from cache. Evicted: $evicted")
+        }
+    }
+
+    private val blockCache = object : LruCache<Int, List<ContentBlock>>(15) {
+        override fun entryRemoved(evicted: Boolean, key: Int, oldValue: List<ContentBlock>, newValue: List<ContentBlock>?) {
+            Timber.d("Chapter $key blocks removed from L2 blockCache. Evicted: $evicted")
+        }
+    }
+    private val chapterCharacterIndex = ConcurrentHashMap<Int, List<PageCharacterRange>>()
+    private val chapterCumulativeChars = ConcurrentHashMap<Int, List<Long>>()
+    private val chapterTextRangeIndex = ConcurrentHashMap<Int, List<TextRangeIndex>>()
+    private val chapterPageNavigationIndex = ConcurrentHashMap<Int, List<PageNavigationEntry>>()
+    private val chapterAnchorPageIndex = ConcurrentHashMap<Int, Map<String, Int>>()
+    private val expandedAllFontFaces = expandFontFacesWithSiblings(allFontFaces, extractionBasePath)
+
+    private var pageCountsAreAccurate by mutableStateOf(false)
+    private val finalizedChapterCounts = ConcurrentHashMap.newKeySet<Int>()
+    private var currentConfigHash: Int = 0
+    private val enqueueDeferredBookProcessing = AtomicBoolean(false)
+    @Volatile
+    private var chapterStartSnapshot: IntArray = IntArray(0)
+
+    private val paginationQueue = PriorityBlockingQueue<PaginationRequest>()
+    private val chaptersBeingProcessed = ConcurrentHashMap.newKeySet<Int>()
+    private val chapterPaginationLocks = ConcurrentHashMap<Int, Mutex>()
+    private val chapterBlockLocks = ConcurrentHashMap<Int, Mutex>()
+    private val navigationCallbacks = ConcurrentHashMap<Int, MutableList<(List<Page>) -> Unit>>()
+    private var paginationWorker: Job? = null
+    private val paginatorJob = SupervisorJob(coroutineScope.coroutineContext[Job])
+    private val paginatorScope = CoroutineScope(coroutineScope.coroutineContext + paginatorJob)
+    @Volatile
+    private var disposed = false
+
+    override fun dispose() {
+        if (disposed) return
+        disposed = true
+        paginationQueue.clear()
+        navigationCallbacks.clear()
+        chaptersBeingProcessed.clear()
+        paginationWorker?.cancel()
+        paginatorJob.cancel(CancellationException("BookPaginator disposed"))
+        isLoading = false
+        Timber.i("BookPaginator disposed for book=$bookId configHash=$currentConfigHash")
+    }
+
+    private fun isDisposed(): Boolean = disposed || !paginatorJob.isActive
+
+    internal fun getCharactersScrolledInChapter(chapterIndex: Int, pageInChapter: Int): Long {
+        val cumulativeCharsList = chapterCumulativeChars[chapterIndex]
+        if (cumulativeCharsList.isNullOrEmpty()) {
+            Timber.w("[Paginator] getCharactersScrolledInChapter: No cumulative char index found for chapter $chapterIndex.")
+            return 0L
+        }
+
+        val scrolledChars = if (pageInChapter > 0) {
+            cumulativeCharsList.getOrNull(pageInChapter - 1) ?: cumulativeCharsList.lastOrNull() ?: 0L
+        } else {
+            0L
+        }
+
+        return scrolledChars
+    }
+
+    init {
+        if (!constraints.hasBoundedHeight) {
+            Timber.e("Paginator received UNBOUNDED HEIGHT. Pagination will fail.")
+        } else {
+            Timber.i("Paginator initializing with constraints: $constraints")
+            paginatorScope.launch {
+                isLoading = true
+                Timber.d("Initialization started.")
+
+                if (chapters.isEmpty()) {
+                    totalPageCount = 0
+                    pageCountsAreAccurate = true
+                    isLoading = false
+                    Timber.w("Paginator initialized with no chapters. Skipping pagination startup.")
+                    return@launch
+                }
+
+                // 1. Generate config hash before touching semantic cache; processed chapters are style-sensitive.
+                coroutineContext.ensureActive()
+                currentConfigHash = generateConfigurationHash()
+                coroutineContext.ensureActive()
+
+                // 2. Validate the book-level processing generation. Target page-cache lookup is
+                // intentionally performed before deciding whether semantic background work is
+                // needed, so a ready rendered cache wins the startup race.
+                val bookRecord = bookCacheDao.getProcessedBook(bookId)
+                var bookProcessingGenerationWasReset = false
+                if (bookRecord == null || bookRecord.processingVersion < LATEST_PROCESSING_VERSION) {
+                    Timber.i("Book cache is new or stale. Creating initial record.")
+                    bookCacheDao.deleteEntireBookCache(bookId)
+                    val initialBook = ProcessedBook(bookId, LATEST_PROCESSING_VERSION, 0) // Temp 0
+                    bookCacheDao.insertProcessedBook(initialBook)
+                    bookProcessingGenerationWasReset = true
+                }
+
+                coroutineContext.ensureActive()
+                if (isDisposed()) return@launch
+
+                // 3. Seed counts with fast estimates, then overlay measured cached counts.
+                coroutineContext.ensureActive()
+                if (isDisposed()) return@launch
+                seedEstimatedPageCounts()
+
+                coroutineContext.ensureActive()
+                if (isDisposed()) return@launch
+                applyCachedMeasuredPageCounts()
+                val startChapter = initialChapterToPaginate.coerceIn(0, chapters.lastIndex)
+                val cachedStartPages = loadCachedPagesForChapter(chapters[startChapter], startChapter)
+                val hasTargetSemanticCache = if (cachedStartPages == null) {
+                    bookCacheDao.getProcessedChapter(bookId, startChapter, currentConfigHash) != null
+                } else {
+                    true
+                }
+                val shouldEnqueueBookProcessing = bookProcessingGenerationWasReset || !hasTargetSemanticCache
+                enqueueDeferredBookProcessing.set(shouldEnqueueBookProcessing)
+                if (!shouldEnqueueBookProcessing) {
+                    BookProcessingWorker.cancelForBook(context, bookId)
+                }
+
+                // 4. Start the on-demand paginator after the target cache has already been applied.
+                paginationWorker = startPaginationWorker()
+
+                if (cachedStartPages == null) {
+                    triggerPagination(startChapter, PRIORITY_HIGHEST)
+                }
+
+                isLoading = false
+                Timber.i("Paginator initialized. UI is ready.")
+            }
+        }
+    }
+
+    private fun seedEstimatedPageCounts() {
+        var runningTotal = 0
+
+        // This loop is extremely fast (math only)
+        chapters.forEachIndexed { index, chapter ->
+            val estimatedCount = PageCountEstimator.estimateChapterPageCount(
+                chapter = chapter,
+                constraints = constraints,
+                textStyle = textStyle,
+                density = density
+            )
+
+            chapterPageCounts[index] = estimatedCount
+            chapterStartPageIndices[index] = runningTotal
+
+            runningTotal += estimatedCount
+        }
+
+        totalPageCount = runningTotal
+        pageCountsAreAccurate = false
+        rebuildChapterStartSnapshot()
+        Timber.i("Estimator finished. Estimated total pages: $totalPageCount")
+    }
+
+    private fun getAllTextBlocks(blocks: List<ContentBlock>): List<TextContentBlock> {
+        return flattenTextContentBlocksForNavigation(blocks)
+    }
+
+    private fun generateConfigurationHash(): Int {
+        return sharedPaginationLayoutConfigHash(
+            listOf(
+                "width" to constraints.maxWidth,
+                "height" to constraints.maxHeight,
+                "fontSize" to textStyle.fontSize.value,
+                "lineHeight" to textStyle.lineHeight.value,
+                "fontFamily" to textStyle.fontFamily,
+                "fontWeight" to (textStyle.fontWeight?.weight ?: 400),
+                "fontStyle" to textStyle.fontStyle,
+                "letterSpacing" to textStyle.letterSpacing.value,
+                "density" to density.density,
+                "fontScale" to density.fontScale,
+                "textAlign" to userTextAlign,
+                "paragraphGap" to paragraphGapMultiplier,
+                "imageScale" to imageSizeMultiplier,
+                "hideImages" to hideImages,
+                "verticalMargin" to verticalMarginMultiplier,
+                "bookReplacements" to bookReplacementPreferences.signatureForFile(bookReplacementFileId),
+                "processingVersion" to LATEST_PROCESSING_VERSION,
+                "pageCacheVersion" to LATEST_PAGE_CACHE_VERSION,
+                "userAgentCss" to userAgentStylesheet.hashCode(),
+                "bookCss" to bookCss.hashCode(),
+                "fonts" to sharedPaginationFontSignature(expandedAllFontFaces) { source ->
+                    val file = java.io.File(source).let { if (it.isAbsolute) it else java.io.File(extractionBasePath, source) }
+                    if (file.isFile) "${file.length()}:${file.crc32OrZero()}" else "missing"
+                },
+            )
+        )
+    }
+
+    private suspend fun applyCachedMeasuredPageCounts() {
+        val measuredCounts = linkedMapOf<Int, Int>()
+        val measuredChapters = linkedSetOf<Int>()
+
+        val cachedConfig = bookCacheDao.getConfigurationCache(bookId, currentConfigHash)
+        val snapshot = PageCountCacheCodec.decode(cachedConfig?.chapterPageCounts)
+        when {
+            cachedConfig == null -> Timber.i("Configuration Cache MISS. Using estimates until measured counts are available.")
+            snapshot.isVersioned -> Timber.i(
+                "Configuration Cache HIT. finalized=${snapshot.finalizedChapters.size}/${chapters.size} measuredCounts=${snapshot.counts.size}"
+            )
+            else -> Timber.i("Legacy configuration cache found. Ignoring ambiguous page counts and using page-cache metadata instead.")
+        }
+
+        if (snapshot.isVersioned) {
+            snapshot.finalizedChapters.forEach { chapterIndex ->
+                val count = snapshot.counts[chapterIndex]
+                if (chapterIndex in chapters.indices && count != null && count > 0) {
+                    measuredCounts[chapterIndex] = count
+                    measuredChapters += chapterIndex
+                }
+            }
+        }
+
+        val pageMetadata = bookCacheDao.getPageCacheMetadataForConfig(
+            bookId = bookId,
+            configHash = currentConfigHash,
+            processingVersion = LATEST_PROCESSING_VERSION,
+            pageCacheVersion = LATEST_PAGE_CACHE_VERSION
+        )
+        pageMetadata.forEach { metadata ->
+            val chapter = chapters.getOrNull(metadata.chapterIndex) ?: return@forEach
+            if (metadata.contentVersion == chapterContentVersion(chapter) && metadata.pageCount > 0) {
+                measuredCounts[metadata.chapterIndex] = metadata.pageCount
+                measuredChapters += metadata.chapterIndex
+            }
+        }
+
+        if (measuredCounts.isEmpty()) {
+            Timber.i("No compatible measured page counts found. Estimated counts remain active.")
+            return
+        }
+
+        measuredCounts.forEach { (chapterIndex, count) ->
+            chapterPageCounts[chapterIndex] = count
+        }
+        finalizedChapterCounts.addAll(measuredChapters)
+        rebuildPageStartsFromCounts()
+        pageCountsAreAccurate = finalizedChapterCounts.size >= chapters.size
+        Timber.i(
+            "Applied measured page counts. finalized=${finalizedChapterCounts.size}/${chapters.size} totalPageCount=$totalPageCount"
+        )
+    }
+
+    private fun rebuildPageStartsFromCounts() {
+        var runningTotal = 0
+        chapters.indices.forEach { index ->
+            chapterStartPageIndices[index] = runningTotal
+            runningTotal += chapterPageCounts[index] ?: 1
+        }
+        totalPageCount = runningTotal
+        rebuildChapterStartSnapshot()
+    }
+    private suspend fun updateAndSaveConfigurationCache() {
+        val countsString = PageCountCacheCodec.encode(
+            counts = chapterPageCounts,
+            finalizedChapters = finalizedChapterCounts
+        )
+        val newCache = ConfigurationCache(
+            bookId = bookId,
+            configHash = currentConfigHash,
+            chapterPageCounts = countsString
+        )
+        bookCacheDao.insertConfigurationCache(newCache)
+
+        bookCacheDao.cleanupOldConfigurations(bookId)
+        bookCacheDao.cleanupOldPageCaches(bookId)
+
+        if (finalizedChapterCounts.size >= chapters.size) {
+            pageCountsAreAccurate = true
+        }
+    }
+
+    private fun rebuildChapterStartSnapshot() {
+        chapterStartSnapshot = IntArray(chapters.size) { index ->
+            chapterStartPageIndices[index] ?: 0
+        }
+    }
+
+    private fun chapterContentVersion(chapter: EpubChapter): Int {
+        val backingFile = java.io.File(extractionBasePath, chapter.contentFilePath())
+        val backingContentCrc = backingFile.crc32OrZero()
+        return sharedPaginationChapterContentVersion(
+            chapterPath = chapter.absPath,
+            htmlFilePath = chapter.htmlFilePath,
+            htmlContent = chapter.htmlContent,
+            plainTextCharacterCount = chapter.plainTextCharacterCount(),
+            plainTextHash = chapter.plainTextContent.hashCode(),
+            backingFileLength = backingFile.takeIf { it.isFile }?.length() ?: 0L,
+            backingFileCrc32 = backingContentCrc,
+        )
+    }
+
+    private fun java.io.File.crc32OrZero(): Long {
+        if (!isFile) return 0L
+        return runCatching {
+            val crc = CRC32()
+            inputStream().buffered().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    crc.update(buffer, 0, read)
+                }
+            }
+            crc.value
+        }.getOrDefault(0L)
+    }
+
+    private suspend fun loadCachedPagesForChapter(chapter: EpubChapter, chapterIndex: Int): List<Page>? {
+        val cachedPages = bookCacheDao.getPageCache(bookId, currentConfigHash, chapterIndex) ?: run {
+            Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                "page_cache_lookup result=miss chapter=$chapterIndex configHash=$currentConfigHash"
+            )
+            return null
+        }
+        val expectedContentVersion = chapterContentVersion(chapter)
+        val isCompatible = cachedPages.processingVersion == LATEST_PROCESSING_VERSION &&
+            cachedPages.pageCacheVersion == LATEST_PAGE_CACHE_VERSION &&
+            cachedPages.contentVersion == expectedContentVersion
+
+        if (!isCompatible) {
+            Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                "page_cache_lookup result=stale chapter=$chapterIndex " +
+                    "cachedProcessing=${cachedPages.processingVersion} expectedProcessing=$LATEST_PROCESSING_VERSION " +
+                    "cachedPageCache=${cachedPages.pageCacheVersion} expectedPageCache=$LATEST_PAGE_CACHE_VERSION " +
+                    "cachedContent=${cachedPages.contentVersion} expectedContent=$expectedContentVersion"
+            )
+            Timber.d("Page cache stale for chapter $chapterIndex. Ignoring cached pages.")
+            return null
+        }
+
+        return try {
+            val pages = proto.decodeFromByteArray<List<Page>>(cachedPages.pagesProto)
+            if (pages.size != cachedPages.pageCount) {
+                Timber.w("Page cache count mismatch for chapter $chapterIndex. Ignoring cached pages.")
+                null
+            } else {
+                applyPageRuntimeIndexes(chapterIndex, pages)
+                updatePageCountsOnMain(chapterIndex, pages.size)
+                pageCache.put(chapterIndex, pages)
+                Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                    "page_cache_lookup result=hit chapter=$chapterIndex configHash=$currentConfigHash " +
+                        pages.readerPagesLinkDiagSummary()
+                )
+                Timber.i("Page cache HIT for chapter $chapterIndex. Loaded ${pages.size} measured pages.")
+                pages
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to deserialize page cache for chapter $chapterIndex")
+            null
+        }
+    }
+
+    private suspend fun savePageCache(chapter: EpubChapter, chapterIndex: Int, pages: List<Page>) {
+        // Once accurate pages exist, finish their atomic persistence even if the reader closes.
+        // Otherwise screen-scope cancellation makes a warm cache depend on close timing.
+        withContext(NonCancellable + Dispatchers.IO) {
+            try {
+                Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                    "page_cache_save chapter=$chapterIndex configHash=$currentConfigHash " +
+                        pages.readerPagesLinkDiagSummary()
+                )
+                val pageIndexEntries = buildPersistentPageIndexEntries(chapterIndex, pages)
+                val cacheEntry = PageCacheEntry(
+                    bookId = bookId,
+                    configHash = currentConfigHash,
+                    chapterIndex = chapterIndex,
+                    processingVersion = LATEST_PROCESSING_VERSION,
+                    pageCacheVersion = LATEST_PAGE_CACHE_VERSION,
+                    contentVersion = chapterContentVersion(chapter),
+                    pageCount = pages.size,
+                    pagesProto = proto.encodeToByteArray(pages)
+                )
+                bookCacheDao.insertPageCache(cacheEntry, pageIndexEntries)
+                Timber.d("Saved measured page cache for chapter $chapterIndex (${pages.size} pages).")
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to persist page cache for chapter $chapterIndex")
+            }
+        }
+    }
+
+    private fun getAllBlocks(blocks: List<ContentBlock>): List<ContentBlock> {
+        return blocks.flatMap { block ->
+            when (block) {
+                is WrappingContentBlock -> listOf(block, block.floatedImage) + getAllBlocks(block.paragraphsToWrap)
+                is FlexContainerBlock -> listOf(block) + getAllBlocks(block.children)
+                is TableBlock -> listOf(block) + block.rows.flatten().flatMap { getAllBlocks(it.content) }
+                else -> listOf(block)
+            }
+        }
+    }
+
+    private fun applyPageRuntimeIndexes(chapterIndex: Int, pages: List<Page>) {
+        val characterIndex = mutableListOf<PageCharacterRange>()
+        val textRangeIndex = mutableListOf<TextRangeIndex>()
+        val navigationEntries = mutableListOf<PageNavigationEntry>()
+        val anchorPageMap = linkedMapOf<String, Int>()
+        val cumulativeCharsPerPage = mutableListOf<Long>()
+        var runningTotalChars = 0L
+
+        pages.forEachIndexed { pageInChapterIndex, page ->
+            val allBlocksOnPage = getAllBlocks(page.content)
+            val allTextBlocksOnPage = getAllTextBlocks(page.content)
+            val anchors = allBlocksOnPage.flatMap { findAllIds(it) }.toSet()
+            anchors.forEach { anchorPageMap.putIfAbsent(it, pageInChapterIndex) }
+
+            allTextBlocksOnPage.forEach { block ->
+                if (block.cfi != null && block.startCharOffsetInSource >= 0 && block.content.isNotEmpty()) {
+                    val startOffset = block.startCharOffsetInSource
+                    val endOffset = startOffset + block.content.text.length
+                    characterIndex.add(
+                        PageCharacterRange(
+                            pageInChapter = pageInChapterIndex,
+                            cfi = block.cfi!!,
+                            startOffset = startOffset,
+                            endOffset = endOffset
+                        )
+                    )
+                    textRangeIndex.add(
+                        TextRangeIndex(
+                            pageInChapter = pageInChapterIndex,
+                            blockIndex = block.blockIndex,
+                            startOffset = startOffset,
+                            endOffset = endOffset
+                        )
+                    )
+                }
+            }
+
+            val firstTextBlock = allTextBlocksOnPage.firstOrNull { it.content.text.isNotBlank() }
+                ?: allTextBlocksOnPage.firstOrNull()
+            val firstBlock = allBlocksOnPage.firstOrNull()
+            val blockIndices = allBlocksOnPage.map { it.blockIndex }
+            navigationEntries.add(
+                PageNavigationEntry(
+                    pageInChapter = pageInChapterIndex,
+                    firstBlockIndex = blockIndices.minOrNull() ?: firstBlock?.blockIndex ?: -1,
+                    lastBlockIndex = blockIndices.maxOrNull() ?: firstBlock?.blockIndex ?: -1,
+                    firstTextBlockIndex = firstTextBlock?.blockIndex,
+                    firstTextCharOffset = firstTextBlock?.startCharOffsetInSource ?: 0,
+                    firstTextEndOffset = firstTextBlock?.let { it.startCharOffsetInSource + it.content.text.length } ?: 0,
+                    firstCfi = firstTextBlock?.cfi ?: firstBlock?.cfi,
+                    anchors = anchors
+                )
+            )
+
+            runningTotalChars += allTextBlocksOnPage.sumOf { it.content.text.length.toLong() }
+            cumulativeCharsPerPage.add(runningTotalChars)
+        }
+
+        chapterCharacterIndex[chapterIndex] = characterIndex
+        chapterTextRangeIndex[chapterIndex] = textRangeIndex
+        chapterPageNavigationIndex[chapterIndex] = navigationEntries
+        chapterAnchorPageIndex[chapterIndex] = anchorPageMap
+        chapterCumulativeChars[chapterIndex] = cumulativeCharsPerPage
+    }
+
+    private fun buildPersistentPageIndexEntries(chapterIndex: Int, pages: List<Page>): List<PageIndexEntry> {
+        val entries = chapterPageNavigationIndex[chapterIndex] ?: run {
+            applyPageRuntimeIndexes(chapterIndex, pages)
+            chapterPageNavigationIndex[chapterIndex].orEmpty()
+        }
+
+        return entries.map { entry ->
+            PageIndexEntry(
+                bookId = bookId,
+                configHash = currentConfigHash,
+                chapterIndex = chapterIndex,
+                pageInChapter = entry.pageInChapter,
+                firstBlockIndex = entry.firstBlockIndex,
+                lastBlockIndex = entry.lastBlockIndex,
+                firstTextBlockIndex = entry.firstTextBlockIndex,
+                firstTextCharOffset = entry.firstTextCharOffset,
+                firstTextEndOffset = entry.firstTextEndOffset,
+                firstCfi = entry.firstCfi,
+                anchors = entry.anchors.sorted().joinToString(PAGE_INDEX_ANCHOR_SEPARATOR)
+            )
+        }
+    }
+
+    private suspend fun updatePageCountsOnMain(chapterIndex: Int, actualPageCount: Int) {
+        withContext(Dispatchers.Main) {
+            if (isDisposed()) return@withContext
+            if (chapterPageCounts[chapterIndex] != actualPageCount) {
+                updatePageCounts(chapterIndex, actualPageCount)
+            } else if (finalizedChapterCounts.add(chapterIndex)) {
+                DurablePaginationCacheWriteScope.launch { updateAndSaveConfigurationCache() }
+            }
+            generation++
+        }
+    }
+
+    private suspend fun ensureChapterPaginated(chapterIndex: Int): List<Page>? {
+        coroutineContext.ensureActive()
+        if (isDisposed()) return null
+        if (chapterIndex !in chapters.indices) {
+            Timber.w("ensureChapterPaginated: Ignoring invalid chapter index $chapterIndex.")
+            return null
+        }
+
+        pageCache[chapterIndex]?.let {
+            Timber.tag(TAG_STABLE_PAGE_NAV)
+                .d("ensure_chapter hit_memory chapter=$chapterIndex pages=${it.size}")
+            return it
+        }
+
+        val lock = chapterPaginationLocks.computeIfAbsent(chapterIndex) { Mutex() }
+        return lock.withLock {
+            pageCache[chapterIndex]?.also {
+                Timber.tag(TAG_STABLE_PAGE_NAV)
+                    .d("ensure_chapter hit_after_wait chapter=$chapterIndex pages=${it.size}")
+            } ?: run {
+                Timber.tag(TAG_STABLE_PAGE_NAV)
+                    .d("ensure_chapter paginate chapter=$chapterIndex finalized=${chapterIndex in finalizedChapterCounts}")
+                paginateChapter(chapterIndex)
+            }
+        }
+    }
+
+    private suspend fun getCachedBlocksForChapter(chapter: EpubChapter, chapterIndex: Int): List<ContentBlock> {
+        blockCache[chapterIndex]?.let {
+            Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                "content_l2_cache_hit chapter=$chapterIndex " + it.readerContentLinkDiagSummary()
+            )
+            return it
+        }
+
+        val lock = chapterBlockLocks.computeIfAbsent(chapterIndex) { Mutex() }
+        return lock.withLock {
+            blockCache[chapterIndex]?.also {
+                Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                    "content_l2_cache_hit_after_wait chapter=$chapterIndex " + it.readerContentLinkDiagSummary()
+                )
+            } ?: run {
+                Timber.d("getCachedBlocksForChapter: L2 Cache MISS for chapter $chapterIndex. Loading from DB.")
+                getBlocksForChapter(chapter, chapterIndex).also { blocks ->
+                    blockCache.put(chapterIndex, blocks)
+                }
+            }
+        }
+    }
+
+    private suspend fun ensureStableStartPageForChapter(chapterIndex: Int): Int? {
+        Timber.tag(TAG_STABLE_PAGE_NAV).d(
+            "stable_start request chapter=$chapterIndex countsAccurate=$pageCountsAreAccurate finalized=${chapterIndex in finalizedChapterCounts}"
+        )
+        return resolveStableChapterStartPage(
+            chapterIndex = chapterIndex,
+            chapterCount = chapters.size,
+            chapterStartPage = { chapterStartPageIndices[it] }
+        )
+    }
+
+    suspend fun findStableChapterStartPage(chapterIndex: Int): Int? = withContext(Dispatchers.IO) {
+        val stableStart = ensureStableStartPageForChapter(chapterIndex) ?: return@withContext null
+        val targetPages = ensureChapterPaginated(chapterIndex) ?: return@withContext null
+        Timber.tag(TAG_STABLE_PAGE_NAV).d(
+            "stable_chapter_start resolved chapter=$chapterIndex page=$stableStart targetPages=${targetPages.size}"
+        )
+        stableStart.takeIf { targetPages.isNotEmpty() }
+    }
+
+    suspend fun findStablePageForLocator(locator: Locator): Int? = withContext(Dispatchers.IO) {
+        val targetChapterIndex = locator.chapterIndex
+        Timber.tag("POS_DIAG").d("findStablePageForLocator: Searching for $locator")
+        Timber.tag(TAG_STABLE_PAGE_NAV).d("stable_locator request locator=$locator")
+
+        val chapterPages = ensureChapterPaginated(targetChapterIndex)
+        val chapterStartPage = ensureStableStartPageForChapter(targetChapterIndex)
+
+        Timber.tag("POS_DIAG").d(
+            "findStablePageForLocator: targetChapterIndex=$targetChapterIndex, stableStart=$chapterStartPage, chapterPages.size=${chapterPages?.size}"
+        )
+
+        if (chapterPages.isNullOrEmpty() || chapterStartPage == null) {
+            Timber.e("Stable locator navigation failed: Could not stabilize target chapter $targetChapterIndex.")
+            return@withContext null
+        }
+
+        val pageInChapter = findPageInChapterForLocator(locator, chapterPages) ?: run {
+            Timber.tag("POS_DIAG").e("findStablePageForLocator: FAILED to resolve locator in chapter $targetChapterIndex")
+            return@withContext null
+        }
+
+        val finalPageIndex = chapterStartPage + pageInChapter
+        Timber.tag("POS_DIAG").i("findStablePageForLocator: FOUND absolute page $finalPageIndex")
+        Timber.tag(TAG_STABLE_PAGE_NAV).d(
+            "stable_locator resolved locator=$locator page=$finalPageIndex chapterStart=$chapterStartPage pageInChapter=$pageInChapter"
+        )
+        finalPageIndex
+    }
+
+    suspend fun findStablePageForImageSource(
+        chapterIndex: Int,
+        sourcePath: String,
+        elementId: String?,
+        ordinalInChapter: Int
+    ): Pair<Int, Locator>? = withContext(Dispatchers.IO) {
+        val chapter = chapters.getOrNull(chapterIndex) ?: return@withContext null
+        val imageBlocks = getAllBlocks(getCachedBlocksForChapter(chapter, chapterIndex))
+            .filterIsInstance<ImageBlock>()
+        if (imageBlocks.isEmpty()) return@withContext null
+
+        val normalizedSource = sourcePath.normalizedImageSourceForNavigation()
+        val normalizedFileName = normalizedSource.substringAfterLast('/')
+        val matchingBySource = imageBlocks.filter { block ->
+            val normalizedBlockPath = block.path.normalizedImageSourceForNavigation()
+            normalizedBlockPath == normalizedSource ||
+                normalizedBlockPath.endsWith("/$normalizedFileName") ||
+                normalizedSource.endsWith("/${normalizedBlockPath.substringAfterLast('/')}")
+        }
+        val targetBlock = elementId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { id -> imageBlocks.firstOrNull { it.elementId == id } }
+            ?: matchingBySource.getOrNull(ordinalInChapter.coerceAtLeast(0))
+            ?: matchingBySource.firstOrNull()
+            ?: return@withContext null
+
+        val locator = Locator(
+            chapterIndex = chapterIndex,
+            blockIndex = targetBlock.blockIndex,
+            charOffset = 0
+        )
+        val targetPage = findStablePageForLocator(locator)
+            ?: findStableChapterStartPage(chapterIndex)
+            ?: return@withContext null
+        targetPage to locator
+    }
+
+    suspend fun getTtsChunksForChapter(chapterIndex: Int, startingFromPageInChapter: Int = 0): List<TtsChunk>? {
+        val pages = ensureChapterPaginated(chapterIndex)
+        if (pages.isNullOrEmpty()) {
+            Timber.w("PAGINATOR: Chapter $chapterIndex has no pages or could not be paginated.")
+            return null
+        }
+
+        val blocks = pages.drop(startingFromPageInChapter).flatMap { it.content }
+
+        if (blocks.isEmpty()) {
+            Timber.w("PAGINATOR: Chapter $chapterIndex from page $startingFromPageInChapter has no blocks.")
+            return null
+        }
+
+        val allTtsChunks = mutableListOf<TtsChunk>()
+
+        val textBlocks = getAllTextBlocks(blocks)
+
+        textBlocks.forEach { block ->
+            if (block.cfi != null) {
+                val blockText = block.content.text
+                if (blockText.isNotBlank()) {
+                    // Offsets come from the splitter rather than a search for each chunk's first
+                    // word: a search drifts by the whitespace the split removed, and every stored
+                    // offset then points earlier than the text it names.
+                    val chunkSpans = splitTextIntoChunksWithSourceOffsets(blockText)
+
+                    chunkSpans.forEach { span ->
+                        val chunk = TtsChunk(
+                            text = span.text,
+                            sourceCfi = block.cfi!!,
+                            startOffsetInSource = block.startCharOffsetInSource + span.startOffsetInSource
+                        )
+                        allTtsChunks.add(chunk)
+                    }
+                } else {
+                    Timber.d("PAGINATOR: Skipping blank text block. CFI: ${block.cfi}, startOffset: ${block.startCharOffsetInSource}")
+                }
+            } else {
+                Timber.w("PAGINATOR: Skipping text block with null CFI. Text: '${block.content.text.take(70).replace("\n", " ")}...'")
+            }
+        }
+        Timber.i("PAGINATOR: Generated ${allTtsChunks.size} TTS chunks for chapter $chapterIndex starting from page $startingFromPageInChapter.")
+        return allTtsChunks
+    }
+
+    private fun enqueueBookProcessingWork() {
+        if (isDisposed()) return
+        val serializableChapters = chapters.map {
+            SerializableEpubChapter(
+                htmlContent = it.htmlContent,
+                title = it.title,
+                absPath = it.absPath,
+                htmlFilePath = it.htmlFilePath
+            )
+        }
+
+        val input = BookProcessingInput(
+            chapters = serializableChapters,
+            userAgentStylesheet = userAgentStylesheet,
+            bookCss = bookCss,
+            baseFontSizeSp = textStyle.fontSize.value,
+            density = density.density,
+            constraintsMaxWidth = constraints.maxWidth,
+            constraintsMaxHeight = constraints.maxHeight,
+            fontFaces = expandedAllFontFaces,
+            styleConfigHash = currentConfigHash,
+            bookReplacementPreferencesJson = ReaderBookReplacementPreferencesJson.encode(
+                bookReplacementPreferences.scopedToFile(bookReplacementFileId),
+            ),
+            bookReplacementFileId = bookReplacementFileId.orEmpty()
+        )
+
+        if (isDisposed()) return
+        BookProcessingWorker.enqueue(
+            context = context,
+            bookId = bookId,
+            extractionBasePath = extractionBasePath,
+            estimatedTotalPages = totalPageCount,
+            processingInput = input,
+            startChapterIndex = initialChapterToPaginate
+        )
+    }
+
+    private suspend fun getBlocksForChapter(chapter: EpubChapter, chapterIndex: Int): List<ContentBlock> {
+        Timber.d("BookPaginator: getBlocksForChapter($chapterIndex). Using stored textStyle: FontSize=${textStyle.fontSize}, LineHeight=${textStyle.lineHeight}")
+        val styler = ContentStyler(
+            baseTextStyle = textStyle,
+            fontFamilyMap = fontFamilyMap,
+            density = density,
+            isDarkTheme = isDarkTheme,
+            themeBackgroundColor = themeBackgroundColor,
+            themeTextColor = themeTextColor,
+            chapterAbsPath = chapter.absPath,
+            extractionBasePath = extractionBasePath,
+            userTextAlign = userTextAlign,
+            paragraphGapMultiplier = paragraphGapMultiplier,
+            userLineHeightMultiplier = userLineHeightMultiplier,
+            adaptThemeColors = false
+        )
+
+        bookCacheDao.getProcessedChapter(bookId, chapterIndex, currentConfigHash)?.let { cachedChapter ->
+            if (cachedChapter.contentBlocksProto.isNotEmpty()) {
+                try {
+                    val semanticBlocks = proto.decodeFromByteArray<List<SemanticBlock>>(cachedChapter.contentBlocksProto)
+                    Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                        "semantic_cache_hit chapter=$chapterIndex configHash=$currentConfigHash " +
+                            semanticBlocks.readerSemanticLinkDiagSummary()
+                    )
+
+                    val isCacheEmpty = semanticBlocks.isEmpty()
+                    val isLazyChapter = chapter.htmlContent.isEmpty()
+
+                    var shouldIgnoreCache = false
+                    if (isCacheEmpty && isLazyChapter) {
+                        val file = java.io.File(extractionBasePath, chapter.contentFilePath())
+                        if (file.exists() && file.length() > 0) {
+                            Timber.tag("ReflowPaginationDiag").w("getBlocksForChapter: Cache HIT but empty for lazy chapter $chapterIndex. Backing file exists (${file.length()} bytes). Ignoring cache.")
+                            shouldIgnoreCache = true
+                        }
+                    }
+
+                    if (!shouldIgnoreCache) {
+                        Timber.d("getBlocksForChapter: Cache HIT for chapter $chapterIndex in DATABASE.")
+                        Timber.tag("HtmlImportDebug").w(
+                            "paginator_semantic_cache_hit bookId=$bookId chapter=$chapterIndex blocks=${semanticBlocks.size} " +
+                                "lazyChapter=${chapter.htmlContent.isEmpty()} configHash=$currentConfigHash"
+                        )
+                        val styledBlocks = styler.style(semanticBlocks)
+                        Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                            "content_from_semantic_cache chapter=$chapterIndex configHash=$currentConfigHash " +
+                                styledBlocks.readerContentLinkDiagSummary()
+                        )
+                        return styledBlocks
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to deserialize/style chapter $chapterIndex from DB. Reprocessing for this session.")
+                }
+            } else {
+                Timber.d("getBlocksForChapter: Cached chapter $chapterIndex had no semantic payload. Reprocessing.")
+            }
+        }
+
+        Timber.d("getBlocksForChapter: Cache MISS for chapter $chapterIndex. Parsing to Semantic IR.")
+        Timber.tag("HtmlImportDebug").d(
+            "paginator_cache_miss bookId=$bookId chapter=$chapterIndex chapterAbsPath=${chapter.absPath} " +
+                "htmlContentChars=${chapter.htmlContent.length} extractionBasePath=$extractionBasePath"
+        )
+
+        // The HTML/CSS parsing and semantic conversion below is heavily CPU-bound. This function
+        // is reachable from UI-dispatcher coroutines, so pin the work to the default dispatcher
+        // pool to keep the main thread responsive (the ANR traces showed jsoup parsing running
+        // inside Choreographer frames).
+        val styledBlocks = withContext(Dispatchers.Default) {
+            var htmlToParse = chapter.htmlContent
+            if (htmlToParse.isEmpty()) {
+                val file = java.io.File(extractionBasePath, chapter.contentFilePath())
+                if (file.exists()) {
+                    Timber.tag("ReflowPaginationDiag").d("getBlocksForChapter: Lazy loading content from disk for chapter $chapterIndex: ${file.name} (${file.length()} bytes)")
+                    try {
+                        htmlToParse = file.readText()
+                        val lazyHtmlHasProductEzoic = htmlToParse.contains("productEzoicAds", ignoreCase = true)
+                        Timber.tag("HtmlImportDebug").d(
+                            "paginator_lazy_html_loaded bookId=$bookId chapter=$chapterIndex file=${file.absolutePath} " +
+                                "fileBytes=${file.length()} htmlChars=${htmlToParse.length} productEzoic=$lazyHtmlHasProductEzoic"
+                        )
+                    } catch (e: Exception) {
+                        Timber.tag("ReflowPaginationDiag").e(e, "Failed to read lazy HTML file")
+                    }
+                } else {
+                    Timber.tag("ReflowPaginationDiag").w("getBlocksForChapter: htmlContent is empty and file not found: ${file.absolutePath}")
+                }
+            }
+
+            val txtTraceContainsPreWrap = htmlToParse.contains("white-space: pre-wrap") || htmlToParse.contains("white-space:pre-wrap")
+            val txtTraceContainsAlbumMarker = htmlToParse.contains("===========CD 1=============")
+            Timber.tag(TxtFormatTraceTag).d(
+                "event=android_paginator_html_input bookId=$bookId chapter=$chapterIndex title=${chapter.title.txtFormatTracePreview()} " +
+                    "htmlChars=${htmlToParse.length} newlines=${htmlToParse.count { it == '\n' }} " +
+                    "plainChars=${chapter.plainTextCharacterCount()} containsPreWrap=$txtTraceContainsPreWrap " +
+                    "containsAlbumMarker=$txtTraceContainsAlbumMarker preview=${htmlToParse.txtFormatTracePreview()}"
+            )
+            val document = Jsoup.parse(htmlToParse, chapter.absPath)
+            document.outputSettings().prettyPrint(false)
+            val htmlInputHasProductEzoic = htmlToParse.contains("productEzoicAds", ignoreCase = true)
+            val parsedBlockedNodeCount = document.select("script, style, noscript, template").size
+            val parsedBodyTextHasProductEzoic = document.body().text().contains("productEzoicAds", ignoreCase = true)
+            Timber.tag("HtmlImportDebug").d(
+                "paginator_jsoup_parsed bookId=$bookId chapter=$chapterIndex htmlChars=${htmlToParse.length} " +
+                    "scriptNodes=$parsedBlockedNodeCount bodyTextHasProductEzoic=$parsedBodyTextHasProductEzoic " +
+                    "htmlHasProductEzoic=$htmlInputHasProductEzoic"
+            )
+            Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                "html_parse_input chapter=$chapterIndex htmlChars=${htmlToParse.length} " +
+                    document.readerHtmlLinkDiagSummary()
+            )
+            val mathElements = document.select("math")
+            val svgResults = mutableMapOf<String, String>()
+
+            if (mathElements.isNotEmpty()) {
+                mathElements.forEachIndexed { i, element ->
+                    val uniqueId = "math-ch${chapterIndex}-eq${i}"
+                    val altText = element.attr("alttext").ifBlank { "Equation" }
+                    val placeholder = Element("math-placeholder").attr("id", uniqueId)
+
+                    when (val result = mathMLRenderer.render(element.outerHtml(), altText)) {
+                        is RenderResult.Success -> svgResults[uniqueId] = result.svg
+                        is RenderResult.Failure -> placeholder.attr("alttext", result.altText)
+                    }
+                    element.replaceWith(placeholder)
+                }
+            }
+            applyBookReplacementsToHtmlDocument(
+                document = document,
+                preferences = bookReplacementPreferences,
+                fileId = bookReplacementFileId,
+            )
+            val processedHtml = document.outerHtml()
+
+            var parsingCssRules = OptimizedCssRules()
+            val uaResult = CssParser.parse(cssContent = userAgentStylesheet, cssPath = null, baseFontSizeSp = textStyle.fontSize.value, density = density.density, constraints = constraints, isDarkTheme = false, adaptThemeColors = false)
+            parsingCssRules = parsingCssRules.merge(uaResult.rules)
+            bookCss.forEach { (path, content) ->
+                val bookCssResult = CssParser.parse(cssContent = content, cssPath = path, baseFontSizeSp = textStyle.fontSize.value, density = density.density, constraints = constraints, isDarkTheme = false, adaptThemeColors = false)
+                parsingCssRules = parsingCssRules.merge(bookCssResult.rules)
+            }
+
+            val txtTraceProcessedHasInlinePreWrap = processedHtml.contains("white-space: pre-wrap !important")
+            Timber.tag(TxtFormatTraceTag).d(
+                "event=android_paginator_processed_html bookId=$bookId chapter=$chapterIndex " +
+                    "htmlChars=${processedHtml.length} newlines=${processedHtml.count { it == '\n' }} " +
+                    "containsInlinePreWrap=$txtTraceProcessedHasInlinePreWrap " +
+                    "containsAlbumMarker=${processedHtml.contains("===========CD 1=============")} " +
+                    "preview=${processedHtml.txtFormatTracePreview()}"
+            )
+
+            val semanticBlocks = androidHtmlToSemanticBlocks(
+                html = processedHtml,
+                cssRules = parsingCssRules,
+                textStyle = textStyle.copy(color = Color.Black),
+                chapterAbsPath = chapter.absPath,
+                extractionBasePath = extractionBasePath,
+                density = density,
+                fontFamilyMap = fontFamilyMap,
+                constraints = constraints,
+                mathSvgCache = svgResults,
+                adaptThemeColors = false
+            )
+            Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                "semantic_parse_result chapter=$chapterIndex " +
+                    semanticBlocks.readerSemanticLinkDiagSummary()
+            )
+            val firstTxtSemantic = semanticBlocks.filterIsInstance<SemanticTextBlock>()
+                .firstOrNull { it.text.contains("===========CD 1=============") || it.text.contains("[ID]") }
+            Timber.tag(TxtFormatTraceTag).d(
+                "event=android_paginator_semantic_result bookId=$bookId chapter=$chapterIndex " +
+                    "textBlocks=${semanticBlocks.filterIsInstance<SemanticTextBlock>().size} " +
+                    "firstTxtChars=${firstTxtSemantic?.text?.length ?: 0} " +
+                    "firstTxtNewlines=${firstTxtSemantic?.text?.count { it == '\n' } ?: 0} " +
+                    "firstTxtHasRepeatedSpaces=${firstTxtSemantic?.text?.let { Regex(" {2,}").containsMatchIn(it) } == true} " +
+                    "preview=${firstTxtSemantic?.text.orEmpty().txtFormatTracePreview()}"
+            )
+
+            withContext(NonCancellable + Dispatchers.IO) {
+                try {
+                    val protoBytes = proto.encodeToByteArray(semanticBlocks)
+                    val newCacheEntry = ProcessedChapter(bookId, chapterIndex, protoBytes, chapterPageCounts[chapterIndex] ?: 0, currentConfigHash)
+                    bookCacheDao.insertProcessedChapters(listOf(newCacheEntry))
+                    Timber.i("Successfully cached SEMANTIC content for chapter $chapterIndex.")
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to serialize and cache on-demand semantic chapter $chapterIndex")
+                }
+            }
+
+            styler.style(semanticBlocks)
+        }
+        Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+            "content_parse_result chapter=$chapterIndex " +
+                styledBlocks.readerContentLinkDiagSummary()
+        )
+        return styledBlocks
+    }
+
+    internal suspend fun getFlowBlocksForChapter(chapterIndex: Int): List<ContentBlock>? = withContext(Dispatchers.IO) {
+        coroutineContext.ensureActive()
+        if (isDisposed()) return@withContext null
+        val chapter = chapters.getOrNull(chapterIndex) ?: return@withContext null
+        val startMs = System.currentTimeMillis()
+        val memoryHit = blockCache[chapterIndex] != null
+        Timber.tag(NATIVE_VERTICAL_LOAD_LOG_TAG).d(
+            "flow_blocks_start chapter=$chapterIndex memoryHit=$memoryHit"
+        )
+        try {
+            getCachedBlocksForChapter(chapter, chapterIndex).also { blocks ->
+                Timber.tag(NATIVE_VERTICAL_LOAD_LOG_TAG).d(
+                    "flow_blocks_done chapter=$chapterIndex blocks=${blocks.size} memoryHit=$memoryHit durationMs=${System.currentTimeMillis() - startMs}"
+                )
+            }
+        } catch (e: CancellationException) {
+            Timber.tag(NATIVE_VERTICAL_LOAD_LOG_TAG).d(
+                "flow_blocks_cancelled chapter=$chapterIndex memoryHit=$memoryHit durationMs=${System.currentTimeMillis() - startMs}"
+            )
+            throw e
+        } catch (e: Exception) {
+            Timber.tag(NATIVE_VERTICAL_LOAD_LOG_TAG).e(
+                e,
+                "flow_blocks_error chapter=$chapterIndex memoryHit=$memoryHit durationMs=${System.currentTimeMillis() - startMs}"
+            )
+            throw e
+        }
+    }
+
+    private fun startPaginationWorker(): Job = paginatorScope.launch(Dispatchers.IO) {
+        Timber.i("Pagination worker started.")
+        while (isActive) {
+            var request: PaginationRequest? = null
+            try {
+                request = paginationQueue.poll(250, TimeUnit.MILLISECONDS) ?: continue
+                val chapterIndex = request.chapterIndex
+                Timber.d("Worker: Took chapter $chapterIndex from queue with priority ${request.priority}.")
+
+                if (pageCache[chapterIndex] != null) {
+                    Timber.d("Worker: Chapter $chapterIndex is already in cache, skipping.")
+                    continue
+                }
+
+                if (!chaptersBeingProcessed.add(chapterIndex)) {
+                    Timber.w("Worker: Chapter $chapterIndex is already being processed, skipping.")
+                    continue
+                }
+
+                Timber.i("Worker: Starting pagination for chapter $chapterIndex.")
+                val pages = ensureChapterPaginated(chapterIndex)
+
+                if (pages != null) {
+                    Timber.i("Worker: Successfully finished pagination for chapter $chapterIndex.")
+                    navigationCallbacks.remove(chapterIndex)?.forEach { callback ->
+                        Timber.d("Worker: Fulfilling navigation callback for chapter $chapterIndex.")
+                        callback(pages)
+                    }
+                } else {
+                    Timber.e("Worker: Pagination for chapter $chapterIndex resulted in null.")
+                }
+            } catch (e: CancellationException) {
+                Timber.i("Pagination worker cancelled. Shutting down.")
+                throw e
+            } catch (_: InterruptedException) {
+                Timber.i("Pagination worker interrupted. Shutting down.")
+                Thread.currentThread().interrupt()
+                break
+            } catch (e: Exception) {
+                Timber.e(e, "Error in pagination worker for chapter ${request?.chapterIndex}")
+            } finally {
+                request?.let {
+                    chaptersBeingProcessed.remove(it.chapterIndex)
+                    Timber.d("Worker: Chapter ${it.chapterIndex} removed from processing set.")
+                }
+                yield()
+            }
+        }
+        Timber.i("Pagination worker stopped.")
+    }
+
+    override fun onUserScrolledTo(pageIndex: Int) {
+        findChapterIndexForPage(pageIndex)?.let {
+            if (it != currentUserChapterIndex.value) {
+                Timber.d("User location updated to chapter $it")
+                currentUserChapterIndex.value = it
+            }
+        }
+    }
+
+    private fun updatePageCounts(chapterIndex: Int, actualPageCount: Int) {
+        val estimatedPageCount = chapterPageCounts[chapterIndex] ?: actualPageCount
+        val difference = actualPageCount - estimatedPageCount
+
+        if (difference == 0) {
+            Timber.tag(TAG_STABLE_PAGE_NAV).d(
+                "page_count_noop chapter=$chapterIndex count=$actualPageCount currentUserChapter=${currentUserChapterIndex.value}"
+            )
+            if (!pageCountsAreAccurate && finalizedChapterCounts.add(chapterIndex)) {
+                DurablePaginationCacheWriteScope.launch { updateAndSaveConfigurationCache() }
+            }
+            return
+        }
+
+        // Update the specific chapter
+        chapterPageCounts[chapterIndex] = actualPageCount
+
+        synchronized(this) {
+            totalPageCount += difference
+
+            // Shift all SUBSEQUENT chapters
+            for (i in (chapterIndex + 1) until chapters.size) {
+                chapterStartPageIndices[i] = (chapterStartPageIndices[i] ?: 0) + difference
+            }
+            rebuildChapterStartSnapshot()
+
+            val currentUserChapter = currentUserChapterIndex.value
+            val shouldShiftCurrentPage = chapterIndex < currentUserChapter
+            Timber.tag(TAG_STABLE_PAGE_NAV).d(
+                "page_count_update chapter=$chapterIndex estimated=$estimatedPageCount actual=$actualPageCount diff=$difference currentUserChapter=$currentUserChapter shiftCurrent=$shouldShiftCurrentPage total=$totalPageCount"
+            )
+            if (shouldShiftCurrentPage) {
+                val emitted = pageShiftRequest.tryEmit(difference)
+                Timber.tag(TAG_STABLE_PAGE_NAV).d(
+                    "page_shift_emit chapter=$chapterIndex diff=$difference currentUserChapter=$currentUserChapter emitted=$emitted"
+                )
+            }
+        }
+
+        if (!pageCountsAreAccurate) {
+            if (finalizedChapterCounts.add(chapterIndex)) {
+                DurablePaginationCacheWriteScope.launch {
+                    updateAndSaveConfigurationCache()
+                }
+            }
+        }
+
+        Timber.i("Correction: Ch $chapterIndex | Est: $estimatedPageCount -> Act: $actualPageCount | Diff: $difference | Total: $totalPageCount")
+    }
+
+    override fun getActiveAnchorForPage(pageIndex: Int, tocAnchors: List<String>): String? {
+        val chapterIndex = findChapterIndexForPage(pageIndex) ?: return null
+        val chapterPages = pageCache[chapterIndex] ?: return null
+        val chapterStart = chapterStartPageIndices[chapterIndex] ?: 0
+        val currentPageInChapter = pageIndex - chapterStart
+
+        chapterAnchorPageIndex[chapterIndex]?.let { anchorPages ->
+            val anchorSet = tocAnchors.toSet()
+            return anchorPages
+                .filter { (anchor, anchorPage) -> anchor in anchorSet && anchorPage <= currentPageInChapter }
+                .maxByOrNull { it.value }
+                ?.key
+        }
+
+        var lastFoundAnchor: String? = null
+        val anchorSet = tocAnchors.toSet()
+
+        for (pIdx in 0..currentPageInChapter) {
+            val page = chapterPages.getOrNull(pIdx) ?: continue
+            for (block in page.content) {
+                val idsInBlock = findAllIds(block)
+                for (id in idsInBlock) {
+                    if (anchorSet.contains(id)) {
+                        lastFoundAnchor = id
+                    }
+                }
+            }
+        }
+        return lastFoundAnchor
+    }
+
+    override fun getPageContent(pageIndex: Int): Page? {
+        if (isDisposed()) return null
+        Timber.v("getPageContent requested for pageIndex $pageIndex")
+        val chapterIndex = findChapterIndexForPage(pageIndex)
+        if (chapterIndex == null) {
+            Timber.w("getPageContent: Could not find chapter for pageIndex $pageIndex.")
+            return null
+        }
+
+        val chapterPages = pageCache[chapterIndex]
+        if (chapterPages != null) {
+            val pageInChapterIndex = pageIndex - (chapterStartPageIndices[chapterIndex] ?: 0)
+            Timber.v("getPageContent: Cache HIT for page $pageIndex (Chapter $chapterIndex, PageInChapter $pageInChapterIndex).")
+            prefetchChapters(chapterIndex)
+            return chapterPages.getOrNull(pageInChapterIndex)
+        } else {
+            Timber.i("getPageContent: Cache MISS for page $pageIndex (Chapter $chapterIndex).")
+            triggerPagination(chapterIndex, PRIORITY_HIGH)
+            prefetchChapters(chapterIndex)
+            return null
+        }
+    }
+
+    override suspend fun getChapterTextBlocks(chapterIndex: Int): List<TextContentBlock>? {
+        if (isDisposed()) return null
+        val chapter = chapters.getOrNull(chapterIndex) ?: return null
+        return getBlocksForChapter(chapter, chapterIndex).filterIsInstance<TextContentBlock>()
+    }
+
+    override fun findChapterIndexForPage(pageIndex: Int): Int? {
+        if (pageIndex !in 0..<totalPageCount) {
+            Timber.w("findChapterIndexForPage: pageIndex $pageIndex is out of bounds (Total: $totalPageCount)."
+            )
+            return null
+        }
+        val starts = chapterStartSnapshot
+        if (starts.isNotEmpty()) {
+            val exactOrInsertionPoint = starts.binarySearch(pageIndex)
+            val index = if (exactOrInsertionPoint >= 0) {
+                exactOrInsertionPoint
+            } else {
+                -exactOrInsertionPoint - 2
+            }
+            if (index in chapters.indices) {
+                return index
+            }
+        }
+
+        val entry = chapterStartPageIndices.entries
+            .filter { it.value <= pageIndex }
+            .maxWithOrNull(compareBy({ it.value }, { it.key }))
+
+        if (entry == null) {
+            Timber.e("findChapterIndexForPage: Could not find a start page index for page $pageIndex. This is a critical error."
+            )
+        }
+        return entry?.key
+    }
+
+    override fun getCfiForPage(pageIndex: Int): String? {
+        val chapterIndex = findChapterIndexForPage(pageIndex) ?: return null
+        val chapterStart = chapterStartPageIndices[chapterIndex] ?: 0
+        val pageInChapterIndex = pageIndex - chapterStart
+        chapterPageNavigationIndex[chapterIndex]
+            ?.getOrNull(pageInChapterIndex)
+            ?.firstCfi
+            ?.let { cfi ->
+                val offset = chapterPageNavigationIndex[chapterIndex]
+                    ?.getOrNull(pageInChapterIndex)
+                    ?.firstTextCharOffset
+                    ?: 0
+                return if (offset > 0 && !cfi.contains(':')) "$cfi:$offset" else cfi
+            }
+
+        val chapterPages = pageCache[chapterIndex]
+        if (chapterPages == null) {
+            Timber.w("getCfiForPage: Chapter $chapterIndex not in cache for page $pageIndex.")
+            return null
+        }
+        val pageContent = chapterPages.getOrNull(pageInChapterIndex)?.content ?: return null
+
+        val firstTextBlock = pageContent.firstOrNull { it is TextContentBlock } as? TextContentBlock
+        val firstAnyBlock = pageContent.firstOrNull()
+
+        if (firstTextBlock != null) {
+            val baseCfi = firstTextBlock.cfi ?: return null
+            val offset = firstTextBlock.startCharOffsetInSource
+            return if (offset > 0) "$baseCfi:$offset" else baseCfi
+        } else {
+            return firstAnyBlock?.cfi
+        }
+    }
+
+    private suspend fun paginateChapter(chapterIndex: Int): List<Page>? {
+        coroutineContext.ensureActive()
+        if (isDisposed()) return null
+        pageCache[chapterIndex]?.let {
+            Timber.d("paginateChapter: L1 Cache HIT for chapter $chapterIndex in MEMORY, returning cached pages.")
+            Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+                "page_memory_cache_hit chapter=$chapterIndex " + it.readerPagesLinkDiagSummary()
+            )
+            return it
+        }
+
+        val chapter = chapters.getOrNull(chapterIndex) ?: run {
+            Timber.e("paginateChapter: Chapter $chapterIndex not found in chapter list.")
+            return null
+        }
+
+        loadCachedPagesForChapter(chapter, chapterIndex)?.let {
+            Timber.d("paginateChapter: Persistent page cache HIT for chapter $chapterIndex.")
+            return it
+        }
+
+        val blocks = getCachedBlocksForChapter(chapter, chapterIndex)
+        coroutineContext.ensureActive()
+        if (isDisposed()) return null
+
+        Timber.d("paginateChapter: Chapter $chapterIndex retrieved/parsed into ${blocks.size} content blocks.")
+
+        val measurementProvider = SuspendingAndroidBlockMeasurementProvider(
+            textMeasurer = textMeasurer,
+            constraints = constraints,
+            textStyle = textStyle,
+            density = density,
+            imageSizeMultiplier = imageSizeMultiplier,
+            hideImages = hideImages
+        )
+        Timber.d("paginateChapter: Calling PaginatorLogic for chapter $chapterIndex.")
+        val pages = paginateChapterBlocks(
+            blocks = blocks,
+            chapterIndex = chapterIndex,
+            measurementProvider = measurementProvider
+        )
+        coroutineContext.ensureActive()
+        if (isDisposed()) return null
+        Timber.d("paginateChapter: PaginatorLogic returned ${pages.size} pages for chapter $chapterIndex.")
+        Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
+            "pagination_result chapter=$chapterIndex " + pages.readerPagesLinkDiagSummary()
+        )
+
+        applyPageRuntimeIndexes(chapterIndex, pages)
+        savePageCache(chapter, chapterIndex, pages)
+
+        updatePageCountsOnMain(chapterIndex, pages.size)
+        pageCache.put(chapterIndex, pages)
+        if (enqueueDeferredBookProcessing.compareAndSet(true, false)) {
+            enqueueBookProcessingWork()
+        }
+        Timber.d("paginateChapter: Chapter $chapterIndex pages stored in L1 pageCache.")
+        return pages
+    }
+
+    /**
+     * Routes chapter blocks through the horizontal or vertical paginator by
+     * publication writing mode. Mode switches break pages; each engine stays
+     * exact for its own mode instead of one engine approximating both.
+     */
+    private suspend fun paginateChapterBlocks(
+        blocks: List<ContentBlock>,
+        chapterIndex: Int,
+        measurementProvider: SuspendingAndroidBlockMeasurementProvider
+    ): List<Page> {
+        val segments = segmentBlocksByWritingMode(blocks, ContentBlock::isVerticalContentBlock)
+        if (segments.size <= 1 && segments.firstOrNull()?.isVertical == false) {
+            return paginate(
+                blocks = blocks,
+                pageHeight = constraints.maxHeight,
+                measurementProvider = measurementProvider,
+                density = density
+            )
+        }
+        Timber.d("paginateChapter: chapter $chapterIndex has ${segments.size} writing-mode segments.")
+        val pages = mutableListOf<Page>()
+        for (segment in segments) {
+            if (!segment.isVertical) {
+                pages += paginate(
+                    blocks = segment.blocks,
+                    pageHeight = constraints.maxHeight,
+                    measurementProvider = measurementProvider,
+                    density = density
+                )
+                continue
+            }
+            val defaultLineSpacing = defaultVerticalLineSpacing(textStyle)
+            val ctx = VerticalContentMeasureContext(
+                textMeasurer = textMeasurer,
+                density = density,
+                baseStyle = textStyle,
+                pageWidthPx = constraints.maxWidth,
+                pageHeightPx = constraints.maxHeight,
+                imageSizeMultiplier = imageSizeMultiplier,
+                hideImages = hideImages,
+                defaultLineSpacing = defaultLineSpacing
+            )
+            pages += paginateVerticalContentBlocks(
+                blocks = segment.blocks,
+                ctx = ctx,
+                preSplitFallback = { block -> preSplitVerticalFallback(block, measurementProvider) }
+            )
+        }
+        return pages
+    }
+
+    /**
+     * Fragments oversize horizontal fallback blocks (tables, lists, …) with
+     * the tested horizontal splitter so each owns a fitting page segment
+     * inside vertical flow.
+     */
+    private suspend fun preSplitVerticalFallback(
+        block: ContentBlock,
+        measurementProvider: SuspendingAndroidBlockMeasurementProvider
+    ): List<ContentBlock> {
+        val out = mutableListOf<ContentBlock>()
+        val queue = ArrayDeque(listOf(block))
+        var guard = 0
+        while (queue.isNotEmpty() && guard++ < 64) {
+            coroutineContext.ensureActive()
+            val current = queue.removeFirst()
+            if (measurementProvider.measure(current) <= constraints.maxHeight) {
+                out += current
+                continue
+            }
+            val split: List<ContentBlock>? = when (current) {
+                is TableBlock -> measurementProvider.split(current, constraints.maxHeight)
+                    ?.let { listOf(it.first, it.second) }
+                is FlexContainerBlock -> measurementProvider.split(current, constraints.maxHeight)
+                    ?.let { listOf(it.first, it.second) }
+                is ChantScoreBlock -> measurementProvider.split(current, constraints.maxHeight)
+                    ?.let { listOf(it.first, it.second) }
+                is WrappingContentBlock -> measurementProvider.split(current, constraints.maxHeight)
+                    ?.let { listOf(it.first) + it.second }
+                else -> null
+            }
+            if (split.isNullOrEmpty()) {
+                out += current
+            } else {
+                out += split.first()
+                split.drop(1).asReversed().forEach { queue.addFirst(it) }
+            }
+        }
+        out.addAll(queue)
+        return out.ifEmpty { listOf(block) }
+    }
+
+    private fun triggerPagination(chapterIndex: Int, priority: Int) {
+        if (isDisposed()) return
+        if (chapterIndex !in chapters.indices) {
+            Timber.w("Trigger: Ignoring invalid chapter index $chapterIndex. Chapter count: ${chapters.size}.")
+            return
+        }
+        if (pageCache[chapterIndex] != null) {
+            Timber.v("Trigger: Chapter $chapterIndex is already in cache. Ignoring.")
+            return
+        }
+        if (chaptersBeingProcessed.contains(chapterIndex)) {
+            Timber.v("Trigger: Chapter $chapterIndex is already being processed. Ignoring.")
+            return
+        }
+
+        synchronized(paginationQueue) {
+            val existingRequest = paginationQueue.find { it.chapterIndex == chapterIndex }
+
+            if (existingRequest != null) {
+                if (priority < existingRequest.priority) { // Lower number = higher priority
+                    Timber.d("Upgrading priority for queued chapter $chapterIndex from ${existingRequest.priority} to $priority")
+                    paginationQueue.remove(existingRequest)
+                    paginationQueue.offer(PaginationRequest(chapterIndex, priority))
+                } else {
+                    Timber.v("Trigger: Chapter $chapterIndex already in queue with same or higher priority. Ignoring.")
+                }
+            } else {
+                Timber.d("Queued chapter $chapterIndex for pagination with priority $priority.")
+                paginationQueue.offer(PaginationRequest(chapterIndex, priority))
+            }
+        }
+    }
+
+    private fun prefetchChapters(currentChapterIndex: Int) {
+        if (isDisposed()) return
+        Timber.v("Prefetching chapters around index $currentChapterIndex.")
+        for (offset in 1..2) {
+            val nextChapterIndex = currentChapterIndex + offset
+            if (nextChapterIndex < chapters.size) {
+                triggerPagination(nextChapterIndex, PRIORITY_MEDIUM)
+            }
+
+            val prevChapterIndex = currentChapterIndex - offset
+            if (prevChapterIndex >= 0) {
+                triggerPagination(prevChapterIndex, PRIORITY_MEDIUM)
+            }
+        }
+    }
+
+    override fun getChapterPathForPage(pageIndex: Int): String? {
+        val chapterIndex = findChapterIndexForPage(pageIndex)
+        return chapters.getOrNull(chapterIndex ?: -1)?.absPath
+    }
+
+    override fun getPlainTextForChapter(chapterIndex: Int): String? {
+        val chapter = chapters.getOrNull(chapterIndex) ?: return null
+        Timber.tag("POS_DIAG").d("getPlainTextForChapter: chapterIndex=$chapterIndex, chapterTitle='${chapter.title}', hasInMemoryContent=${chapter.htmlContent.isNotEmpty()}")
+        val htmlToParse = chapter.htmlContent.ifEmpty {
+            try {
+                val file = java.io.File(extractionBasePath, chapter.contentFilePath())
+                if (file.exists()) file.readText() else ""
+            } catch (_: Exception) {
+                ""
+            }
+        }
+        if (htmlToParse.isBlank()) return null
+        return Jsoup.parse(htmlToParse).body().text()
+    }
+
+    suspend fun findStablePageForAnchor(chapterIndex: Int, anchor: String?): Int? = withContext(Dispatchers.IO) {
+        Timber.tag("TOC_NAV_DEBUG").d("Stable precision nav request for anchor: '$anchor'")
+
+        if (anchor.isNullOrBlank()) {
+            return@withContext findStableChapterStartPage(chapterIndex)
+        }
+
+        // 1. QUICK LOOKUP: Check the Anchor Index first
+        val indexEntry = bookCacheDao.getAnchorIndex(bookId, anchor)
+
+        val (targetChapter, targetBlock) = if (indexEntry != null) {
+            Timber.tag("TOC_NAV_DEBUG").i("Index HIT: Anchor '$anchor' is in Chapter ${indexEntry.chapterIndex}, Block ${indexEntry.blockIndex}")
+            indexEntry.chapterIndex to indexEntry.blockIndex
+        } else {
+            Timber.tag("TOC_NAV_DEBUG").w("Index MISS: Falling back to linear scan for '$anchor' in Chapter $chapterIndex")
+            chapterIndex to null
+        }
+
+        // 2. ENSURE PAGINATION: Get pages for the determined chapter
+        val chapterPages = ensureChapterPaginated(targetChapter)
+        val chapterStartPage = ensureStableStartPageForChapter(targetChapter)
+
+        if (chapterPages == null || chapterStartPage == null) {
+            Timber.e("Anchor navigation failed: Could not stabilize target chapter $targetChapter.")
+            return@withContext null
+        }
+
+        val indexedPageInChapter = targetBlock?.let { blockIndex ->
+            chapterPageNavigationIndex[targetChapter]
+                ?.firstOrNull { blockIndex in it.firstBlockIndex..it.lastBlockIndex }
+                ?.pageInChapter
+        } ?: chapterAnchorPageIndex[targetChapter]?.get(anchor)
+
+        if (indexedPageInChapter != null) {
+            val finalPage = chapterStartPage + indexedPageInChapter
+            Timber.tag("TOC_NAV_DEBUG").d("Navigation resolved from page index to Absolute Page: $finalPage")
+            return@withContext finalPage
+        }
+
+        // 3. FIND PAGE
+        var targetPageInChapter = 0
+        var found = false
+
+        for ((pageIndex, page) in chapterPages.withIndex()) {
+            val isMatch = if (targetBlock != null) {
+                // Fast path: We know exactly which block we are looking for
+                page.content.any { it.blockIndex == targetBlock }
+            } else {
+                // Slow path: Linear ID scan (fallback)
+                page.content.any { containsAnchor(it, anchor) }
+            }
+
+            if (isMatch) {
+                targetPageInChapter = pageIndex
+                found = true
+                break
+            }
+        }
+
+        val finalPage = chapterStartPage + targetPageInChapter
+        Timber.tag("TOC_NAV_DEBUG").d("Navigation resolved to Absolute Page: $finalPage (Found: $found)")
+        finalPage
+    }
+
+    suspend fun findStableLocatorForAnchor(chapterIndex: Int, anchor: String?): Locator? = withContext(Dispatchers.IO) {
+        if (anchor.isNullOrBlank()) return@withContext Locator(chapterIndex, 0, 0)
+
+        val requestedChapter = chapters.getOrNull(chapterIndex) ?: return@withContext null
+        val requestedBlocks = getCachedBlocksForChapter(requestedChapter, chapterIndex)
+        findLocatorForAnchorInBlocks(chapterIndex, anchor, requestedBlocks)?.let { locator ->
+            return@withContext locator
+        }
+
+        val indexEntry = bookCacheDao.getAnchorIndex(bookId, anchor)
+        val targetChapter = indexEntry?.chapterIndex ?: chapterIndex
+        val chapter = chapters.getOrNull(targetChapter) ?: return@withContext null
+        val blocks = getCachedBlocksForChapter(chapter, targetChapter)
+
+        findLocatorForAnchorInBlocks(targetChapter, anchor, blocks)
+            ?: indexEntry?.let { Locator(it.chapterIndex, it.blockIndex, 0) }
+    }
+
+    override fun findPageForAnchor(
+        chapterIndex: Int,
+        anchor: String?,
+        onResult: (pageIndex: Int) -> Unit
+    ) {
+        if (isDisposed()) return
+        paginatorScope.launch(Dispatchers.IO) {
+            if (isDisposed()) return@launch
+            val page = findStablePageForAnchor(chapterIndex, anchor) ?: return@launch
+            withContext(Dispatchers.Main) { onResult(page) }
+        }
+    }
+
+    private fun containsAnchor(block: ContentBlock, anchor: String): Boolean {
+        if (block.elementId == anchor) return true
+
+        if (block is TextContentBlock) {
+            val idAnnotations = block.content.getStringAnnotations("ID", 0, block.content.length)
+            if (idAnnotations.any { it.item == anchor }) return true
+        }
+
+        return when (block) {
+            is FlexContainerBlock -> block.children.any { containsAnchor(it, anchor) }
+            is TableBlock -> block.rows.flatten().any { cell ->
+                cell.content.any { containsAnchor(it, anchor) }
+            }
+            is WrappingContentBlock -> {
+                containsAnchor(block.floatedImage, anchor) ||
+                        block.paragraphsToWrap.any { containsAnchor(it, anchor) }
+            }
+            else -> false
+        }
+    }
+
+    private fun findAllIds(block: ContentBlock): List<String> {
+        val ids = mutableListOf<String>()
+        block.elementId?.let { ids.add(it) }
+
+        if (block is TextContentBlock) {
+            val idAnnotations = block.content.getStringAnnotations("ID", 0, block.content.length)
+            ids.addAll(idAnnotations.map { it.item })
+        }
+
+        when (block) {
+            is FlexContainerBlock -> ids.addAll(block.children.flatMap { findAllIds(it) })
+            is TableBlock -> ids.addAll(block.rows.flatten().flatMap { cell -> cell.content.flatMap { findAllIds(it) } })
+            is WrappingContentBlock -> {
+                ids.addAll(findAllIds(block.floatedImage))
+                ids.addAll(block.paragraphsToWrap.flatMap { findAllIds(it) })
+            }
+            else -> {}
+        }
+        return ids
+    }
+
+    override fun navigateToHref(
+        currentChapterAbsPath: String,
+        href: String,
+        onNavigationComplete: (pageIndex: Int) -> Unit
+    ) {
+        if (isDisposed()) return
+        paginatorScope.launch(Dispatchers.IO) {
+            if (isDisposed()) return@launch
+            val targetPage = findStablePageForHref(currentChapterAbsPath, href) ?: return@launch
+            withContext(Dispatchers.Main) { onNavigationComplete(targetPage) }
+        }
+    }
+
+    suspend fun findStablePageForHref(currentChapterAbsPath: String, href: String): Int? = withContext(Dispatchers.IO) {
+        Timber.i("Navigating to href: '$href' from chapter: '$currentChapterAbsPath'")
+
+        val (targetChapterPath, anchor) = resolveHref(currentChapterAbsPath, href)
+        if (targetChapterPath == null) {
+            Timber.w("Could not resolve href '$href' to a valid chapter path.")
+            return@withContext null
+        }
+
+        val targetChapterIndex = chapters.indexOfFirst { it.absPath == targetChapterPath }
+        if (targetChapterIndex == -1) {
+            Timber.w("Could not find chapter for path: $targetChapterPath")
+            return@withContext null
+        }
+
+        findStablePageForAnchor(targetChapterIndex, anchor)
+    }
+
+    suspend fun findStableLocatorForHref(currentChapterAbsPath: String, href: String): Locator? = withContext(Dispatchers.IO) {
+        val (targetChapterPath, anchor) = resolveHref(currentChapterAbsPath, href)
+        if (targetChapterPath == null) {
+            Timber.w("Could not resolve href '$href' to a valid chapter path.")
+            return@withContext null
+        }
+
+        val targetChapterIndex = chapters.indexOfFirst { it.absPath == targetChapterPath }
+        if (targetChapterIndex == -1) {
+            Timber.w("Could not find chapter for path: $targetChapterPath")
+            return@withContext null
+        }
+
+        findStableLocatorForAnchor(targetChapterIndex, anchor)
+    }
+
+    suspend fun findStablePageForSearchResult(result: SearchResult): Int? = withContext(Dispatchers.IO) {
+        val targetChapterIndex = result.locationInSource
+        Timber.i("Finding page for search result: '${result.query}' in chapter $targetChapterIndex")
+
+        findStableLocatorForSearchResult(result)?.let { locator ->
+            findStablePageForLocator(locator)?.let { page ->
+                Timber.i("Found exact search result locator $locator on absolute page $page")
+                return@withContext page
+            }
+        }
+
+        val chapterPages = ensureChapterPaginated(targetChapterIndex)
+        val chapterStartPage = ensureStableStartPageForChapter(targetChapterIndex)
+
+        if (chapterPages == null || chapterStartPage == null) {
+            Timber.e("Search result navigation failed: Could not stabilize target chapter $targetChapterIndex.")
+            return@withContext null
+        }
+
+        var targetPageInChapter = 0
+        var occurrenceCount = 0
+
+        pageLoop@ for ((pageIndex, page) in chapterPages.withIndex()) {
+            for (block in page.content) {
+                val textToSearch = when (block) {
+                    is ParagraphBlock -> block.content.text
+                    is HeaderBlock -> block.content.text
+                    is QuoteBlock -> block.content.text
+                    is ListItemBlock -> block.content.text
+                    else -> null
+                }
+
+                if (textToSearch != null) {
+                    var lastIndex = -1
+                    while (true) {
+                        lastIndex = textToSearch.indexOf(result.query, startIndex = lastIndex + 1, ignoreCase = true)
+                        if (lastIndex == -1) break
+
+                        if (occurrenceCount == result.occurrenceIndexInLocation) {
+                            targetPageInChapter = pageIndex
+                            Timber.i("Found search result '${result.query}' at occurrence ${result.occurrenceIndexInLocation} on page $pageIndex of chapter $targetChapterIndex")
+                            break@pageLoop
+                        }
+                        occurrenceCount++
+                    }
+                }
+            }
+        }
+        val finalPageIndex = chapterStartPage + targetPageInChapter
+        Timber.i("Search result found. Final page index: $finalPageIndex")
+        finalPageIndex
+    }
+
+    suspend fun findStableLocatorForSearchResult(result: SearchResult): Locator? = withContext(Dispatchers.IO) {
+        val chapter = chapters.getOrNull(result.locationInSource) ?: return@withContext null
+        val blocks = getCachedBlocksForChapter(chapter, result.locationInSource)
+        findLocatorForSearchResultInBlocks(result, blocks)
+    }
+
+    override fun findPageForSearchResult(result: SearchResult, onResult: (pageIndex: Int) -> Unit) {
+        if (isDisposed()) return
+        paginatorScope.launch(Dispatchers.IO) {
+            if (isDisposed()) return@launch
+            val page = findStablePageForSearchResult(result) ?: return@launch
+            withContext(Dispatchers.Main) { onResult(page) }
+        }
+    }
+
+    override fun findPageForCfiAndOffset(chapterIndex: Int, cfi: String, charOffset: Int): Int? {
+        val index = chapterCharacterIndex[chapterIndex]
+        if (index.isNullOrEmpty()) {
+            Timber.tag("TTS_PAGE_JUMP_DIAG").w("Lookup failed: No character index for chapter $chapterIndex")
+            return null
+        }
+
+        val targetPath = CfiUtils.getPath(cfi)
+
+        val matches = index.filter { range ->
+            val rangePath = CfiUtils.getPath(range.cfi)
+            val pathMatches = targetPath == rangePath || targetPath.startsWith(rangePath)
+            val offsetMatches = charOffset >= range.startOffset && charOffset < range.endOffset
+            pathMatches && offsetMatches
+        }
+
+        val foundRange = matches.maxByOrNull { CfiUtils.getPath(it.cfi).length }
+
+        return if (foundRange != null) {
+            val chapterStartPage = chapterStartPageIndices[chapterIndex]
+            if (chapterStartPage == null) {
+                null
+            } else {
+                val absolutePage = chapterStartPage + foundRange.pageInChapter
+                absolutePage
+            }
+        } else {
+            null
+        }
+    }
+
+    private fun findPageInChapterForLocator(locator: Locator, chapterPages: List<Page>): Int? {
+        val targetChapterIndex = locator.chapterIndex
+        chapterTextRangeIndex[targetChapterIndex]
+            ?.firstOrNull { range ->
+                range.blockIndex == locator.blockIndex &&
+                    (locator.charOffset in range.startOffset..<range.endOffset ||
+                        (range.startOffset == range.endOffset && locator.charOffset == range.startOffset))
+            }
+            ?.let { range ->
+                Timber.tag("POS_DIAG").i("findPageInChapterForLocator: FOUND via runtime index on pageInChapter ${range.pageInChapter}")
+                return range.pageInChapter
+            }
+
+        chapterPageNavigationIndex[targetChapterIndex]
+            ?.firstOrNull { locator.blockIndex in it.firstBlockIndex..it.lastBlockIndex }
+            ?.let { entry ->
+                Timber.tag("POS_DIAG").w("findPageInChapterForLocator: Using block-range fallback pageInChapter ${entry.pageInChapter}")
+                return entry.pageInChapter
+            }
+
+        var fallbackPageInChapter = -1
+
+        for ((pageIndex, page) in chapterPages.withIndex()) {
+            val allTextBlocks = getAllTextBlocks(page.content)
+            if (allTextBlocks.any { it.blockIndex == locator.blockIndex }) {
+                Timber.tag("POS_DIAG").d("findPageInChapterForLocator: Found target blockIndex ${locator.blockIndex} on PageInChapter $pageIndex")
+            }
+            for (textBlock in allTextBlocks) {
+                if (textBlock.blockIndex == locator.blockIndex) {
+                    if (fallbackPageInChapter == -1) {
+                        fallbackPageInChapter = pageIndex
+                    }
+                    val startOffsetOnPage = textBlock.startCharOffsetInSource
+                    val endOffsetOnPage = startOffsetOnPage + textBlock.content.length
+
+                    Timber.tag("POS_DIAG").d(" -> Block Match: page=$pageIndex, targetOffset=${locator.charOffset}, blockRange=[$startOffsetOnPage, $endOffsetOnPage]")
+
+                    val isInside = locator.charOffset in startOffsetOnPage..<endOffsetOnPage
+                    if (isInside) {
+                        Timber.tag("POS_DIAG").i("findPageInChapterForLocator: FOUND match on pageInChapter $pageIndex")
+                        return pageIndex
+                    }
+
+                    if (textBlock.content.isEmpty() && locator.charOffset == startOffsetOnPage) {
+                        Timber.tag("POS_DIAG").i("findPageInChapterForLocator: FOUND empty block match on pageInChapter $pageIndex")
+                        return pageIndex
+                    }
+                }
+            }
+
+            if (fallbackPageInChapter == -1) {
+                for (block in page.content) {
+                    if (block.blockIndex == locator.blockIndex) {
+                        fallbackPageInChapter = pageIndex
+                        break
+                    }
+                }
+            }
+        }
+
+        if (fallbackPageInChapter != -1) {
+            Timber.tag("POS_DIAG").w("findPageInChapterForLocator: Exact offset not found, using block-start fallback pageInChapter $fallbackPageInChapter")
+            return fallbackPageInChapter
+        }
+
+        return null
+    }
+
+    suspend fun findPageForLocator(locator: Locator): Int? {
+        val targetChapterIndex = locator.chapterIndex
+        Timber.tag("POS_DIAG").d("findPageForLocator: Searching for $locator")
+
+        val chapterPages = ensureChapterPaginated(targetChapterIndex)
+        val chapterStartPage = chapterStartPageIndices[targetChapterIndex] ?: 0
+
+        Timber.tag("POS_DIAG").d("findPageForLocator: targetChapterIndex=$targetChapterIndex, chapterStartPage=$chapterStartPage, chapterPages.size=${chapterPages?.size}")
+
+        if (chapterPages.isNullOrEmpty()) {
+            Timber.e("Locator navigation failed: Could not paginate target chapter $targetChapterIndex.")
+            return null
+        }
+
+        val pageInChapter = findPageInChapterForLocator(locator, chapterPages) ?: run {
+            Timber.tag("POS_DIAG").e("findPageForLocator: FAILED to resolve locator in chapter $targetChapterIndex")
+            return null
+        }
+
+        val finalPageIndex = chapterStartPage + pageInChapter
+        Timber.tag("POS_DIAG").i("findPageForLocator: FOUND absolute page $finalPageIndex")
+        return finalPageIndex
+    }
+
+    fun getLocatorForPage(pageIndex: Int): Locator? {
+        val chapterIndex = findChapterIndexForPage(pageIndex) ?: return null
+        val chStart = chapterStartPageIndices[chapterIndex] ?: 0
+
+        Timber.tag("POS_DIAG").d("getLocatorForPage: Request pageIndex=$pageIndex. Resolved chapterIndex=$chapterIndex (starts at $chStart). PageInChapter=${pageIndex - chStart}")
+        chapterPageNavigationIndex[chapterIndex]?.getOrNull(pageIndex - chStart)?.let { entry ->
+            entry.firstTextBlockIndex?.let { blockIndex ->
+                return Locator(
+                    chapterIndex = chapterIndex,
+                    blockIndex = blockIndex,
+                    charOffset = entry.firstTextCharOffset
+                )
+            }
+            if (entry.firstBlockIndex >= 0) {
+                return Locator(
+                    chapterIndex = chapterIndex,
+                    blockIndex = entry.firstBlockIndex,
+                    charOffset = 0
+                )
+            }
+        }
+
+        val pageContent = getPageContent(pageIndex) ?: return null
+
+        Timber.tag("POS_DIAG").d("getLocatorForPage: Inspecting page $pageIndex (chapter=$chapterIndex). Total top-level blocks=${pageContent.content.size}")
+
+        val allTextBlocks = getAllTextBlocks(pageContent.content)
+        val firstTextBlock = allTextBlocks.firstOrNull { it.content.text.isNotBlank() } ?: allTextBlocks.firstOrNull()
+
+        Timber.tag("POS_DIAG").d("getLocatorForPage: allTextBlocks count=${allTextBlocks.size}. Selected blockIndex=${firstTextBlock?.blockIndex}, charOffset=${firstTextBlock?.startCharOffsetInSource}, text snippet='${firstTextBlock?.content?.text?.take(20)?.replace("\n", " ")}'")
+
+        if (firstTextBlock != null) {
+            val locator = Locator(
+                chapterIndex = chapterIndex,
+                blockIndex = firstTextBlock.blockIndex,
+                charOffset = firstTextBlock.startCharOffsetInSource
+            )
+            Timber.tag("POS_DIAG").d("getLocatorForPage: Generated $locator for absolute page $pageIndex")
+            return locator
+        } else {
+            val firstBlock = pageContent.content.firstOrNull() ?: return null
+            val locator = Locator(
+                chapterIndex = chapterIndex,
+                blockIndex = firstBlock.blockIndex,
+                charOffset = 0
+            )
+            Timber.tag("POS_DIAG").d("getLocatorForPage: Generated fallback $locator for absolute page $pageIndex")
+            return locator
+        }
+    }
+
+    override fun findPageForCfi(chapterIndex: Int, cfi: String, onResult: (pageIndex: Int) -> Unit) {
+        if (isDisposed()) return
+        paginatorScope.launch(Dispatchers.IO) {
+            if (isDisposed()) return@launch
+            Timber.i("findPageForCfi: Starting search for CFI: '$cfi' in chapter: '$chapterIndex'")
+
+            val chapterPages = ensureChapterPaginated(chapterIndex)
+            val chapterStartPage = ensureStableStartPageForChapter(chapterIndex)
+            Timber.d("findPageForCfi: Chapter $chapterIndex starts at absolute page $chapterStartPage.")
+
+            if (chapterPages == null || chapterStartPage == null) {
+                Timber.e("CFI Navigation failed: Could not stabilize target chapter $chapterIndex.")
+                return@launch
+            }
+            Timber.d("findPageForCfi: Chapter $chapterIndex has ${chapterPages.size} pages.")
+
+            val (basePath, offset) = cfi.split(':').let {
+                it[0] to (it.getOrNull(1)?.toIntOrNull() ?: 0)
+            }
+
+            val sanitizedBasePath = if (basePath.startsWith("/2/")) {
+                "/" + basePath.substring(3)
+            } else {
+                basePath
+            }
+
+            Timber.d("findPageForCfi: Parsed CFI into sanitizedBasePath='$sanitizedBasePath' (from '$basePath') and offset=$offset.")
+
+            var targetPageInChapter = 0
+            var foundMatch = false
+
+            pageLoop@ for ((pageIndex, page) in chapterPages.withIndex()) {
+                for (block in page.content) {
+                    val blockCfi = block.cfi ?: continue
+
+                    if (blockCfi.endsWith(sanitizedBasePath)) {
+                        val index = blockCfi.lastIndexOf(sanitizedBasePath)
+                        val isGenuineSuffix = (index == 0) || (index > 0 && blockCfi[index - 1] == '/')
+                        if (!isGenuineSuffix) continue
+
+                        Timber.d("findPageForCfi: Potential CFI match on page $pageIndex. Input base: '$basePath', Block CFI: '$blockCfi'.")
+
+                        val blockMatches = when (block) {
+                            is TextContentBlock -> {
+                                val start = block.startCharOffsetInSource
+                                val end = block.endCharOffsetInSource
+                                val contentLength = block.content.length
+                                val finalEnd = if (end >= 0) end else (start + contentLength)
+                                val match = offset in start..<finalEnd
+                                Timber.d("findPageForCfi: TextBlock check: offset ($offset) in range [$start, $finalEnd)? -> $match")
+                                match
+                            }
+                            else -> {
+                                val match = offset == 0
+                                Timber.d("findPageForCfi: Non-TextBlock check: offset is 0? -> $match")
+                                match
+                            }
+                        }
+
+                        if (blockMatches) {
+                            targetPageInChapter = pageIndex
+                            foundMatch = true
+                            Timber.i("findPageForCfi: SUCCESS. Found precise match on page $pageIndex of chapter.")
+                            break@pageLoop
+                        }
+                    }
+                }
+            }
+
+            if (!foundMatch) {
+                Timber.w("Could not find a precise character-offset match for CFI '$cfi'. Falling back to best-effort suffix match.")
+                var bestMatchLength = -1
+                chapterPages.forEachIndexed { pageIndex, page ->
+                    for (block in page.content) {
+                        val blockCfi = block.cfi ?: continue
+                        if (blockCfi.endsWith(sanitizedBasePath)) {
+                            val index = blockCfi.lastIndexOf(sanitizedBasePath)
+                            val isGenuineSuffix = (index == 0) || (index > 0 && blockCfi[index - 1] == '/')
+                            if (isGenuineSuffix && blockCfi.length > bestMatchLength) {
+                                targetPageInChapter = pageIndex
+                                bestMatchLength = blockCfi.length
+                                Timber.d("findPageForCfi: Fallback found better prefix match on page $pageIndex. New best match length: $bestMatchLength (Block CFI: '$blockCfi')")
+                            }
+                        }
+                    }
+                }
+            }
+
+            val finalPageIndex = chapterStartPage + targetPageInChapter
+            Timber.i("findPageForCfi: Search complete. finalPageIndex: $finalPageIndex (start: $chapterStartPage + pageInChapter: $targetPageInChapter)")
+            withContext(Dispatchers.Main) { onResult(finalPageIndex) }
+        }
+    }
+
+    private fun resolveHref(currentChapterPath: String, href: String): Pair<String?, String?> {
+        try {
+            val decodedHref = URLDecoder.decode(href, "UTF-8")
+            val (pathPart, anchorPart) = decodedHref.split('#', limit = 2).let {
+                if (it.size > 1) it[0] to it[1] else it[0] to null
+            }
+
+            if (pathPart.isBlank()) {
+                Timber.d("Href path is blank, resolving to current chapter: $currentChapterPath")
+                return currentChapterPath to anchorPart
+            }
+
+            val targetPath = URI(currentChapterPath).resolve(pathPart).normalize().path
+            Timber.d("Resolved href '$href' to target path '$targetPath'")
+
+            val targetChapter = chapters.find {
+                try {
+                    URI(it.absPath).normalize().path == targetPath
+                } catch (_: Exception) {
+                    false
+                }
+            }
+
+            if (targetChapter == null) {
+                Timber.w("Could not find a matching chapter for path: $targetPath")
+            }
+
+            return targetChapter?.absPath to anchorPart
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to resolve href: $href")
+            return null to null
+        }
+    }
+}

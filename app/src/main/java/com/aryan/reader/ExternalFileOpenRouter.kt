@@ -1,0 +1,130 @@
+package com.aryan.reader
+
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.widget.Toast
+import com.aryan.reader.shared.MobileExternalOpenAction
+import com.aryan.reader.shared.ExternalDocumentOpenMode
+import com.aryan.reader.shared.mobileExternalOpenAction
+import timber.log.Timber
+
+const val EXTRA_TEMPORARY_EXTERNAL_OPEN = "com.aryan.reader.extra.TEMPORARY_EXTERNAL_OPEN"
+
+object ExternalFileOpenRouteDecider {
+    private const val URI_GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+
+    fun shouldOpenTemporary(externalFileBehavior: String?): Boolean {
+        return mobileExternalOpenAction(externalFileBehavior) == MobileExternalOpenAction.OPEN_TEMPORARY
+    }
+
+    fun shouldOpenTemporarily(
+        externalFileBehavior: String?,
+        openMode: ExternalDocumentOpenMode,
+    ): Boolean {
+        return openMode == ExternalDocumentOpenMode.OPEN_SINGLE &&
+            shouldOpenTemporary(externalFileBehavior)
+    }
+
+    /**
+     * Returns the normalized open mode for an external document intent. VIEW
+     * retains its historical direct-data fallback when a provider omits or
+     * lies about metadata; SEND intents are accepted only after shared
+     * normalization succeeds.
+     */
+    fun openModeForIntent(sourceIntent: Intent, context: Context? = null): ExternalDocumentOpenMode? {
+        val normalizedMode = ExternalDocumentIntentMapper
+            .map(sourceIntent, context)
+            ?.request
+            ?.openMode
+        if (normalizedMode != null) return normalizedMode
+
+        return if (sourceIntent.action == Intent.ACTION_VIEW && sourceIntent.data != null) {
+            ExternalDocumentOpenMode.OPEN_SINGLE
+        } else {
+            null
+        }
+    }
+
+    fun targetActivityClass(externalFileBehavior: String?): Class<out Activity> {
+        return if (shouldOpenTemporary(externalFileBehavior)) {
+            TemporaryExternalFileActivity::class.java
+        } else {
+            MainActivity::class.java
+        }
+    }
+
+    fun flagsForInternalForward(sourceFlags: Int): Int {
+        // Forward only the URI grants. Anything else the sender set describes
+        // the sender's own task (CLEAR_TOP, RESET_TASK_IF_NEEDED,
+        // EXCLUDE_FROM_RECENTS, ...) and would be applied to our activity.
+        // NEW_TASK is re-added explicitly so the reader lands in Episteme's
+        // task by intent rather than relying on MainActivity's singleTask
+        // launch mode implying it.
+        //
+        // This is not what keeps the reader visible in Recents: Recents decides
+        // that from the base intent of the task the activity ends up in, so the
+        // two external-open activities declare their own taskAffinity. See
+        // AndroidManifest.xml.
+        return (sourceFlags and URI_GRANT_FLAGS) or Intent.FLAG_ACTIVITY_NEW_TASK
+    }
+}
+
+class ExternalFileOpenRouterActivity : Activity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        routeExternalOpen(intent)
+        finish()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        routeExternalOpen(intent)
+        finish()
+    }
+
+    private fun routeExternalOpen(sourceIntent: Intent?) {
+        if (sourceIntent == null) return
+        val openMode = ExternalFileOpenRouteDecider.openModeForIntent(sourceIntent, this)
+            ?: return
+        routeIntent(sourceIntent, openMode = openMode)
+    }
+
+    private fun routeIntent(sourceIntent: Intent, openMode: ExternalDocumentOpenMode) {
+        val prefs = getSharedPreferences("reader_user_prefs", Context.MODE_PRIVATE)
+        val behavior = prefs.getString("external_file_behavior", "ASK")
+        val shouldOpenTemporarily = ExternalFileOpenRouteDecider.shouldOpenTemporarily(behavior, openMode)
+        val targetIntent = Intent(sourceIntent).apply {
+            flags = ExternalFileOpenRouteDecider.flagsForInternalForward(sourceIntent.flags)
+            setClass(
+                this@ExternalFileOpenRouterActivity,
+                if (shouldOpenTemporarily) {
+                    TemporaryExternalFileActivity::class.java
+                } else {
+                    MainActivity::class.java
+                }
+            )
+            if (shouldOpenTemporarily) {
+                putExtra(EXTRA_TEMPORARY_EXTERNAL_OPEN, true)
+                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            }
+        }
+        try {
+            startActivity(targetIntent)
+        } catch (error: RuntimeException) {
+            // The try covers only startActivity: SecurityException when the
+            // sender shared a content URI without granting read access (some
+            // FileProvider shares omit the grant), or ActivityNotFoundException
+            // in a broken configuration. There is nothing to open, so tell the
+            // user instead of crashing the launch; the callers still finish().
+            Timber.w(error, "External open failed for ${sourceIntent.data}")
+            Toast.makeText(this, R.string.error_external_open_failed, Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
+class TemporaryExternalFileActivity : MainActivity()

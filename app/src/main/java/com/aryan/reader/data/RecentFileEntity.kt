@@ -1,0 +1,104 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.data
+
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+import androidx.room.TypeConverters
+import com.aryan.reader.FileType
+
+@Entity(tableName = "recent_files")
+@TypeConverters(FileTypeConverter::class)
+data class RecentFileEntity(
+    @PrimaryKey val bookId: String,
+    val uriString: String?,
+    val type: FileType,
+    val displayName: String,
+    val timestamp: Long,
+    @ColumnInfo(defaultValue = "0") val dateAddedTimestamp: Long = 0L,
+    val coverImagePath: String?,
+    val title: String?,
+    val author: String?,
+    @ColumnInfo(name = "lastChapterIndex") val lastChapterIndex: Int?,
+    val lastPage: Int?,
+    @ColumnInfo(name = "lastPositionCfi") val lastPositionCfi: String?,
+    @ColumnInfo(name = "progressPercentage") val progressPercentage: Float?,
+    @ColumnInfo(defaultValue = "1") val isRecent: Boolean,
+    @ColumnInfo(defaultValue = "1") val isAvailable: Boolean,
+    val lastModifiedTimestamp: Long,
+    @ColumnInfo(defaultValue = "0") val isDeleted: Boolean,
+    val locatorBlockIndex: Int?,
+    val locatorCharOffset: Int?,
+    val bookmarks: String?,
+    @ColumnInfo(defaultValue = "NULL") val sourceFolderUri: String?,
+    @ColumnInfo(defaultValue = "0") val isReflowPreferred: Boolean,
+    @ColumnInfo(defaultValue = "NULL") val customName: String?,
+    @ColumnInfo(defaultValue = "NULL") val highlights: String?,
+    @ColumnInfo(name = "fileSize", defaultValue = "0") val fileSize: Long,
+    @ColumnInfo(defaultValue = "0") val fileContentModifiedTimestamp: Long = 0L,
+    @ColumnInfo(defaultValue = "NULL") val seriesName: String?,
+    @ColumnInfo(defaultValue = "NULL") val seriesIndex: Double?,
+    @ColumnInfo(defaultValue = "NULL") val description: String?,
+    @ColumnInfo(defaultValue = "0") val folderTextMetadataParsed: Boolean,
+    @ColumnInfo(defaultValue = "0") val folderCoverMetadataParsed: Boolean = false,
+    @ColumnInfo(defaultValue = "NULL") val originalTitle: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalAuthor: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalSeriesName: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalSeriesIndex: Double? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalDescription: String? = null,
+    @ColumnInfo(defaultValue = "0") val readingPositionModifiedTimestamp: Long = 0L
+)
+
+data class RecentFileSummary(
+    val bookId: String,
+    val uriString: String?,
+    val type: FileType,
+    val displayName: String,
+    val timestamp: Long,
+    @ColumnInfo(defaultValue = "0") val dateAddedTimestamp: Long = 0L,
+    val coverImagePath: String?,
+    val title: String?,
+    val author: String?,
+    @ColumnInfo(name = "lastChapterIndex") val lastChapterIndex: Int?,
+    val lastPage: Int?,
+    @ColumnInfo(name = "lastPositionCfi") val lastPositionCfi: String?,
+    @ColumnInfo(name = "progressPercentage") val progressPercentage: Float?,
+    @ColumnInfo(defaultValue = "1") val isRecent: Boolean,
+    @ColumnInfo(defaultValue = "1") val isAvailable: Boolean,
+    val lastModifiedTimestamp: Long,
+    @ColumnInfo(defaultValue = "0") val isDeleted: Boolean,
+    val locatorBlockIndex: Int?,
+    val locatorCharOffset: Int?,
+    @ColumnInfo(defaultValue = "NULL") val sourceFolderUri: String?,
+    @ColumnInfo(defaultValue = "0") val isReflowPreferred: Boolean,
+    @ColumnInfo(defaultValue = "NULL") val customName: String?,
+    @ColumnInfo(name = "fileSize", defaultValue = "0") val fileSize: Long,
+    @ColumnInfo(defaultValue = "0") val fileContentModifiedTimestamp: Long = 0L,
+    @ColumnInfo(defaultValue = "NULL") val seriesName: String?,
+    @ColumnInfo(defaultValue = "NULL") val seriesIndex: Double?,
+    @ColumnInfo(defaultValue = "NULL") val description: String?,
+    @ColumnInfo(defaultValue = "NULL") val originalTitle: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalAuthor: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalSeriesName: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalSeriesIndex: Double? = null,
+    @ColumnInfo(defaultValue = "NULL") val originalDescription: String? = null,
+    @ColumnInfo(defaultValue = "0") val readingPositionModifiedTimestamp: Long = 0L
+)

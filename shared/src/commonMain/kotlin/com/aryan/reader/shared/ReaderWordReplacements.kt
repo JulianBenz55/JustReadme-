@@ -1,0 +1,295 @@
+package com.aryan.reader.shared
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+@Serializable
+data class ReaderWordReplacementRule(
+    val id: String,
+    val from: String,
+    val to: String,
+    val enabled: Boolean = true,
+    val isRegex: Boolean = false,
+    val matchCase: Boolean = false,
+    val wholeWord: Boolean = true,
+)
+
+data class ReaderWordReplacementValidation(
+    val isValid: Boolean,
+    val message: String? = null,
+)
+
+data class ReaderWordReplacementError(
+    val ruleId: String,
+    val message: String,
+)
+
+data class ReaderWordReplacementApplyResult(
+    val text: String,
+    val appliedRuleIds: List<String> = emptyList(),
+    val errors: List<ReaderWordReplacementError> = emptyList(),
+)
+
+object ReaderWordReplacementEngine {
+    /**
+     * One rule with its ICU pattern compiled (or its compile error). Compiling
+     * is expensive — `apply` callers that process many texts (TTS chunks, HTML
+     * segments, DOM text nodes) must [compileRules] once and reuse the result
+     * via [applyCompiled]/[applyAll] instead of compiling per text.
+     */
+    data class CompiledRule(
+        val rule: ReaderWordReplacementRule,
+        val regex: Regex?,
+        val compileError: ReaderWordReplacementError?,
+    )
+
+    fun validate(rule: ReaderWordReplacementRule): ReaderWordReplacementValidation {
+        if (rule.from.isBlank()) {
+            return ReaderWordReplacementValidation(isValid = false, message = "Enter text to replace.")
+        }
+        if (!rule.isRegex) {
+            return ReaderWordReplacementValidation(isValid = true)
+        }
+        return runCatching { rule.toRegex() }
+            .fold(
+                onSuccess = { ReaderWordReplacementValidation(isValid = true) },
+                onFailure = {
+                    ReaderWordReplacementValidation(
+                        isValid = false,
+                        message = it.message ?: "This regex is not valid.",
+                    )
+                },
+            )
+    }
+
+    fun apply(
+        text: String,
+        rules: List<ReaderWordReplacementRule>,
+    ): ReaderWordReplacementApplyResult {
+        return applyAll(listOf(text), rules).single()
+    }
+
+    /**
+     * Applies [rules] to every text, compiling each rule once. Output is
+     * identical to calling [apply] per text — only the ICU compilation is
+     * shared.
+     */
+    fun applyAll(
+        texts: List<String>,
+        rules: List<ReaderWordReplacementRule>,
+    ): List<ReaderWordReplacementApplyResult> {
+        if (texts.isEmpty()) return emptyList()
+        if (rules.isEmpty()) return texts.map { ReaderWordReplacementApplyResult(text = it) }
+        val compiled = compileRules(rules)
+        return texts.map { text ->
+            if (text.isEmpty()) ReaderWordReplacementApplyResult(text = text)
+            else applyCompiled(text, compiled)
+        }
+    }
+
+    /** Compiles [rules], skipping disabled/blank rules exactly as [apply] does. */
+    fun compileRules(rules: List<ReaderWordReplacementRule>): List<CompiledRule> {
+        return rules.mapNotNull { rule ->
+            if (!rule.enabled || rule.from.isBlank()) return@mapNotNull null
+            var regex: Regex? = null
+            var error: ReaderWordReplacementError? = null
+            runCatching { rule.toRegex() }
+                .onSuccess { regex = it }
+                .onFailure {
+                    error = ReaderWordReplacementError(
+                        ruleId = rule.id,
+                        message = it.message ?: "Invalid regex.",
+                    )
+                }
+            CompiledRule(rule = rule, regex = regex, compileError = error)
+        }
+    }
+
+    /** Applies pre-compiled [compiled] rules to one text. See [applyAll]. */
+    fun applyCompiled(
+        text: String,
+        compiled: List<CompiledRule>,
+    ): ReaderWordReplacementApplyResult {
+        if (text.isEmpty()) return ReaderWordReplacementApplyResult(text = text)
+
+        var current = text
+        val applied = mutableListOf<String>()
+        val errors = mutableListOf<ReaderWordReplacementError>()
+
+        compiled.forEach { (rule, regex, compileError) ->
+            if (compileError != null) {
+                errors += compileError
+                return@forEach
+            }
+            val replacement = if (rule.isRegex) rule.to else Regex.escapeReplacement(rule.to)
+            val next = runCatching { regex!!.replace(current, replacement) }
+                .onFailure {
+                    errors += ReaderWordReplacementError(
+                        ruleId = rule.id,
+                        message = it.message ?: "Invalid replacement.",
+                    )
+                }
+                .getOrNull() ?: return@forEach
+            if (next != current) {
+                applied += rule.id
+                current = next
+            }
+        }
+
+        return ReaderWordReplacementApplyResult(
+            text = current,
+            appliedRuleIds = applied,
+            errors = errors,
+        )
+    }
+
+    private fun ReaderWordReplacementRule.toRegex(): Regex {
+        val source = if (isRegex) from else Regex.escape(from)
+        val boundedSource = if (wholeWord) {
+            """(?<![\p{L}\p{N}_])(?:$source)(?![\p{L}\p{N}_])"""
+        } else {
+            source
+        }
+        val options = if (matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE)
+        return Regex(pattern = boundedSource, options = options)
+    }
+}
+
+@Serializable
+data class ReaderBookReplacementPreferences(
+    val fileRules: Map<String, List<ReaderWordReplacementRule>> = emptyMap(),
+) {
+    fun rulesForFile(fileId: String?): List<ReaderWordReplacementRule> {
+        return fileRules[fileId.orEmpty()].orEmpty()
+    }
+
+    fun activeRulesForFile(fileId: String?): List<ReaderWordReplacementRule> {
+        return rulesForFile(fileId).filter { it.enabled && it.from.isNotBlank() }
+    }
+
+    fun withFileRules(
+        fileId: String?,
+        rules: List<ReaderWordReplacementRule>,
+    ): ReaderBookReplacementPreferences {
+        val key = fileId.orEmpty()
+        val nextRules = if (rules.isEmpty()) {
+            fileRules - key
+        } else {
+            fileRules + (key to rules)
+        }
+        return copy(fileRules = nextRules)
+    }
+
+    fun scopedToFile(fileId: String?): ReaderBookReplacementPreferences {
+        val key = fileId.orEmpty()
+        val rules = rulesForFile(key)
+        return if (rules.isEmpty()) {
+            ReaderBookReplacementPreferences()
+        } else {
+            ReaderBookReplacementPreferences(fileRules = mapOf(key to rules))
+        }
+    }
+
+    fun signatureForFile(fileId: String?): String {
+        return activeRulesForFile(fileId).joinToString(separator = "|") { rule ->
+            listOf(
+                rule.id,
+                rule.from,
+                rule.to,
+                rule.enabled.toString(),
+                rule.isRegex.toString(),
+                rule.matchCase.toString(),
+                rule.wholeWord.toString(),
+            ).joinToString(separator = "\u001F")
+        }
+    }
+}
+
+object ReaderBookReplacementEngine {
+    fun validate(rule: ReaderWordReplacementRule): ReaderWordReplacementValidation {
+        return ReaderWordReplacementEngine.validate(rule)
+    }
+
+    fun apply(
+        text: String,
+        preferences: ReaderBookReplacementPreferences,
+        fileId: String?,
+    ): ReaderWordReplacementApplyResult {
+        return ReaderWordReplacementEngine.apply(
+            text = text,
+            rules = preferences.activeRulesForFile(fileId),
+        )
+    }
+
+    /** Rewrites visible HTML text while leaving markup and script/style content untouched. */
+    fun applyToHtml(
+        html: String,
+        preferences: ReaderBookReplacementPreferences,
+        fileId: String?,
+    ): String {
+        val rules = preferences.activeRulesForFile(fileId)
+        if (html.isEmpty() || rules.isEmpty()) return html
+
+        val compiled = ReaderWordReplacementEngine.compileRules(rules)
+        val output = StringBuilder(html.length)
+        val text = StringBuilder()
+        var index = 0
+        var blockedDepth = 0
+
+        fun flushText() {
+            if (text.isEmpty()) return
+            output.append(
+                if (blockedDepth > 0) text
+                else ReaderWordReplacementEngine.applyCompiled(text.toString(), compiled).text
+            )
+            text.clear()
+        }
+
+        while (index < html.length) {
+            if (html[index] != '<') {
+                text.append(html[index++])
+                continue
+            }
+            val tagEnd = html.indexOf('>', startIndex = index + 1)
+            if (tagEnd < 0) {
+                text.append(html.substring(index))
+                break
+            }
+            flushText()
+            val tag = html.substring(index, tagEnd + 1)
+            val tagBody = tag.drop(1).dropLast(1).trimStart()
+            val isClosing = tagBody.startsWith('/')
+            val normalizedBody = tagBody.removePrefix("/").trimStart()
+            val tagName = normalizedBody.takeWhile { it.isLetterOrDigit() }.lowercase()
+            val isBlockedTag = tagName == "script" || tagName == "style" || tagName == "noscript"
+            val isSelfClosing = normalizedBody.trimEnd().endsWith('/')
+            if (isBlockedTag && isClosing) blockedDepth = (blockedDepth - 1).coerceAtLeast(0)
+            output.append(tag)
+            if (isBlockedTag && !isClosing && !isSelfClosing) blockedDepth += 1
+            index = tagEnd + 1
+        }
+        flushText()
+        return output.toString()
+    }
+}
+
+object ReaderBookReplacementPreferencesJson {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = false
+        encodeDefaults = true
+    }
+
+    fun encode(preferences: ReaderBookReplacementPreferences): String {
+        return json.encodeToString(preferences)
+    }
+
+    fun decodeOrEmpty(raw: String?): ReaderBookReplacementPreferences {
+        if (raw.isNullOrBlank()) return ReaderBookReplacementPreferences()
+        return runCatching {
+            json.decodeFromString<ReaderBookReplacementPreferences>(raw)
+        }.getOrNull() ?: ReaderBookReplacementPreferences()
+    }
+}

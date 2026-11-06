@@ -1,0 +1,305 @@
+package com.aryan.reader.pdf
+
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.changedToDown
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.platform.ViewConfiguration
+import kotlinx.coroutines.withTimeout
+import timber.log.Timber
+import kotlin.math.abs
+import kotlin.math.max
+
+internal const val PDF_ONE_HAND_ZOOM_TRACE_TAG = "PdfOneHandZoomTrace"
+internal const val PDF_ZOOM_DIAGNOSTIC_TAG = "PdfZoomDiagnostic"
+
+internal fun pdfZoomDiagnostic(message: String) {
+    Timber.tag(PDF_ZOOM_DIAGNOSTIC_TAG).d(message)
+}
+
+private fun Offset.traceString(): String = "(${x.toInt()},${y.toInt()})"
+
+private fun PointerInputChange.traceString(): String {
+    return "id=$id pos=${position.traceString()} prev=${previousPosition.traceString()} pressed=$pressed consumed=$isConsumed"
+}
+
+private fun traceOneHandZoom(message: String) {
+    Timber.tag(PDF_ONE_HAND_ZOOM_TRACE_TAG).d(message)
+}
+
+internal suspend fun PointerInputScope.detectPdfTapAndOneHandZoomGestures(
+    viewConfiguration: ViewConfiguration,
+    canStartOneHandZoom: () -> Boolean,
+    canHandleQuickDoubleTap: () -> Boolean = { true },
+    consumeSingleTap: Boolean = true,
+    onTap: (Offset) -> Unit,
+    onQuickDoubleTap: (Offset) -> Unit,
+    onOneHandZoomHoldStart: (Offset) -> Unit,
+    onOneHandZoom: (pivot: Offset, totalDragY: Float) -> Unit,
+    onOneHandZoomEnd: (started: Boolean) -> Unit
+) {
+    awaitEachGesture {
+        val firstDown = awaitFirstDown(requireUnconsumed = false)
+        pdfZoomDiagnostic(
+            "detector firstDown position=${firstDown.position.traceString()} consumed=${firstDown.isConsumed} " +
+                "consumeSingleTap=$consumeSingleTap"
+        )
+        traceOneHandZoom(
+            "detector.firstDown ${firstDown.traceString()} consumeSingleTap=$consumeSingleTap " +
+                "doubleTapTimeout=${viewConfiguration.doubleTapTimeoutMillis} holdTimeout=$PDF_ONE_HAND_ZOOM_HOLD_TIMEOUT_MS"
+        )
+        val firstUp = waitForUpOrCancellation()
+        if (firstUp == null) {
+            pdfZoomDiagnostic("detector firstUp canceled")
+            traceOneHandZoom("detector.firstUpCanceled first=${firstDown.traceString()}")
+            return@awaitEachGesture
+        }
+        pdfZoomDiagnostic(
+            "detector firstUp position=${firstUp.position.traceString()} consumed=${firstUp.isConsumed}"
+        )
+        traceOneHandZoom("detector.firstUp ${firstUp.traceString()}")
+
+        val secondDown = awaitPdfSecondDown(
+            firstPointerId = firstDown.id,
+            timeoutMillis = viewConfiguration.doubleTapTimeoutMillis
+        )
+
+        if (secondDown == null) {
+            pdfZoomDiagnostic(
+                "detector singleTap position=${firstDown.position.traceString()} firstUpConsumed=${firstUp.isConsumed}"
+            )
+            traceOneHandZoom(
+                "detector.singleTap noSecondDown consume=$consumeSingleTap firstUpConsumedBefore=${firstUp.isConsumed} " +
+                    "tap=${firstDown.position.traceString()}"
+            )
+            if (consumeSingleTap) firstUp.consume()
+            onTap(firstDown.position)
+            return@awaitEachGesture
+        }
+
+        pdfZoomDiagnostic(
+            "detector secondDown position=${secondDown.position.traceString()} consumed=${secondDown.isConsumed}"
+        )
+
+        val pivot = secondDown.position
+        var latestPosition = pivot
+        var quickDoubleTapUp: PointerInputChange? = null
+        var canceled = false
+        val oneHandAllowed = canStartOneHandZoom()
+        val movementSlopPx = max(2f, viewConfiguration.touchSlop * 0.35f)
+        var shouldStartOneHandZoom = false
+        traceOneHandZoom(
+            "detector.secondDown ${secondDown.traceString()} oneHandAllowed=$oneHandAllowed " +
+                "quickAllowed=${canHandleQuickDoubleTap()} movementSlop=$movementSlopPx touchSlop=${viewConfiguration.touchSlop}"
+        )
+
+        try {
+            withTimeout(PDF_ONE_HAND_ZOOM_HOLD_TIMEOUT_MS) {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == secondDown.id }
+                    if (change == null) {
+                        canceled = true
+                        traceOneHandZoom(
+                            "detector.preHoldCancel missingSecondPointer changes=${event.changes.joinToString { it.traceString() }}"
+                        )
+                        return@withTimeout
+                    }
+
+                    latestPosition = change.position
+
+                    if (change.changedToUp()) {
+                        quickDoubleTapUp = change
+                        traceOneHandZoom("detector.preHoldQuickUp ${change.traceString()}")
+                        return@withTimeout
+                    }
+
+                    if (change.isConsumed) {
+                        canceled = true
+                        traceOneHandZoom(
+                            "detector.preHoldCancel consumedByOther ${change.traceString()} " +
+                                "allChanges=${event.changes.joinToString { it.traceString() }}"
+                        )
+                        return@withTimeout
+                    }
+
+                    if (oneHandAllowed) {
+                        val delta = change.position - pivot
+                        val isVerticalZoomDrag = abs(delta.y) >= movementSlopPx &&
+                            abs(delta.y) >= abs(delta.x) * 1.1f
+                        if (isVerticalZoomDrag) {
+                            shouldStartOneHandZoom = true
+                            traceOneHandZoom(
+                                "detector.preHoldStart verticalDrag delta=${delta.traceString()} " +
+                                    "slop=$movementSlopPx change=${change.traceString()}"
+                            )
+                            change.consume()
+                            return@withTimeout
+                        } else if (delta.getDistance() >= viewConfiguration.touchSlop) {
+                            canceled = true
+                            traceOneHandZoom(
+                                "detector.preHoldCancel nonZoomMove delta=${delta.traceString()} " +
+                                    "distance=${delta.getDistance()} touchSlop=${viewConfiguration.touchSlop}"
+                            )
+                            return@withTimeout
+                        }
+                    }
+                }
+            }
+        } catch (_: PointerEventTimeoutCancellationException) {
+            // The second tap is being held, so the quick double-tap action is suppressed.
+            shouldStartOneHandZoom = true
+            traceOneHandZoom(
+                "detector.holdTimeout pivot=${pivot.traceString()} latest=${latestPosition.traceString()} " +
+                    "oneHandAllowed=$oneHandAllowed"
+            )
+        }
+
+        if (canceled) {
+            pdfZoomDiagnostic("detector doubleTap canceled before action position=${latestPosition.traceString()}")
+            traceOneHandZoom("detector.end canceledBeforeAction latest=${latestPosition.traceString()}")
+            return@awaitEachGesture
+        }
+
+        if (quickDoubleTapUp != null) {
+            val quickAllowed = canHandleQuickDoubleTap()
+            pdfZoomDiagnostic(
+                "detector quickDoubleTap position=${pivot.traceString()} allowed=$quickAllowed " +
+                    "upConsumed=${quickDoubleTapUp?.isConsumed}"
+            )
+            traceOneHandZoom(
+                "detector.quickDoubleTap fire quickAllowed=$quickAllowed upConsumedBefore=${quickDoubleTapUp?.isConsumed} " +
+                    "pivot=${pivot.traceString()}"
+            )
+            if (quickAllowed) {
+                quickDoubleTapUp?.consume()
+            }
+            onQuickDoubleTap(pivot)
+            return@awaitEachGesture
+        }
+
+        if (!oneHandAllowed) {
+            pdfZoomDiagnostic("detector oneHand blocked position=${pivot.traceString()}")
+            traceOneHandZoom("detector.oneHandBlocked waitingForUp pivot=${pivot.traceString()}")
+            waitForUpOrCancellation()
+            return@awaitEachGesture
+        }
+
+        if (!shouldStartOneHandZoom) {
+            traceOneHandZoom("detector.end noAction shouldStart=false latest=${latestPosition.traceString()}")
+            return@awaitEachGesture
+        }
+
+        var zoomStarted = false
+
+        fun updateZoom(position: Offset) {
+            val totalDragY = position.y - pivot.y
+            val action = classifyPdfSecondTapZoomAction(
+                pressDurationMillis = PDF_ONE_HAND_ZOOM_HOLD_TIMEOUT_MS,
+                totalDragY = totalDragY,
+                movementSlopPx = movementSlopPx
+            )
+            if (action == PdfSecondTapZoomAction.ONE_HAND_ZOOM) {
+                if (!zoomStarted) {
+                    traceOneHandZoom(
+                        "detector.oneHandZoomStart dragY=$totalDragY pivot=${pivot.traceString()} " +
+                            "position=${position.traceString()} slop=$movementSlopPx"
+                    )
+                }
+                zoomStarted = true
+            }
+            if (zoomStarted) {
+                Timber.tag(PDF_ONE_HAND_ZOOM_TRACE_TAG).v(
+                    "detector.oneHandZoomUpdate dragY=$totalDragY pivot=${pivot.traceString()} position=${position.traceString()}"
+                )
+                onOneHandZoom(pivot, totalDragY)
+            }
+        }
+
+        traceOneHandZoom(
+            "detector.oneHandHoldStart pivot=${pivot.traceString()} latest=${latestPosition.traceString()}"
+        )
+        pdfZoomDiagnostic(
+            "detector oneHand start position=${pivot.traceString()} latest=${latestPosition.traceString()}"
+        )
+        onOneHandZoomHoldStart(pivot)
+        try {
+            updateZoom(latestPosition)
+
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == secondDown.id }
+                if (change == null) {
+                    traceOneHandZoom(
+                        "detector.postHoldEnd missingSecondPointer changes=${event.changes.joinToString { it.traceString() }}"
+                    )
+                    break
+                }
+
+                latestPosition = change.position
+                if (change.isConsumed) {
+                    traceOneHandZoom(
+                        "detector.postHoldEnd consumedByOther ${change.traceString()} zoomStarted=$zoomStarted"
+                    )
+                    break
+                }
+
+                val isPositionChanged = change.positionChanged()
+                val isUp = change.changedToUp()
+                updateZoom(latestPosition)
+
+                if (isPositionChanged || zoomStarted || isUp) {
+                    Timber.tag(PDF_ONE_HAND_ZOOM_TRACE_TAG).v(
+                        "detector.consumePostHold changed=$isPositionChanged zoomStarted=$zoomStarted up=$isUp " +
+                            change.traceString()
+                    )
+                    change.consume()
+                }
+
+                if (isUp) {
+                    traceOneHandZoom(
+                        "detector.oneHandPointerUp zoomStarted=$zoomStarted latest=${latestPosition.traceString()}"
+                    )
+                    break
+                }
+            }
+        } finally {
+            pdfZoomDiagnostic(
+                "detector oneHand end started=$zoomStarted latest=${latestPosition.traceString()}"
+            )
+            traceOneHandZoom(
+                "detector.oneHandEnd zoomStarted=$zoomStarted latest=${latestPosition.traceString()}"
+            )
+            onOneHandZoomEnd(zoomStarted)
+        }
+    }
+}
+
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitPdfSecondDown(
+    firstPointerId: PointerId,
+    timeoutMillis: Long
+): PointerInputChange? {
+    return try {
+        withTimeout(timeoutMillis) {
+            while (true) {
+                val event = awaitPointerEvent()
+                val secondDown = event.changes.firstOrNull {
+                    it.id != firstPointerId && it.changedToDown()
+                } ?: event.changes.firstOrNull {
+                    it.id == firstPointerId && it.changedToDown()
+                }
+                if (secondDown != null) return@withTimeout secondDown
+            }
+            null
+        }
+    } catch (_: PointerEventTimeoutCancellationException) {
+        null
+    }
+}

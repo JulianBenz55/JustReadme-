@@ -1,0 +1,1252 @@
+package com.aryan.reader.pdf
+
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.isSpecified
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.aryan.reader.R
+import io.legere.pdfiumandroid.api.Bookmark
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
+import com.aryan.reader.cardTitle
+import com.aryan.reader.data.RecentFileItem
+import com.aryan.reader.pdf.data.VirtualPage
+import com.aryan.reader.shared.ui.SharedDrawerScrollbar
+import com.aryan.reader.shared.filterReaderTocEntries
+import com.aryan.reader.shared.ReaderTheme
+import com.aryan.reader.shared.pdf.LegacyPdfPageBookmark
+import com.aryan.reader.shared.pdf.LegacyPdfPageBookmarkCodec
+import com.aryan.reader.shared.pdf.PdfReverseColorMode
+import com.aryan.reader.shared.pdf.pdfThumbnailNeedsBakedPreserve
+import com.aryan.reader.shared.pdf.PdfDrawerCapabilities
+import com.aryan.reader.shared.pdf.PdfDrawerSection
+import com.aryan.reader.shared.pdf.pdfDrawerSections
+import org.json.JSONArray
+import org.json.JSONObject
+
+internal typealias PdfBookmark = LegacyPdfPageBookmark
+
+internal data class TocEntry(val title: String, val pageIndex: Int, val nestLevel: Int)
+
+/** Shared logcat tag for Pages-tab thumbnail diagnostics (filter: `adb logcat -s PdfPagesTab`). */
+internal const val PdfPagesTabLogTag = "PdfPagesTab"
+
+private const val PdfPagesThumbnailWidthPx = 200
+
+/**
+ * Maps a display (drawer row) index to the underlying PDF page index.
+ *
+ * Display pages include manually inserted blank pages, so the display index
+ * only equals the PDF index while no blank pages exist. Blank display pages
+ * have no PDF content and return null. An empty layout means the caller did
+ * not provide one, so indices pass through unchanged (legacy behavior).
+ */
+internal fun pdfPageIndexForDisplayPage(
+    virtualPages: List<VirtualPage>,
+    displayPageIndex: Int,
+): Int? {
+    if (displayPageIndex < 0) return null
+    if (virtualPages.isEmpty()) return displayPageIndex
+    return when (val page = virtualPages.getOrNull(displayPageIndex)) {
+        is VirtualPage.PdfPage -> page.pdfIndex
+        else -> null
+    }
+}
+
+/**
+ * Pages-tab tiles render page paper, not app chrome: the background and filter
+ * must follow the selected PDF theme exactly like [PdfPageComposable], never the
+ * phone's dark mode. The reverse mode is only meaningful for the reverse theme.
+ */
+internal fun pdfPagesEffectiveReverseMode(
+    themeId: String,
+    reverseColorMode: PdfReverseColorMode,
+): PdfReverseColorMode {
+    return if (themeId == "reverse") reverseColorMode else PdfReverseColorMode.RGB
+}
+
+internal fun pdfPagesTileBackground(theme: ReaderTheme): Color {
+    return when (theme.id) {
+        "no_theme", "system" -> Color.White
+        "reverse" -> Color.Black
+        else -> if (theme.backgroundColor.isSpecified) theme.backgroundColor else Color.White
+    }
+}
+
+internal fun pdfPagesTileColorFilter(
+    theme: ReaderTheme,
+    effectiveReverseColorMode: PdfReverseColorMode,
+): ColorFilter? {
+    return when (theme.id) {
+        "no_theme", "system" -> null
+        "reverse" if (effectiveReverseColorMode == PdfReverseColorMode.RGB) -> {
+            ColorFilter.colorMatrix(
+                ColorMatrix(
+                    floatArrayOf(
+                        -1f, 0f, 0f, 0f, 255f,
+                        0f, -1f, 0f, 0f, 255f,
+                        0f, 0f, -1f, 0f, 255f,
+                        0f, 0f, 0f, 1f, 0f,
+                    )
+                )
+            )
+        }
+        "reverse" -> null
+        else -> {
+            if (!theme.backgroundColor.isSpecified || !theme.textColor.isSpecified) return null
+            val bgR = theme.backgroundColor.red * 255f
+            val bgG = theme.backgroundColor.green * 255f
+            val bgB = theme.backgroundColor.blue * 255f
+            val fgR = theme.textColor.red * 255f
+            val fgG = theme.textColor.green * 255f
+            val fgB = theme.textColor.blue * 255f
+            val dr = (bgR - fgR) / 255f
+            val dg = (bgG - fgG) / 255f
+            val db = (bgB - fgB) / 255f
+            ColorFilter.colorMatrix(
+                ColorMatrix(
+                    floatArrayOf(
+                        dr * 0.2126f, dr * 0.7152f, dr * 0.0722f, 0f, fgR,
+                        dg * 0.2126f, dg * 0.7152f, dg * 0.0722f, 0f, fgG,
+                        db * 0.2126f, db * 0.7152f, db * 0.0722f, 0f, fgB,
+                        0f, 0f, 0f, 1f, 0f,
+                    )
+                )
+            )
+        }
+    }
+}
+
+private val PdfDrawerSection.titleResId: Int
+    get() = when (this) {
+        PdfDrawerSection.TABS -> R.string.tab_tabs
+        PdfDrawerSection.CHAPTERS -> R.string.tab_chapters
+        PdfDrawerSection.BOOKMARKS -> R.string.tab_bookmarks
+        PdfDrawerSection.HIGHLIGHTS -> R.string.tab_highlights
+        PdfDrawerSection.PAGES -> R.string.tab_pages
+    }
+
+private val PdfDrawerSection.testTag: String?
+    get() = when (this) {
+        PdfDrawerSection.TABS -> "TabsTab"
+        PdfDrawerSection.BOOKMARKS -> "BookmarksTab"
+        PdfDrawerSection.HIGHLIGHTS -> "HighlightsTab"
+        PdfDrawerSection.PAGES -> "PagesTab"
+        PdfDrawerSection.CHAPTERS -> null
+    }
+
+internal fun flattenToc(bookmarks: List<Bookmark>, level: Int = 0): List<TocEntry> {
+    Timber.tag("PdfTocDebug").d("Processing level $level with ${bookmarks.size} items")
+    val entries = mutableListOf<TocEntry>()
+    for ((index, bookmark) in bookmarks.withIndex()) {
+        val title = bookmark.title ?: "Untitled Chapter"
+        val childCount = bookmark.children.size
+
+        Timber.tag("PdfTocDebug").d(
+            "Lvl $level | Item $index: \"$title\" (Page: ${bookmark.pageIdx}) | Children: $childCount"
+        )
+
+        entries.add(
+            TocEntry(
+                title = title,
+                pageIndex = bookmark.pageIdx.toInt(),
+                nestLevel = level
+            )
+        )
+
+        if (childCount > 0) {
+            Timber.tag("PdfTocDebug").v("Entering children of \"$title\"")
+            entries.addAll(flattenToc(bookmark.children, level + 1))
+            Timber.tag("PdfTocDebug").v("Returned to Lvl $level from \"$title\"")
+        }
+    }
+    return entries
+}
+
+internal fun loadPdfBookmarksFromJson(bookmarksJson: String?): Set<PdfBookmark> {
+    return LegacyPdfPageBookmarkCodec.decode(bookmarksJson)
+}
+
+internal fun serializePdfBookmarksToJson(bookmarks: Iterable<PdfBookmark>): String {
+    val array = JSONArray()
+    bookmarks
+        .sortedWith(compareBy<PdfBookmark> { it.pageIndex }.thenBy { it.title }.thenBy { it.totalPages })
+        .forEach { bookmark ->
+            array.put(
+                JSONObject().apply {
+                    put("pageIndex", bookmark.pageIndex)
+                    put("title", bookmark.title)
+                    put("totalPages", bookmark.totalPages)
+                }
+            )
+        }
+    return array.toString()
+}
+
+@Composable
+internal fun PdfTocTreeItem(
+    label: String,
+    nestLevel: Int,
+    isExpanded: Boolean,
+    hasChildren: Boolean,
+    isCurrent: Boolean,
+    onToggleExpand: () -> Unit,
+    onClick: () -> Unit
+) {
+    com.aryan.reader.shared.ui.SharedAndroidReaderTocTreeItem(
+        label = label,
+        depth = nestLevel,
+        isExpanded = isExpanded,
+        hasChildren = hasChildren,
+        isCurrent = isCurrent,
+        collapseDescription = stringResource(R.string.content_desc_collapse),
+        expandDescription = stringResource(R.string.content_desc_expand),
+        verticalPadding = 4.dp,
+        onToggleExpand = onToggleExpand,
+        onClick = onClick,
+    )
+}
+
+@Composable
+private fun PdfTabsDrawerPage(
+    openTabs: List<RecentFileItem>,
+    activeTabBookId: String?,
+    currentPage: Int,
+    totalPages: Int,
+    isTopTabStripVisible: Boolean,
+    onTabSelected: (String) -> Unit,
+    onTabClosed: (String) -> Unit,
+    onNewTabClick: () -> Unit,
+    onTopTabStripVisibilityChange: (Boolean) -> Unit,
+    usePdfFileNameAsDisplayName: Boolean
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 10.dp, end = 8.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.active_tabs),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+            ) {
+                Text(
+                    text = openTabs.size.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+            IconButton(
+                onClick = onNewTabClick,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = stringResource(R.string.content_desc_new_tab)
+                )
+            }
+        }
+
+        HorizontalDivider()
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onTopTabStripVisibilityChange(!isTopTabStripVisible) }
+                .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp)
+                .testTag("PdfTopTabStripVisibilityToggle"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.pdf_tabs_show_top_app_bar_tabs),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = isTopTabStripVisible,
+                onCheckedChange = null
+            )
+        }
+
+        HorizontalDivider()
+
+        if (openTabs.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.msg_no_other_pdfs_found),
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(vertical = 8.dp)
+            ) {
+                items(openTabs, key = { it.bookId }) { tab ->
+                    PdfDrawerTabItem(
+                        tab = tab,
+                        isSelected = tab.bookId == activeTabBookId,
+                        currentPage = currentPage,
+                        totalPages = totalPages,
+                        onTabSelected = onTabSelected,
+                        onTabClosed = onTabClosed,
+                        usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PdfDrawerTabItem(
+    tab: RecentFileItem,
+    isSelected: Boolean,
+    currentPage: Int,
+    totalPages: Int,
+    onTabSelected: (String) -> Unit,
+    onTabClosed: (String) -> Unit,
+    usePdfFileNameAsDisplayName: Boolean
+) {
+    val shape = RoundedCornerShape(8.dp)
+    val containerColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        label = "PdfDrawerTabContainer"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+        } else {
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+        },
+        label = "PdfDrawerTabBorder"
+    )
+    val contentColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    val progressPercent = remember(isSelected, currentPage, totalPages, tab.progressPercentage) {
+        when {
+            isSelected && totalPages > 0 -> (((currentPage + 1).toFloat() / totalPages.toFloat()) * 100f)
+                .coerceIn(0f, 100f)
+                .toInt()
+            else -> tab.progressPercentage
+                ?.coerceIn(0f, 100f)
+                ?.toInt()
+        }
+    }
+    val pageLabel = when {
+        isSelected && totalPages > 0 -> stringResource(R.string.page_of_pages, currentPage + 1, totalPages)
+        tab.lastPage != null -> stringResource(R.string.pdf_page_short, tab.lastPage + 1)
+        else -> null
+    }
+    val progressLabel = progressPercent
+        ?.takeIf { it > 0 }
+        ?.let { stringResource(R.string.progress_complete, it) }
+    val supportingText = remember(pageLabel, progressLabel, tab.author) {
+        listOfNotNull(pageLabel, progressLabel, tab.author)
+            .distinct()
+            .joinToString(" - ")
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(shape)
+            .background(containerColor)
+            .border(1.dp, borderColor, shape)
+            .clickable { onTabSelected(tab.bookId) }
+            .testTag("PdfDrawerTab_${tab.bookId}")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 68.dp)
+                .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                        }
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Description,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = tab.cardTitle(usePdfFileNameAsDisplayName),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = contentColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (supportingText.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = supportingText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor.copy(alpha = 0.72f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = { onTabClosed(tab.bookId) },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.close_tab),
+                    tint = contentColor.copy(alpha = 0.8f)
+                )
+            }
+        }
+
+        progressPercent
+            ?.takeIf { it > 0 }
+            ?.let { percent ->
+                LinearProgressIndicator(
+                    progress = { percent / 100f },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                    trackColor = Color.Transparent
+                )
+            }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PdfNavigationDrawerContent(
+    pdfDocument: ReaderDocument?,
+    documentKey: String,
+    flatTableOfContents: List<TocEntry>,
+    bookmarks: Set<PdfBookmark>,
+    userHighlights: List<PdfUserHighlight>,
+    currentPage: Int,
+    totalPages: Int,
+    virtualPages: List<VirtualPage> = emptyList(),
+    isDrawerOpen: Boolean = true,
+    isTabsEnabled: Boolean = false,
+    openTabs: List<RecentFileItem> = emptyList(),
+    activeTabBookId: String? = null,
+    usePdfFileNameAsDisplayName: Boolean = false,
+    isTopTabStripVisible: Boolean = true,
+    reverseColorMode: PdfReverseColorMode = PdfReverseColorMode.RGB,
+    excludeImages: Boolean = false,
+    activeTheme: ReaderTheme = ReaderTheme("no_theme", "No Theme", Color.Unspecified, Color.Unspecified, false),
+    activeTextureAlpha: Float = 0f,
+    customHighlightColors: Map<PdfHighlightColor, Color>,
+    onPageSelected: (Int) -> Unit,
+    onDisplayPageSelected: ((Int) -> Unit)? = null,
+    onTabSelected: (String) -> Unit = {},
+    onTabClosed: (String) -> Unit = {},
+    onNewTabClick: () -> Unit = {},
+    onTopTabStripVisibilityChange: (Boolean) -> Unit = {},
+    onRenameBookmark: (PdfBookmark, String) -> Unit,
+    onDeleteBookmark: (PdfBookmark) -> Unit,
+    onDeleteHighlight: (PdfUserHighlight) -> Unit,
+    onNoteRequested: (String?) -> Unit,
+    onCloseDrawer: () -> Unit
+) {
+    val drawerSections = remember(isTabsEnabled, openTabs.isNotEmpty()) {
+        pdfDrawerSections(
+            PdfDrawerCapabilities(
+                tabsEnabled = isTabsEnabled,
+                hasOpenTabs = openTabs.isNotEmpty(),
+            ),
+        )
+    }
+    val drawerPagerState = rememberPagerState(pageCount = { drawerSections.size })
+    val drawerScope = rememberCoroutineScope()
+
+    LaunchedEffect(drawerSections.size) {
+        if (drawerPagerState.currentPage >= drawerSections.size) {
+            drawerPagerState.scrollToPage(drawerSections.lastIndex.coerceAtLeast(0))
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        val selectedDrawerTabIndex = drawerPagerState.currentPage.coerceIn(0, drawerSections.lastIndex)
+        ScrollableTabRow(
+            selectedTabIndex = selectedDrawerTabIndex,
+            edgePadding = 8.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            drawerSections.forEachIndexed { index, section ->
+                Tab(
+                    selected = selectedDrawerTabIndex == index,
+                    onClick = {
+                        drawerScope.launch { drawerPagerState.animateScrollToPage(index) }
+                    },
+                    text = { Text(stringResource(section.titleResId)) },
+                    modifier = section.testTag?.let { Modifier.testTag(it) } ?: Modifier
+                )
+            }
+        }
+
+        HorizontalPager(
+            state = drawerPagerState,
+            modifier = Modifier.fillMaxWidth().weight(1f)
+        ) { page ->
+            when (drawerSections[page]) {
+                PdfDrawerSection.TABS -> PdfTabsDrawerPage(
+                    openTabs = openTabs,
+                    activeTabBookId = activeTabBookId,
+                    currentPage = currentPage,
+                    totalPages = totalPages,
+                    isTopTabStripVisible = isTopTabStripVisible,
+                    onTabSelected = { bookId ->
+                        if (bookId == activeTabBookId) {
+                            onCloseDrawer()
+                        } else {
+                            onCloseDrawer()
+                            onTabSelected(bookId)
+                        }
+                    },
+                    onTabClosed = onTabClosed,
+                    onNewTabClick = onNewTabClick,
+                    onTopTabStripVisibilityChange = onTopTabStripVisibilityChange,
+                    usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName
+                )
+
+                PdfDrawerSection.CHAPTERS -> { // Chapters Page
+                    if (flatTableOfContents.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                stringResource(R.string.msg_chapters_not_available),
+                                style = MaterialTheme.typography.bodyLarge,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        val listState = rememberLazyListState()
+                        val focusManager = LocalFocusManager.current
+
+                        val allParentIndices = remember(flatTableOfContents) {
+                            flatTableOfContents.indices.filter { i ->
+                                val next = flatTableOfContents.getOrNull(i + 1)
+                                next != null && next.nestLevel > flatTableOfContents[i].nestLevel
+                            }.toSet()
+                        }
+
+                        var expandedEntryIndices by rememberSaveable(flatTableOfContents) {
+                            mutableStateOf(allParentIndices)
+                        }
+                        var tocSearchQuery by rememberSaveable(flatTableOfContents) { mutableStateOf("") }
+                        var searchFieldCanFocus by remember(flatTableOfContents) { mutableStateOf(false) }
+                        val isSearchingToc = tocSearchQuery.isNotBlank()
+
+                        LaunchedEffect(flatTableOfContents) {
+                            searchFieldCanFocus = false
+                            focusManager.clearFocus(force = true)
+                        }
+
+                        val visibleItemInfo by remember(flatTableOfContents, tocSearchQuery) {
+                            derivedStateOf {
+                                if (tocSearchQuery.isNotBlank()) {
+                                    filterReaderTocEntries(
+                                        entries = flatTableOfContents,
+                                        query = tocSearchQuery,
+                                        labelOf = { it.title },
+                                        depthOf = { it.nestLevel }
+                                    ).map { it.originalIndex to it.entry }
+                                } else {
+                                    val result = mutableListOf<Pair<Int, TocEntry>>()
+                                    val visibilityStack = BooleanArray(20) { false }
+                                    visibilityStack[0] = true
+
+                                    for (i in flatTableOfContents.indices) {
+                                        val entry = flatTableOfContents[i]
+                                        val level = entry.nestLevel.coerceIn(0, 19)
+
+                                        if (visibilityStack[level]) {
+                                            result.add(i to entry)
+                                            val isExpanded = expandedEntryIndices.contains(i)
+                                            if (level + 1 < visibilityStack.size) {
+                                                visibilityStack[level + 1] = isExpanded
+                                            }
+                                        } else {
+                                            if (level + 1 < visibilityStack.size) {
+                                                visibilityStack[level + 1] = false
+                                            }
+                                        }
+                                    }
+                                    result
+                                }
+                            }
+                        }
+                        val currentTocEntry by remember(currentPage, flatTableOfContents) {
+                            derivedStateOf {
+                                flatTableOfContents.lastOrNull { it.pageIndex <= currentPage }
+                            }
+                        }
+
+                        val onScrollToCurrent = {
+                            drawerScope.launch {
+                                val targetEntry = currentTocEntry ?: return@launch
+                                val targetOriginalIndex = flatTableOfContents.indexOf(targetEntry)
+                                if (targetOriginalIndex != -1) {
+                                    var currentLevel = targetEntry.nestLevel
+                                    val newExpanded = expandedEntryIndices.toMutableSet()
+
+                                    for (i in targetOriginalIndex downTo 0) {
+                                        val entry = flatTableOfContents[i]
+                                        if (entry.nestLevel < currentLevel) {
+                                            newExpanded.add(i)
+                                            currentLevel = entry.nestLevel
+                                        }
+                                        if (currentLevel == 0) break
+                                    }
+
+                                    expandedEntryIndices = newExpanded
+
+                                    val visibleIdx = visibleItemInfo.indexOfFirst { it.second == targetEntry }
+
+                                    if (visibleIdx != -1) {
+                                        var attempts = 0
+                                        while (listState.layoutInfo.totalItemsCount <= visibleIdx && attempts < 10) {
+                                            delay(30)
+                                            attempts++
+                                        }
+
+                                        listState.animateScrollToItem(visibleIdx)
+                                    }
+                                }
+                            }
+                            Unit
+                        }
+
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            OutlinedTextField(
+                                value = tocSearchQuery,
+                                onValueChange = { tocSearchQuery = it },
+                                singleLine = true,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                },
+                                trailingIcon = if (tocSearchQuery.isNotEmpty()) {
+                                    {
+                                        IconButton(
+                                            onClick = { tocSearchQuery = "" },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = stringResource(R.string.tooltip_clear_search),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                } else null,
+                                placeholder = { Text(stringResource(R.string.search_chapters_placeholder)) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .pointerInput(flatTableOfContents) {
+                                        awaitEachGesture {
+                                            awaitFirstDown(requireUnconsumed = false)
+                                            searchFieldCanFocus = true
+                                        }
+                                    }
+                                    .focusProperties { canFocus = searchFieldCanFocus }
+                                    .onFocusChanged { state ->
+                                        if (!state.isFocused) searchFieldCanFocus = false
+                                    }
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                TextButton(onClick = { expandedEntryIndices = flatTableOfContents.indices.toSet() }) {
+                                    Text(stringResource(R.string.action_expand_all))
+                                }
+                                TextButton(onClick = { expandedEntryIndices = emptySet() }) {
+                                    Text(stringResource(R.string.action_collapse_all))
+                                }
+                                TextButton(onClick = onScrollToCurrent) {
+                                    Text(stringResource(R.string.action_locate))
+                                }
+                            }
+
+                            HorizontalDivider()
+
+                            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                                if (visibleItemInfo.isEmpty() && isSearchingToc) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.no_chapters_matching, tocSearchQuery.trim()),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            textAlign = TextAlign.Center,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        state = listState,
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .padding(end = 12.dp)
+                                    ) {
+                                        items(
+                                            items = visibleItemInfo,
+                                            key = { it.second.title + it.first }
+                                        ) { item ->
+                                            val (originalIndex, entry) = item
+
+                                            val nextItem = flatTableOfContents.getOrNull(originalIndex + 1)
+                                            val hasChildren = nextItem != null && nextItem.nestLevel > entry.nestLevel
+                                            val isExpanded = expandedEntryIndices.contains(originalIndex)
+                                            val isCurrentChapter = entry == currentTocEntry
+
+                                            PdfTocTreeItem(
+                                                label = entry.title,
+                                                nestLevel = entry.nestLevel,
+                                                isExpanded = isExpanded,
+                                                hasChildren = hasChildren,
+                                                isCurrent = isCurrentChapter,
+                                                onToggleExpand = {
+                                                    expandedEntryIndices = if (isExpanded) {
+                                                        expandedEntryIndices - originalIndex
+                                                    } else {
+                                                        expandedEntryIndices + originalIndex
+                                                    }
+                                                },
+                                                onClick = {
+                                                    onCloseDrawer()
+                                                    onPageSelected(entry.pageIndex)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                SharedDrawerScrollbar(
+                                    listState = listState,
+                                    modifier = Modifier.align(Alignment.CenterEnd)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                PdfDrawerSection.BOOKMARKS -> { // Bookmarks Page
+                    val context = LocalContext.current
+                    val sortedBookmarks = remember(bookmarks) { bookmarks.sortedBy { it.pageIndex } }
+                    com.aryan.reader.shared.ui.SharedAndroidPdfBookmarksList(
+                        bookmarks = sortedBookmarks,
+                        strings = com.aryan.reader.shared.ui.SharedAndroidPdfBookmarkStrings(
+                            empty = stringResource(R.string.no_bookmarks_yet),
+                            moreOptionsDescription = stringResource(R.string.content_desc_more_options_bookmark),
+                            renameAction = stringResource(R.string.action_rename),
+                            deleteAction = stringResource(R.string.action_delete),
+                            renameDialogTitle = stringResource(R.string.dialog_rename_bookmark),
+                            newTitleLabel = stringResource(R.string.label_new_title),
+                            saveAction = stringResource(R.string.action_save),
+                            cancelAction = stringResource(R.string.action_cancel),
+                            deleteDialogTitle = stringResource(R.string.dialog_delete_bookmark),
+                            deleteDialogDescription = stringResource(R.string.dialog_delete_bookmark_desc),
+                        ),
+                        key = { index, bookmark -> "bm_${index}_${bookmark.pageIndex}" },
+                        title = PdfBookmark::title,
+                        supportingText = { bookmark ->
+                            context.resources.getString(
+                                R.string.page_of_pages,
+                                bookmark.pageIndex + 1,
+                                bookmark.totalPages,
+                            )
+                        },
+                        testTag = { bookmark -> "BookmarkItem_${bookmark.pageIndex}" },
+                        onNavigateToBookmark = { bookmark ->
+                            onCloseDrawer()
+                            onPageSelected(bookmark.pageIndex)
+                        },
+                        onRenameBookmark = onRenameBookmark,
+                        onDeleteBookmark = onDeleteBookmark,
+                    )
+                }
+                PdfDrawerSection.HIGHLIGHTS -> { // Highlights Page
+                    val context = LocalContext.current
+                    com.aryan.reader.shared.ui.SharedAndroidPdfHighlightsList(
+                        highlights = userHighlights.toList(),
+                        strings = com.aryan.reader.shared.ui.SharedAndroidPdfHighlightStrings(
+                            empty = stringResource(R.string.no_highlights_yet),
+                            allFilter = stringResource(R.string.read_status_all),
+                            withNotesFilter = stringResource(R.string.filter_with_notes),
+                            defaultHighlight = stringResource(R.string.msg_highlighted_section_default),
+                            optionsDescription = stringResource(R.string.content_desc_options),
+                            addNoteAction = stringResource(R.string.menu_add_note),
+                            editNoteAction = stringResource(R.string.menu_edit_note),
+                            deleteAction = stringResource(R.string.action_delete),
+                            cancelAction = stringResource(R.string.action_cancel),
+                            deleteDialogTitle = stringResource(R.string.dialog_delete_highlight),
+                            deleteDialogDescription = stringResource(R.string.dialog_delete_highlight_desc),
+                        ),
+                        key = PdfUserHighlight::id,
+                        sortKey = PdfUserHighlight::pageIndex,
+                        text = PdfUserHighlight::text,
+                        note = PdfUserHighlight::note,
+                        pageLabel = { highlight ->
+                            context.resources.getString(R.string.pdf_page_short, highlight.pageIndex + 1)
+                        },
+                        color = { highlight -> highlight.resolvedColor(customHighlightColors) },
+                        onNavigateToHighlight = { highlight ->
+                            onCloseDrawer()
+                            onPageSelected(highlight.pageIndex)
+                        },
+                        onNoteRequested = { highlight ->
+                            onNoteRequested(highlight.id)
+                            onCloseDrawer()
+                        },
+                        onDeleteHighlight = onDeleteHighlight,
+                    )
+                }
+                PdfDrawerSection.PAGES -> { // Pages Page
+                    val listState = rememberLazyListState()
+                    val pageRows = remember(totalPages) { (0 until totalPages).chunked(3) }
+
+                    val currentRowIndex = currentPage / 3
+                    // Mirror PdfPageComposable: reverse mode is only meaningful for
+                    // the reverse theme; any other theme must render original pages.
+                    val effectiveReverseMode = pdfPagesEffectiveReverseMode(activeTheme.id, reverseColorMode)
+                    val pagesTileBackground = remember(activeTheme) {
+                        pdfPagesTileBackground(activeTheme)
+                    }
+                    val pagesTileColorFilter = remember(activeTheme, effectiveReverseMode) {
+                        pdfPagesTileColorFilter(activeTheme, effectiveReverseMode)
+                    }
+                    val context = LocalContext.current
+                    val pagesTextureBitmap = remember(activeTheme.textureId) {
+                        com.aryan.reader.loadReaderTextureBitmap(context, activeTheme.textureId)
+                    }
+                    val pagesTextureBlendMode = remember(activeTheme.isDark, activeTheme.id) {
+                        if (activeTheme.isDark || activeTheme.id == "reverse") {
+                            androidx.compose.ui.graphics.BlendMode.Screen
+                        } else {
+                            androidx.compose.ui.graphics.BlendMode.Multiply
+                        }
+                    }
+                    LaunchedEffect(totalPages, documentKey) {
+                        Timber.tag(PdfPagesTabLogTag).d(
+                            "pages-tab opened totalPages=$totalPages currentPage=${currentPage + 1} " +
+                                "theme=${activeTheme.id} preserveImages=$excludeImages doc=$documentKey"
+                        )
+                    }
+                    // Thumbnail native work is paused while the list is moving
+                    // and whenever the drawer is closed (its content stays
+                    // composed while hidden). A fast fling would otherwise
+                    // queue hundreds of renders on the single global Pdfium
+                    // lock and starve the main page render (blank page) plus
+                    // back/close. Settling relaunches only visible tiles.
+                    val thumbnailsActive = isDrawerOpen && !listState.isScrollInProgress
+                    LaunchedEffect(thumbnailsActive) {
+                        if (!thumbnailsActive) {
+                            Timber.tag(PdfPagesTabLogTag).d(
+                                "thumb loads paused drawerOpen=$isDrawerOpen scrolling=${listState.isScrollInProgress}"
+                            )
+                        }
+                    }
+
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    drawerScope.launch {
+                                        if (currentRowIndex in pageRows.indices) {
+                                            listState.animateScrollToItem(currentRowIndex)
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text(stringResource(R.string.action_locate))
+                            }
+                        }
+
+                        HorizontalDivider()
+
+                        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .padding(end = 12.dp)
+                            ) {
+                                items(pageRows, key = { it.firstOrNull() ?: 0 }) { row ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp, horizontal = 8.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        row.forEach { pageIdx ->
+                                            // Drawer rows are display-page indices. With inserted
+                                            // blank pages these no longer equal PDF indices, and
+                                            // blank display pages have no thumbnail to load.
+                                            val pdfPageIndex = pdfPageIndexForDisplayPage(virtualPages, pageIdx)
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .aspectRatio(0.707f)
+                                                    .background(
+                                                        pagesTileBackground,
+                                                        RoundedCornerShape(4.dp)
+                                                    )
+                                                    .border(
+                                                        width = if (currentPage == pageIdx) 2.dp else 1.dp,
+                                                        color = if (currentPage == pageIdx) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.1f),
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    )
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .clickable {
+                                                        Timber.tag(PdfPagesTabLogTag).d(
+                                                            "pages-tab selected displayPage=${pageIdx + 1} " +
+                                                                "pdfPage=${pdfPageIndex?.plus(1) ?: "blank"}"
+                                                        )
+                                                        onCloseDrawer()
+                                                        (onDisplayPageSelected ?: onPageSelected)(pageIdx)
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                // Hooks below stay unconditional: virtualPages loads
+                                                // async, so a tile may flip between blank and PDF
+                                                // across recompositions.
+                                                val thumbPageId = remember(documentKey, pdfPageIndex) {
+                                                    if (pdfPageIndex == null) {
+                                                        "$documentKey:blank:$pageIdx"
+                                                    } else {
+                                                        pdfRenderPageId(documentKey, pdfPageIndex, VirtualPage.PdfPage(pdfPageIndex))
+                                                    }
+                                                }
+                                                var thumb by remember(thumbPageId) { mutableStateOf(PdfThumbnailCache.get(thumbPageId)) }
+                                                var imageRects by remember(thumbPageId) { mutableStateOf<List<android.graphics.Rect>>(emptyList()) }
+                                                // Baking "preserve image colors" into the bitmap is only
+                                                // valid for reverse+RGB (see pdfThumbnailNeedsBakedPreserve).
+                                                // Other themes use the GPU filter (or none), so extracting
+                                                // native image rects for them only adds native work on
+                                                // every scroll during fast scrollbar drags.
+                                                val thumbnailPreserveEnabled = excludeImages && activeTheme.id == "reverse"
+
+                                                LaunchedEffect(thumbPageId, pdfDocument, thumbnailPreserveEnabled, pdfPageIndex, thumbnailsActive) {
+                                                    if (pdfPageIndex == null) {
+                                                        Timber.tag(PdfPagesTabLogTag).d(
+                                                            "thumb blank-page displayPage=${pageIdx + 1} (no PDF content)"
+                                                        )
+                                                        return@LaunchedEffect
+                                                    }
+                                                    if (pdfDocument == null) {
+                                                        Timber.tag(PdfPagesTabLogTag).w(
+                                                            "thumb no-document displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1}"
+                                                        )
+                                                        return@LaunchedEffect
+                                                    }
+                                                    if (!thumbnailsActive) {
+                                                        return@LaunchedEffect
+                                                    }
+                                                    // Image-rect extraction needs its own open page and is
+                                                    // only required when the bitmap bake actually happens
+                                                    // (reverse+RGB, see pdfThumbnailNeedsBakedPreserve).
+                                                    suspend fun thumbnailOverlaysFor(
+                                                        widthPx: Int,
+                                                        heightPx: Int,
+                                                    ): List<android.graphics.Rect> {
+                                                        if (!thumbnailPreserveEnabled) return emptyList()
+                                                        return try {
+                                                            pdfDocument.openPage(pdfPageIndex)?.use { p ->
+                                                                (p as? PdfPageWrapper)?.extractNativePageOverlays(
+                                                                    bitmapWidthPx = widthPx,
+                                                                    bitmapHeightPx = heightPx,
+                                                                    pageRotation = p.getPageRotation(),
+                                                                    pageIndex = pdfPageIndex,
+                                                                    linkAnnotationSubtype = 2,
+                                                                )?.imageScreenRects ?: emptyList()
+                                                            } ?: emptyList()
+                                                        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                                                            throw e
+                                                        } catch (_: Exception) {
+                                                            emptyList()
+                                                        }
+                                                    }
+                                                    // All Pdfium calls below serialize on one global
+                                                    // mutex, so the start->ok duration also measures
+                                                    // queue wait during fast scrollbar drags.
+                                                    val loadStartedAt = android.os.SystemClock.uptimeMillis()
+                                                    Timber.tag(PdfPagesTabLogTag).d(
+                                                        "thumb load-start displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1} " +
+                                                            "preserve=$thumbnailPreserveEnabled"
+                                                    )
+                                                    try {
+                                                        // Render on IO, then publish on Main: writing
+                                                        // snapshot state from the IO thread races with
+                                                        // composition and can drop or duplicate tiles
+                                                        // while the list is being recycled.
+                                                        // Triple(bitmap, imageRects, servedFromCache).
+                                                        val loaded = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                            val cached = PdfThumbnailCache.get(thumbPageId)
+                                                            if (cached != null) {
+                                                                Timber.tag(PdfPagesTabLogTag).d(
+                                                                    "thumb cache-hit displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1}"
+                                                                )
+                                                                Triple(
+                                                                    cached,
+                                                                    thumbnailOverlaysFor(cached.width, cached.height),
+                                                                    true,
+                                                                )
+                                                            } else {
+                                                                Timber.tag(PdfPagesTabLogTag).d(
+                                                                    "thumb render-start displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1} " +
+                                                                        "width=$PdfPagesThumbnailWidthPx"
+                                                                )
+                                                                val bmp = pdfDocument.renderPageThumbnail(
+                                                                    pdfPageIndex,
+                                                                    PdfPagesThumbnailWidthPx,
+                                                                ) ?: return@withContext null
+                                                                PdfThumbnailCache.put(thumbPageId, bmp)
+                                                                val rects = thumbnailOverlaysFor(bmp.width, bmp.height)
+                                                                Timber.tag(PdfPagesTabLogTag).d(
+                                                                    "thumb render-ok displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1} " +
+                                                                        "size=${bmp.width}x${bmp.height} overlays=${rects.size}"
+                                                                )
+                                                                Triple(bmp, rects, false)
+                                                            }
+                                                        }
+                                                        val tookMs = android.os.SystemClock.uptimeMillis() - loadStartedAt
+                                                        if (loaded != null) {
+                                                            thumb = loaded.first
+                                                            imageRects = loaded.second
+                                                            Timber.tag(PdfPagesTabLogTag).d(
+                                                                "thumb load-ok displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1} " +
+                                                                    "tookMs=$tookMs cached=${loaded.third} rects=${loaded.second.size}"
+                                                            )
+                                                        } else {
+                                                            if (!thumbnailPreserveEnabled) {
+                                                                imageRects = emptyList()
+                                                            }
+                                                            Timber.tag(PdfPagesTabLogTag).w(
+                                                                "thumb openPage-null displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1} " +
+                                                                    "totalPages=$totalPages tookMs=$tookMs"
+                                                            )
+                                                        }
+                                                    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                                                        // Fast scrollbar drags dispose tiles as quickly as
+                                                        // they compose: propagate cancellation so stale
+                                                        // renders don't pile up behind visible pages.
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        val tookMs = android.os.SystemClock.uptimeMillis() - loadStartedAt
+                                                        Timber.tag(PdfPagesTabLogTag).e(
+                                                            e,
+                                                            "thumb load-failed displayPage=${pageIdx + 1} pdfPage=${pdfPageIndex + 1} " +
+                                                                "tookMs=$tookMs"
+                                                        )
+                                                    }
+                                                }
+
+                                                val rgbColorFilter = pagesTileColorFilter
+                                                val forceThumbnailBitmapTransform = pdfThumbnailNeedsBakedPreserve(
+                                                    themeId = activeTheme.id,
+                                                    effectiveReverseColorMode = effectiveReverseMode,
+                                                    preserveImageColors = excludeImages,
+                                                    hasImageRects = imageRects.isNotEmpty(),
+                                                )
+                                                val renderedThumb = rememberPdfReverseBitmap(
+                                                    bitmap = thumb,
+                                                    mode = effectiveReverseMode,
+                                                    protectedRects = if (thumbnailPreserveEnabled) imageRects else emptyList(),
+                                                    targetWidth = thumb?.width ?: 0,
+                                                    targetHeight = thumb?.height ?: 0,
+                                                    forceBitmapTransform = forceThumbnailBitmapTransform,
+                                                )
+                                                if (renderedThumb != null) {
+                                                    Image(
+                                                        bitmap = renderedThumb.asImageBitmap(),
+                                                        contentDescription = stringResource(R.string.pdf_page_short, pageIdx + 1),
+                                                        modifier = Modifier.fillMaxSize(),
+                                                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                                        colorFilter = if (forceThumbnailBitmapTransform) null else rgbColorFilter,
+                                                    )
+                                                    if (pagesTextureBitmap != null && activeTextureAlpha > 0f) {
+                                                        androidx.compose.foundation.Canvas(
+                                                            modifier = Modifier.fillMaxSize()
+                                                        ) {
+                                                            drawRect(
+                                                                brush = androidx.compose.ui.graphics.ShaderBrush(
+                                                                    androidx.compose.ui.graphics.ImageShader(
+                                                                        pagesTextureBitmap,
+                                                                        androidx.compose.ui.graphics.TileMode.Repeated,
+                                                                        androidx.compose.ui.graphics.TileMode.Repeated
+                                                                    )
+                                                                ),
+                                                                alpha = activeTextureAlpha.coerceIn(0f, 1f),
+                                                                blendMode = pagesTextureBlendMode
+                                                            )
+                                                        }
+                                                    }
+                                                }
+
+                                                Text(
+                                                    text = "${pageIdx + 1}",
+                                                    style = MaterialTheme.typography.labelMedium.copy(
+                                                        fontWeight = FontWeight.Bold
+                                                    ),
+                                                    color = Color.White,
+                                                    modifier = Modifier
+                                                        .align(Alignment.BottomEnd)
+                                                        .padding(4.dp)
+                                                        .background(
+                                                            Color.Black.copy(alpha = 0.5f),
+                                                            RoundedCornerShape(6.dp)
+                                                        )
+                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        repeat(3 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
+                                    }
+                                }
+                            }
+                            SharedDrawerScrollbar(
+                                listState = listState,
+                                modifier = Modifier.align(Alignment.CenterEnd)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

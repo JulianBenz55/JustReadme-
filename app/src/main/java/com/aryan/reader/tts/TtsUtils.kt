@@ -1,0 +1,727 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.tts
+
+import android.content.Context
+import android.media.MediaPlayer
+import androidx.annotation.OptIn
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.content.edit
+import androidx.media3.common.util.UnstableApi
+import com.aryan.reader.BuildConfig
+import com.aryan.reader.R
+import com.aryan.reader.shared.ui.sanitizeSharedMobileTtsSampleText
+import com.aryan.reader.shared.patchReaderTtsWavHeader
+import com.aryan.reader.shared.createReaderTtsWavHeaderUnknownLength
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
+import java.io.File
+import java.io.RandomAccessFile
+import java.security.MessageDigest
+import kotlin.math.ln
+import kotlin.math.pow
+
+const val googleCloudWorkerTtsUrl = BuildConfig.TTS_WORKER_URL
+
+// Fish Cloud TTS (v2 worker routes + direct BYOK). Audio is mp3; the local
+// cache layout mirrors the legacy wav layout, only the extension differs.
+const val fishWorkerTtsPath = "/v2/tts"
+const val fishWorkerTtsSamplePath = "/v2/tts/sample"
+const val fishWorkerVoicesPath = "/v2/voices"
+const val fishDirectTtsUrl = "https://api.fish.audio/v1/tts"
+const val FISH_BYOK_MODEL_HEADER = "s2.1-pro"
+/** Maps a stored TTS model id to the Fish `model` request header. */
+fun fishModelHeaderForTtsModel(ttsModel: String): String =
+    ttsModel.substringAfter(':', FISH_BYOK_MODEL_HEADER).ifBlank { FISH_BYOK_MODEL_HEADER }
+const val FISH_CLOUD_AUDIO_EXTENSION = "mp3"
+
+const val TTS_CHUNK_MAX_LENGTH = 250
+const val DEFAULT_SPEAKER_ID = "Aoede"
+internal const val TTS_SETTINGS_PREFS_NAME = "epub_reader_settings"
+internal const val TTS_SPEAKER_KEY = "tts_speaker"
+internal const val TTS_SPEAKER_NAME_KEY = "tts_speaker_name"
+
+data class GeminiVoice(val id: String, val name: String, val description: String)
+
+val GEMINI_TTS_SPEAKERS = listOf(
+    GeminiVoice("Zephyr", "Zephyr", "Bright, Higher pitch"),
+    GeminiVoice("Puck", "Puck", "Upbeat, Middle pitch"),
+    GeminiVoice("Charon", "Charon", "Informative, Lower pitch"),
+    GeminiVoice("Kore", "Kore", "Firm, Middle pitch"),
+    GeminiVoice("Fenrir", "Fenrir", "Excitable, Lower middle pitch"),
+    GeminiVoice("Leda", "Leda", "Youthful, Higher pitch"),
+    GeminiVoice("Orus", "Orus", "Firm, Lower middle pitch"),
+    GeminiVoice("Aoede", "Aoede", "Breezy, Middle pitch"),
+    GeminiVoice("Callirrhoe", "Callirrhoe", "Easy-going, Middle pitch"),
+    GeminiVoice("Autonoe", "Autonoe", "Bright, Middle pitch"),
+    GeminiVoice("Enceladus", "Enceladus", "Breathy, Lower pitch"),
+    GeminiVoice("Iapetus", "Iapetus", "Clear, Lower middle pitch"),
+    GeminiVoice("Umbriel", "Umbriel", "Easy-going, Lower middle pitch"),
+    GeminiVoice("Algieba", "Algieba", "Smooth, Lower pitch"),
+    GeminiVoice("Despina", "Despina", "Smooth, Middle pitch"),
+    GeminiVoice("Erinome", "Erinome", "Clear, Middle pitch"),
+    GeminiVoice("Algenib", "Algenib", "Gravelly, Lower pitch"),
+    GeminiVoice("Rasalgethi", "Rasalgethi", "Informative, Middle pitch"),
+    GeminiVoice("Laomedeia", "Laomedeia", "Upbeat, Higher pitch"),
+    GeminiVoice("Achernar", "Achernar", "Soft, Higher pitch"),
+    GeminiVoice("Alnilam", "Alnilam", "Firm, Lower middle pitch"),
+    GeminiVoice("Schedar", "Schedar", "Even, Lower middle pitch"),
+    GeminiVoice("Gacrux", "Gacrux", "Mature, Middle pitch"),
+    GeminiVoice("Pulcherrima", "Pulcherrima", "Forward, Middle pitch"),
+    GeminiVoice("Achird", "Achird", "Friendly, Lower middle pitch"),
+    GeminiVoice("Zubenelgenubi", "Zubenelgenubi", "Casual, Lower middle pitch"),
+    GeminiVoice("Vindemiatrix", "Vindemiatrix", "Gentle, Middle pitch"),
+    GeminiVoice("Sadachbia", "Sadachbia", "Lively, Lower pitch"),
+    GeminiVoice("Sadaltager", "Sadaltager", "Lively, Lower pitch"),
+    GeminiVoice("Sulafat", "Sulafat", "Warn, Middle pitch"),
+)
+
+internal fun normalizeTtsSpeakerId(speakerId: String?): String {
+    val cleanSpeakerId = speakerId?.trim()?.takeIf { it.isNotBlank() } ?: return DEFAULT_SPEAKER_ID
+    if (GEMINI_TTS_SPEAKERS.any { it.id == cleanSpeakerId }) return cleanSpeakerId
+    // Fish voices: BYOK reference_ids are UUID-shaped, worker catalog aliases
+    // use the documented `fish-` prefix (see worker/tts-worker.js).
+    if (cleanSpeakerId.length <= 64 &&
+        (isFishReferenceId(cleanSpeakerId) || cleanSpeakerId.startsWith("fish-"))
+    ) {
+        return cleanSpeakerId
+    }
+    return DEFAULT_SPEAKER_ID
+}
+
+internal fun isFishReferenceId(value: String): Boolean {
+    val v = value.trim()
+    // Fish model IDs are 32-char hex without dashes (e.g. from the Fish voice
+    // library); dashed UUIDs are accepted too for forward compatibility.
+    return v.matches(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) ||
+        v.matches(Regex("[0-9a-fA-F]{32}"))
+}
+
+internal fun saveTtsSpeaker(context: Context, speakerId: String) {
+    val prefs = context.getSharedPreferences(TTS_SETTINGS_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit { putString(TTS_SPEAKER_KEY, normalizeTtsSpeakerId(speakerId)) }
+}
+
+internal fun loadTtsSpeaker(context: Context): String {
+    val prefs = context.getSharedPreferences(TTS_SETTINGS_PREFS_NAME, Context.MODE_PRIVATE)
+    return normalizeTtsSpeakerId(prefs.getString(TTS_SPEAKER_KEY, DEFAULT_SPEAKER_ID))
+}
+
+/**
+ * Whether the voice/mode pickers must stay locked. A lock is required
+ * whenever a Reader TTS session exists — playing, loading AND paused. A
+ * paused session keeps already-generated old-voice audio queued (and the
+ * file cache is keyed per voice), so switching voices then resuming would
+ * keep playing the previous voice. Finished sessions ([sessionFinished])
+ * and the idle state (blank [playbackSource]) stay unlocked: the next
+ * start picks up the new voice with a clean queue.
+ */
+internal fun isReaderTtsVoiceChangeLocked(playbackSource: String?, sessionFinished: Boolean): Boolean =
+    playbackSource == "READER" && !sessionFinished
+
+/**
+ * Display name of the selected cloud voice, saved alongside the speaker id at
+ * pick time so surfaces like the TTS overlay can show "Ava" instead of a raw
+ * Fish reference id. Null when the selection predates name tracking.
+ */
+internal fun saveTtsSpeakerName(context: Context, name: String) {
+    val prefs = context.getSharedPreferences(TTS_SETTINGS_PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit { putString(TTS_SPEAKER_NAME_KEY, name.trim().take(80)) }
+}
+
+internal fun loadTtsSpeakerName(context: Context): String? {
+    val prefs = context.getSharedPreferences(TTS_SETTINGS_PREFS_NAME, Context.MODE_PRIVATE)
+    return prefs.getString(TTS_SPEAKER_NAME_KEY, null)?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * Custom local-TTS voice preview text, shared by the legacy settings sheet
+ * and the shared reader sheet. Stored raw (may be blank = use default) in
+ * `reader_prefs` so both UIs stay in sync.
+ */
+internal const val TTS_PREVIEW_SAMPLE_TEXT_KEY = "reader.tts.previewSampleText"
+
+internal fun loadTtsPreviewSampleText(context: Context): String {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    return sanitizeSharedMobileTtsSampleText(prefs.getString(TTS_PREVIEW_SAMPLE_TEXT_KEY, null))
+}
+
+internal fun saveTtsPreviewSampleText(context: Context, text: String) {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    prefs.edit { putString(TTS_PREVIEW_SAMPLE_TEXT_KEY, sanitizeSharedMobileTtsSampleText(text)) }
+}
+
+/** Speakable preview text: custom value when set, else the localized Android default. */
+internal fun effectiveTtsPreviewSampleText(context: Context): String =
+    loadTtsPreviewSampleText(context).ifBlank { context.getString(R.string.tts_voice_sample_generic) }
+
+/** Starred voice identifiers, shared by the legacy sheet and the shared reader sheet. */
+internal const val TTS_FAVORITE_VOICES_KEY = "reader.tts.favoriteVoices"
+
+internal fun loadTtsFavoriteVoices(context: Context): Set<String> {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    return prefs.getStringSet(TTS_FAVORITE_VOICES_KEY, emptySet()).orEmpty().toSet()
+}
+
+internal fun saveTtsFavoriteVoices(context: Context, favorites: Set<String>) {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    prefs.edit { putStringSet(TTS_FAVORITE_VOICES_KEY, favorites) }
+}
+
+/** Persisted cloud-voice language filter (raw selection: language code or a localized All/Favorites label). */
+internal const val TTS_CLOUD_VOICE_LANGUAGE_KEY = "reader.tts.cloud_voice_language"
+
+internal fun loadCloudVoiceLanguage(context: Context): String? {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    return prefs.getString(TTS_CLOUD_VOICE_LANGUAGE_KEY, null)?.takeIf { it.isNotBlank() }
+}
+
+internal fun saveCloudVoiceLanguage(context: Context, language: String) {
+    val prefs = context.getSharedPreferences("reader_prefs", Context.MODE_PRIVATE)
+    prefs.edit { putString(TTS_CLOUD_VOICE_LANGUAGE_KEY, language) }
+}
+
+data class TtsChapterCacheInfo(
+    val chapterTitle: String,
+    val chunkCount: Int,
+    val totalChunks: Int?,
+    val sizeBytes: Long,
+    val directory: File,
+    val matchingFiles: List<File> = emptyList()
+)
+
+fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val exp = (ln(bytes.toDouble()) / ln(1024.0)).toInt()
+    val pre = "KMGTPE"[exp - 1]
+    return String.format("%.1f %cB", bytes / 1024.0.pow(exp.toDouble()), pre)
+}
+
+class TtsCacheManager(private val context: Context) {
+    private val baseDir: File
+        get() = File(context.filesDir, "TTS_Cache")
+
+    private fun safeCacheSegment(name: String, fallback: String): String {
+        val normalized = name.trim().takeIf { it.isNotBlank() } ?: fallback
+        val slug = normalized
+            .replace(Regex("[^a-zA-Z0-9_-]+"), "_")
+            .trim('_', '-')
+            .ifBlank { fallback }
+            .take(48)
+        return "${slug}_${hash(normalized).take(16)}"
+    }
+
+    private fun sanitizeFileToken(name: String): String {
+        return name
+            .replace(Regex("[^a-zA-Z0-9._-]+"), "_")
+            .trim('.', '_', '-')
+            .ifBlank { "default" }
+    }
+
+    private fun bookDirName(bookTitle: String): String = safeCacheSegment(bookTitle, "book")
+
+    private fun chapterDirName(chapterTitle: String?): String {
+        return safeCacheSegment(chapterTitle ?: "Unknown_Chapter", "chapter")
+    }
+
+    private fun hash(input: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }.take(16)
+    }
+
+    fun saveTotalChunks(bookTitle: String, chapterTitle: String?, totalChunks: Int) {
+        val bookDir = getBookCacheDir(bookTitle)
+        val chapterDir = File(bookDir, chapterDirName(chapterTitle))
+        if (!chapterDir.exists()) chapterDir.mkdirs()
+        val metaFile = File(chapterDir, "total_chunks.txt")
+        metaFile.writeText(totalChunks.toString())
+    }
+
+    @OptIn(UnstableApi::class)
+    fun getCacheFile(
+        bookTitle: String,
+        chapterTitle: String?,
+        text: String,
+        speakerId: String,
+        mode: TtsPlaybackManager.TtsMode,
+        extension: String = "wav"
+    ): File {
+        val bookDir = getBookCacheDir(bookTitle)
+        val chapterDir = File(bookDir, chapterDirName(chapterTitle))
+        if (!chapterDir.exists()) {
+            chapterDir.mkdirs()
+        }
+
+        // Local cache layout is unchanged: only the container extension varies
+        // ("wav" for legacy Gemini chunks, "mp3" for Fish REST chunks).
+        // Legacy wav hashes are preserved exactly so existing caches keep hitting.
+        val safeExt = if (extension == "mp3") "mp3" else "wav"
+        val hashParams = if (safeExt == "wav") {
+            hash(text + speakerId + mode.name)
+        } else {
+            hash(text + speakerId + mode.name + safeExt)
+        }
+        val safeSpeaker = sanitizeFileToken(speakerId)
+
+        return File(chapterDir, "cached_chunk_${safeSpeaker}_$hashParams.$safeExt")
+    }
+
+    fun getBookCacheDir(bookTitle: String): File {
+        return File(baseDir, bookDirName(bookTitle))
+    }
+
+    fun getChapterCaches(bookTitle: String, speakerFilter: String? = null): List<TtsChapterCacheInfo> {
+        val bookDir = getBookCacheDir(bookTitle)
+        if (!bookDir.exists()) return emptyList()
+
+        return bookDir.listFiles()?.filter { it.isDirectory }?.mapNotNull { chapterDir ->
+            val files = chapterDir.listFiles()?.filter { file ->
+                if (!file.isFile) return@filter false
+                // Legacy Gemini chunks are .wav, Fish REST chunks are .mp3.
+                if (!file.name.endsWith(".wav") && !file.name.endsWith(".mp3")) return@filter false
+                if (speakerFilter == null || speakerFilter == "All") return@filter true
+
+                val parts = file.name.split("_")
+
+                val speakerInName = if (parts.size >= 5 && parts[2].all { it.isDigit() }) {
+                    parts[3]
+                } else if (parts.size >= 4) {
+                    parts[2]
+                } else null
+
+                speakerInName == speakerFilter
+            } ?: emptyList()
+
+            if (files.isEmpty()) null
+            else {
+                val size = files.sumOf { it.length() }
+                val metaFile = File(chapterDir, "total_chunks.txt")
+                val total = if (metaFile.exists()) metaFile.readText().toIntOrNull() else null
+
+                TtsChapterCacheInfo(
+                    chapterTitle = chapterDir.name,
+                    chunkCount = files.size,
+                    totalChunks = total,
+                    sizeBytes = size,
+                    directory = chapterDir,
+                    matchingFiles = files
+                )
+            }
+        }?.sortedBy { it.chapterTitle } ?: emptyList()
+    }
+
+    fun deleteChapterCache(chapterDir: File) {
+        if (chapterDir.isInsideBaseDir()) {
+            chapterDir.deleteRecursively()
+        }
+    }
+
+    fun deleteSpecificFiles(files: List<File>, chapterDir: File) {
+        if (!chapterDir.isInsideBaseDir()) return
+        files.forEach { file ->
+            if (file.isInside(chapterDir)) {
+                file.delete()
+            }
+        }
+        if (chapterDir.listFiles()?.isEmpty() == true && chapterDir.isInsideBaseDir()) {
+            chapterDir.deleteRecursively()
+        }
+    }
+
+    fun clearBookCache(bookTitle: String) {
+        getBookCacheDir(bookTitle).takeIf { it.isInsideBaseDir() }?.deleteRecursively()
+    }
+
+    private fun File.isInsideBaseDir(): Boolean {
+        return isInside(baseDir)
+    }
+
+    private fun File.isInside(root: File): Boolean {
+        val rootPath = runCatching { root.canonicalFile.path }.getOrNull() ?: return false
+        val targetPath = runCatching { canonicalFile.path }.getOrNull() ?: return false
+        return targetPath != rootPath && targetPath.startsWith(rootPath + File.separator)
+    }
+}
+
+fun patchWavHeader(file: File, pcmDataLength: Int) {
+    try {
+        patchReaderTtsWavHeader(file, pcmDataLength)
+    } catch (e: Exception) {
+        Timber.tag("TTS_CLOUD_DIAG").e(e, "Failed to patch WAV header for cached file")
+    }
+}
+
+/**
+ * Whitespace that ends a sentence. A newline counts, because the readers' block text keeps the line
+ * breaks a `<br>` produced, and a line break is as good a place to stop as a full stop.
+ */
+private val sentenceBoundaryRegex = Regex("""(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=[.?!\n])\s+""")
+
+/**
+ * One spoken chunk together with where its text starts in the string it was split from.
+ *
+ * [splitTextIntoChunks] trims the whitespace that separated two chunks, so a chunk's position in
+ * the source cannot be recovered by accumulating chunk lengths. Every caller that stores a chunk
+ * offset against a chapter's text (pagination, the WebView extraction bridge, locators) needs the
+ * position, and a guessed one drifts: a stored offset lands a line early, and playback starts
+ * before the line the reader was looking at.
+ */
+data class TtsChunkSourceSpan(
+    val text: String,
+    val startOffsetInSource: Int
+)
+
+/**
+ * Splits [text] into spoken chunks, keeping each chunk's offset in [text].
+ *
+ * Positions are resolved by searching for each trimmed chunk in the source from the previous
+ * chunk's end, which is exact because the split only ever removes whitespace between chunks: the
+ * whitespace-free text of one chunk can never match inside another chunk's gap.
+ */
+fun splitTextIntoChunksWithSourceOffsets(
+    text: String,
+    maxLengthPerChunk: Int = TTS_CHUNK_MAX_LENGTH
+): List<TtsChunkSourceSpan> {
+    if (text.isBlank()) return emptyList()
+
+    val spans = mutableListOf<TtsChunkSourceSpan>()
+    val currentChunk = StringBuilder()
+    var currentChunkStart = -1
+    var searchCursor = 0
+
+    fun flushCurrentChunk() {
+        if (currentChunk.isNotEmpty()) {
+            spans.add(TtsChunkSourceSpan(currentChunk.toString(), currentChunkStart.coerceAtLeast(0)))
+            currentChunk.clear()
+            currentChunkStart = -1
+        }
+    }
+
+    for (sentence in text.trim().split(sentenceBoundaryRegex).filter { it.isNotBlank() }) {
+        for (part in splitLongTtsSentence(sentence, maxLengthPerChunk)) {
+            val partStart = if (part.isEmpty()) {
+                searchCursor
+            } else {
+                text.indexOf(part, searchCursor).takeIf { it >= 0 } ?: searchCursor
+            }
+            searchCursor = partStart + part.length
+
+            if (part.length > maxLengthPerChunk) {
+                flushCurrentChunk()
+                spans.add(TtsChunkSourceSpan(part, partStart))
+                continue
+            }
+
+            if (currentChunk.isNotEmpty() && currentChunk.length + part.length + 1 > maxLengthPerChunk) {
+                flushCurrentChunk()
+                currentChunk.append(part)
+            } else {
+                if (currentChunk.isNotEmpty()) {
+                    currentChunk.append(" ")
+                }
+                currentChunk.append(part)
+            }
+            if (currentChunkStart < 0) {
+                currentChunkStart = partStart
+            }
+        }
+    }
+    flushCurrentChunk()
+    return spans
+}
+
+fun splitTextIntoChunks(text: String, maxLengthPerChunk: Int = TTS_CHUNK_MAX_LENGTH): List<String> =
+    splitTextIntoChunksWithSourceOffsets(text, maxLengthPerChunk).map { it.text }
+
+internal fun splitLongTtsSentence(sentence: String, maxLength: Int): List<String> {
+    val trimmed = sentence.trim()
+    if (trimmed.isEmpty()) return emptyList()
+    if (maxLength <= 0 || trimmed.length <= maxLength) return listOf(trimmed)
+
+    val parts = mutableListOf<String>()
+    var remaining = trimmed
+    while (remaining.length > maxLength) {
+        val splitIndex = findSmartTtsSplitIndex(remaining, maxLength)
+        val part = remaining.substring(0, splitIndex).trim()
+        if (part.isNotEmpty()) parts.add(part)
+        remaining = remaining.substring(splitIndex).trimStart()
+    }
+    if (remaining.isNotBlank()) parts.add(remaining.trim())
+    return parts
+}
+
+private fun findSmartTtsSplitIndex(text: String, maxLength: Int): Int {
+    val limit = maxLength.coerceIn(1, text.length)
+    val preferredFloor = ((limit * 55) / 100).coerceAtLeast(1)
+    val punctuation = setOf('.', ',', ';', ':', '!', '?', ')', ']', '}')
+
+    for (index in limit downTo preferredFloor) {
+        val char = text.getOrNull(index - 1)
+        if (char != null && char in punctuation) return index
+    }
+    for (index in limit downTo preferredFloor) {
+        if (text.getOrNull(index - 1)?.isWhitespace() == true) return index
+    }
+    return limit
+}
+
+@UnstableApi
+class SpeakerSamplePlayer(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val getAuthToken: suspend () -> String?
+) {
+    private val sampleMediaPlayer = MediaPlayer()
+    var loadingSpeakerId by mutableStateOf<String?>(null)
+    var playingSpeakerId by mutableStateOf<String?>(null)
+
+    val cachedSpeakers = androidx.compose.runtime.mutableStateListOf<String>()
+
+    private val httpClient = okhttp3.OkHttpClient()
+    @OptIn(UnstableApi::class)
+    private val liveClient = TtsService.GeminiLiveClient(httpClient)
+
+    init {
+        // Read initially existing files
+        scope.launch(Dispatchers.IO) {
+            val files = context.cacheDir.listFiles { _, name ->
+                (name.startsWith("sample_") && name.endsWith(".wav")) ||
+                    (name.startsWith("sample_fish_") && name.endsWith(".mp3"))
+            }
+            val ids = files?.map {
+                it.name.removePrefix("sample_fish_").removePrefix("sample_")
+                    .removeSuffix(".mp3").removeSuffix(".wav")
+            } ?: emptyList()
+            withContext(Dispatchers.Main) {
+                cachedSpeakers.addAll(ids)
+            }
+        }
+
+        sampleMediaPlayer.setOnErrorListener { mp, what, extra ->
+            Timber.e("MediaPlayer error: what=$what, extra=$extra. Resetting.")
+            playingSpeakerId = null
+            loadingSpeakerId = null
+            try { mp.reset() } catch (_: Exception) {}
+            true
+        }
+    }
+
+    fun playOrStop(speakerId: String) {
+        scope.launch {
+            liveClient.close()
+            when {
+                playingSpeakerId == speakerId -> {
+                    sampleMediaPlayer.stop()
+                    sampleMediaPlayer.reset()
+                    playingSpeakerId = null
+                }
+                loadingSpeakerId == speakerId -> {
+                    loadingSpeakerId = null
+                }
+                else -> {
+                    playSample(speakerId)
+                }
+            }
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private suspend fun playSample(speakerId: String) {
+        if (sampleMediaPlayer.isPlaying) sampleMediaPlayer.stop()
+        sampleMediaPlayer.reset()
+        loadingSpeakerId = speakerId
+        playingSpeakerId = null
+
+        withContext(Dispatchers.IO) {
+            val cacheFile = File(context.cacheDir, "sample_$speakerId.wav")
+            try {
+                if (!cacheFile.exists()) {
+                    val bucketName = "reader-9fc469d7.firebasestorage.app"
+                    val sampleUrl = "https://firebasestorage.googleapis.com/v0/b/$bucketName/o/samples%2Fsample_${speakerId}.wav?alt=media"
+
+                    val request = okhttp3.Request.Builder()
+                        .url(sampleUrl)
+                        .build()
+
+                    val response = httpClient.newCall(request).execute()
+                    if (response.isSuccessful) {
+                        response.body?.byteStream()?.use { input ->
+                            cacheFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } else {
+                        Timber.e("Failed to download sample for $speakerId. HTTP ${response.code}")
+                        throw Exception("Failed to cache sample")
+                    }
+                }
+
+                if (cacheFile.exists()) {
+                    withContext(Dispatchers.Main) {
+                        if (!cachedSpeakers.contains(speakerId)) cachedSpeakers.add(speakerId)
+                        if (loadingSpeakerId != speakerId) return@withContext
+                        sampleMediaPlayer.setDataSource(cacheFile.absolutePath)
+                        sampleMediaPlayer.setOnPreparedListener { mp ->
+                            if (loadingSpeakerId == speakerId) {
+                                mp.start()
+                                playingSpeakerId = speakerId
+                                loadingSpeakerId = null
+                            }
+                        }
+                        sampleMediaPlayer.setOnCompletionListener {
+                            if (playingSpeakerId == speakerId) playingSpeakerId = null
+                        }
+                        sampleMediaPlayer.prepareAsync()
+                    }
+                } else {
+                    throw Exception("Sample file missing after download attempt")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Exception playing sample for $speakerId")
+                withContext(Dispatchers.Main) { if (loadingSpeakerId == speakerId) loadingSpeakerId = null }
+            }
+        }
+    }
+
+    fun clearSamples() {
+        scope.launch(Dispatchers.IO) {
+            val files = context.cacheDir.listFiles { _, name ->
+                (name.startsWith("sample_") && name.endsWith(".wav")) ||
+                    (name.startsWith("sample_fish_") && name.endsWith(".mp3"))
+            }
+            files?.forEach { it.delete() }
+            withContext(Dispatchers.Main) {
+                cachedSpeakers.clear()
+            }
+        }
+    }
+
+    /** Downloads a static sample file (Fish-hosted preview audio). */
+    private fun downloadSampleFile(url: String, cacheFile: File) {
+        val request = okhttp3.Request.Builder().url(url).get().build()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("Sample download HTTP ${response.code}")
+            }
+            val bytes = response.body?.bytes() ?: throw Exception("Empty sample response")
+            if (bytes.size < 1024) throw Exception("Sample too small")
+            val tmp = File(cacheFile.absolutePath + ".tmp")
+            tmp.writeBytes(bytes)
+            if (!tmp.renameTo(cacheFile)) throw Exception("Failed to cache sample")
+        }
+    }
+
+    /**
+     * Plays a short Fish voice preview. Priority: the voice's free
+     * pre-generated sample ([sampleAudioUrl], costs nobody anything), then
+     * direct Fish BYOK when the user provided a key, otherwise the worker
+     * sample endpoint. Billing matches production synthesis for the
+     * synthesized paths; a failed free download surfaces an error instead
+     * of silently spending.
+     */
+    fun playFishSample(
+        voiceRef: String,
+        displayId: String,
+        sampleText: String,
+        workerBaseUrl: String?,
+        authToken: String?,
+        fishByokKey: String?,
+        sampleAudioUrl: String? = null
+    ) {
+        scope.launch {
+            if (sampleMediaPlayer.isPlaying) sampleMediaPlayer.stop()
+            sampleMediaPlayer.reset()
+            loadingSpeakerId = displayId
+            playingSpeakerId = null
+
+            withContext(Dispatchers.IO) {
+                try {
+                    val safeRef = voiceRef.replace(Regex("[^A-Za-z0-9-]"), "_").take(48).ifBlank { "voice" }
+                    if (!sampleAudioUrl.isNullOrBlank()) {
+                        // Free static sample under its own cache name so it
+                        // never mixes with synthesized preview bytes.
+                        val cacheFile = File(context.cacheDir, "sample_fish_static_${safeRef}.mp3")
+                        if (!cacheFile.exists() || cacheFile.length() < 1024) {
+                            downloadSampleFile(sampleAudioUrl, cacheFile)
+                        }
+                        presentCachedSample(cacheFile, displayId)
+                        return@withContext
+                    }
+                    val cacheFile = File(context.cacheDir, "sample_fish_${safeRef}.mp3")
+                    if (!cacheFile.exists() || cacheFile.length() < 1024) {
+                        val result = if (!fishByokKey.isNullOrBlank()) {
+                            TtsService.FishRestTtsClient(httpClient).synthesizeViaByok(
+                                fishByokKey, sampleText, voiceRef
+                            )
+                        } else if (!workerBaseUrl.isNullOrBlank() && !authToken.isNullOrBlank()) {
+                            TtsService.FishRestTtsClient(httpClient).synthesizeSampleViaWorker(
+                                workerBaseUrl, authToken, sampleText, voiceRef
+                            )
+                        } else {
+                            throw Exception("No Fish backend configured")
+                        }
+                        val bytes = result.audioBytes
+                        if (result.error != null || bytes == null || bytes.isEmpty()) {
+                            throw Exception(result.error ?: "Sample failed")
+                        }
+                        cacheFile.writeBytes(bytes)
+                    }
+                    presentCachedSample(cacheFile, displayId)
+                } catch (e: Exception) {
+                    Timber.e(e, "Exception playing Fish sample for $displayId")
+                    withContext(Dispatchers.Main) { if (loadingSpeakerId == displayId) loadingSpeakerId = null }
+                }
+            }
+        }
+    }
+
+    private suspend fun presentCachedSample(cacheFile: File, id: String) {
+        withContext(Dispatchers.Main) {
+            if (!cachedSpeakers.contains(id)) cachedSpeakers.add(id)
+            if (loadingSpeakerId != id) return@withContext
+            sampleMediaPlayer.setDataSource(cacheFile.absolutePath)
+            sampleMediaPlayer.setOnPreparedListener { mp ->
+                if (loadingSpeakerId == id) {
+                    mp.start()
+                    playingSpeakerId = id
+                    loadingSpeakerId = null
+                }
+            }
+            sampleMediaPlayer.setOnCompletionListener {
+                if (playingSpeakerId == id) playingSpeakerId = null
+            }
+            sampleMediaPlayer.prepareAsync()
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    fun release() {
+        sampleMediaPlayer.release()
+        liveClient.close()
+    }
+}
+
+fun createWavHeaderUnknownLength(sampleRate: Int): ByteArray =
+    createReaderTtsWavHeaderUnknownLength(sampleRate)

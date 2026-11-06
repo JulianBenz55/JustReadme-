@@ -1,0 +1,313 @@
+package com.aryan.reader.shared.ui
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.ScrollState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.aryan.reader.shared.PdfReaderTool
+import com.aryan.reader.shared.ReaderMotionPolicy
+import com.aryan.reader.shared.ReaderTool
+
+enum class SharedReaderBarEdge { TOP, BOTTOM }
+enum class SharedReaderToolbarPlacement { TOP, BOTTOM }
+
+@Stable
+class SharedReaderOverflowMenuState {
+    val menuExpanded = mutableStateOf(false)
+    val hiddenToolsExpanded = mutableStateOf(false)
+    val readingModeExpanded = mutableStateOf(false)
+    val ttsSettingsExpanded = mutableStateOf(false)
+    val fileActionsExpanded = mutableStateOf(false)
+
+    fun open() {
+        collapseNestedSections()
+        menuExpanded.value = true
+    }
+
+    fun dismiss() {
+        collapseNestedSections()
+        menuExpanded.value = false
+    }
+
+    private fun collapseNestedSections() {
+        hiddenToolsExpanded.value = false
+        readingModeExpanded.value = false
+        ttsSettingsExpanded.value = false
+        fileActionsExpanded.value = false
+    }
+}
+
+@Composable
+fun rememberSharedReaderOverflowMenuState(): SharedReaderOverflowMenuState =
+    remember { SharedReaderOverflowMenuState() }
+
+@Composable
+fun SharedReaderOverflowMenu(
+    state: SharedReaderOverflowMenuState,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    SharedDropdownMenu(
+        expanded = state.menuExpanded.value,
+        onDismissRequest = state::dismiss,
+        content = content,
+    )
+}
+
+fun sharedEpubToolbarTools(
+    toolOrder: List<ReaderTool>,
+    toolbarTools: Set<ReaderTool>,
+    hiddenToolNamesOrIds: Set<String>,
+    bottomToolNamesOrIds: Set<String>,
+    placement: SharedReaderToolbarPlacement,
+): List<ReaderTool> {
+    val hidden = hiddenToolNamesOrIds.mapNotNullTo(mutableSetOf()) { ReaderTool.fromId(it)?.id }
+    val bottom = bottomToolNamesOrIds.mapNotNullTo(mutableSetOf()) { ReaderTool.fromId(it)?.id }
+    return toolOrder.filter { tool ->
+        tool in toolbarTools && tool.id !in hidden &&
+            ((tool.id in bottom) == (placement == SharedReaderToolbarPlacement.BOTTOM))
+    }
+}
+
+fun sharedPdfToolbarTools(
+    toolOrder: List<PdfReaderTool>,
+    hiddenToolNamesOrIds: Set<String>,
+    bottomToolNamesOrIds: Set<String>,
+    placement: SharedReaderToolbarPlacement,
+): List<PdfReaderTool> {
+    val hidden = hiddenToolNamesOrIds.mapNotNullTo(mutableSetOf()) { PdfReaderTool.fromId(it)?.id }
+    val bottom = bottomToolNamesOrIds.mapNotNullTo(mutableSetOf()) { PdfReaderTool.fromId(it)?.id }
+    return toolOrder.filter { tool ->
+        tool.supportsToolbarPlacement && tool.id !in hidden &&
+            ((tool.id in bottom) == (placement == SharedReaderToolbarPlacement.BOTTOM))
+    }
+}
+
+fun sharedReaderBarOffset(edge: SharedReaderBarEdge, height: Int): Int =
+    if (edge == SharedReaderBarEdge.TOP) -height else height
+
+fun sharedReaderBarEnterTransition(edge: SharedReaderBarEdge): EnterTransition =
+    slideInVertically(animationSpec = tween(200)) { height -> sharedReaderBarOffset(edge, height) } +
+        fadeIn(animationSpec = tween(200))
+
+fun sharedReaderBarExitTransition(edge: SharedReaderBarEdge): ExitTransition =
+    slideOutVertically(animationSpec = tween(200)) { height -> sharedReaderBarOffset(edge, height) } +
+        fadeOut(animationSpec = tween(200))
+
+@Composable
+fun SharedReaderBarVisibility(
+    visible: Boolean,
+    edge: SharedReaderBarEdge,
+    motionPolicy: ReaderMotionPolicy = ReaderMotionPolicy(),
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = if (motionPolicy.reduceMotion) EnterTransition.None else sharedReaderBarEnterTransition(edge),
+        exit = if (motionPolicy.reduceMotion) ExitTransition.None else sharedReaderBarExitTransition(edge),
+        modifier = modifier,
+    ) { content() }
+}
+
+@Composable
+fun SharedReaderToolbarSurface(
+    modifier: Modifier = Modifier,
+    height: Dp? = null,
+    content: @Composable () -> Unit,
+) {
+    val surfaceModifier = if (height == null) {
+        modifier.fillMaxWidth()
+    } else {
+        modifier.fillMaxWidth().height(height)
+    }
+    Surface(
+        modifier = surfaceModifier,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 4.dp,
+        content = content,
+    )
+}
+
+@Composable
+fun SharedEpubTopToolbarRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+fun SharedEpubBottomToolbarRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceAround,
+        content = content,
+    )
+}
+
+@Composable
+fun SharedPdfTopToolbarRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .height(56.dp)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
+    )
+}
+
+@Composable
+fun SharedPdfBottomToolbarRow(
+    bottomPadding: Dp,
+    scrollState: ScrollState,
+    content: @Composable RowScope.() -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = bottomPadding)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .height(56.dp)
+            .padding(horizontal = 8.dp)
+            .horizontalScroll(scrollState),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        content = content,
+    )
+}
+
+@Composable
+fun <T> SharedReaderOverflowSectionList(
+    sections: List<T>,
+    content: @Composable (T) -> Unit,
+) {
+    sections.forEachIndexed { index, section ->
+        if (index > 0) HorizontalDivider()
+        content(section)
+    }
+}
+
+/**
+ * Bottom-chrome stacking shared by the mobile EPUB/PDF readers.
+ *
+ * Android benchmark: the bottom toolbar sits at the screen bottom, the jump
+ * bar (40.dp) sits directly above it, and the page slider sits above the
+ * jump bar. Keeping the heights and stacking in one place guarantees the
+ * slider can never overlap the jump bar in any chrome/safe-area state.
+ */
+val SharedReaderEpubBottomBarHeight = 45.dp
+val SharedReaderPdfBottomBarHeight = 56.dp
+val SharedReaderJumpBarHeight = 40.dp
+
+/**
+ * The narration card's height, and the gap it keeps above whatever it floats over.
+ *
+ * The height is the bar's own `heightIn(min = 64.dp)`; it grows past that only if the
+ * title/subtitle column wraps to two lines each at the largest accessibility text size, which
+ * reserving for exactly one line would then let overlap again.
+ */
+val SharedReaderNarrationBarHeight = 64.dp
+
+/** The breathing room between the narration card and the chrome below it. */
+val SharedReaderNarrationBarGap = 16.dp
+
+/** Where the card sits when the chrome it floats over is hidden. */
+private val SharedReaderNarrationBarHiddenBottomPadding = 32.dp
+
+fun sharedMobileEpubBottomChromePadding(bottomInset: Dp): Dp =
+    SharedReaderEpubBottomBarHeight + bottomInset
+
+/**
+ * Bottom padding for the media overlay control card, so it floats clear of the whole bottom stack.
+ *
+ * This is the one bottom card that used to reserve for the toolbar and nothing else — it reused the
+ * read-aloud overlay's lift, which is `inset + 45.dp + 16.dp`. That put its lower ~24.dp underneath
+ * the jump bar and its lower third underneath a bottom-positioned page info bar, with no `zIndex`
+ * anywhere in either reader to hide the damage: later declarations simply paint over earlier ones,
+ * and the jump bar is declared after the narration card.
+ *
+ * The order is the reader's own: toolbar, then jump bar, then page info, then a gap, then the card.
+ * That is exactly where [SharedMobileEpubReader] puts the page info bar in the bottom column, so
+ * summing them in this order cannot drift from the layout it is meant to clear.
+ *
+ * @param pageInfoReserve the page info bar's height when it is visible at the bottom, else 0.dp.
+ *   A page info bar at the top is nowhere near the card and must not lift it.
+ * @param jumpBarVisible whether the jump history bar is showing. It is a sibling overlay, not a
+ *   sibling row, so the only way to clear it is to lift the card by its height.
+ * @param chromeVisible whether the bottom chrome is showing at all. Hidden, the card drops to a
+ *   fixed inset rather than tracking a stack that is not there.
+ */
+fun sharedMobileEpubMediaOverlayBottomPadding(
+    bottomChromePadding: Dp,
+    pageInfoReserve: Dp = 0.dp,
+    jumpBarVisible: Boolean = false,
+    chromeVisible: Boolean = true,
+): Dp = if (chromeVisible) {
+    bottomChromePadding +
+        pageInfoReserve +
+        (if (jumpBarVisible) SharedReaderJumpBarHeight else 0.dp) +
+        SharedReaderNarrationBarGap
+} else {
+    SharedReaderNarrationBarHiddenBottomPadding
+}
+
+fun sharedMobileEpubJumpBottomPadding(
+    bottomChromePadding: Dp,
+    pageInfoReserve: Dp = 0.dp,
+    ttsLift: Dp = 0.dp,
+): Dp = bottomChromePadding + pageInfoReserve + ttsLift
+
+fun sharedMobileEpubSliderBottomPadding(
+    jumpBottomPadding: Dp,
+    isJumpVisible: Boolean,
+): Dp = jumpBottomPadding + if (isJumpVisible) SharedReaderJumpBarHeight else 0.dp
+
+fun sharedMobilePdfBottomChromePadding(
+    bottomInset: Dp,
+    isSplitPane: Boolean = false,
+): Dp = if (isSplitPane) SharedReaderPdfBottomBarHeight else SharedReaderPdfBottomBarHeight + bottomInset
+
+fun sharedMobilePdfSliderBottomPadding(
+    bottomChromePadding: Dp,
+    isJumpVisible: Boolean,
+): Dp = bottomChromePadding + if (isJumpVisible) SharedReaderJumpBarHeight else 0.dp

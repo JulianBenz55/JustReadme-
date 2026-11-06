@@ -1,0 +1,463 @@
+package com.aryan.reader.shared.opds
+
+import com.aryan.reader.shared.BookItem
+import com.aryan.reader.shared.SharedFileCapabilities
+
+object SharedOpdsSearch {
+    suspend fun buildSearchUrl(
+        searchLink: String,
+        query: String,
+        openSearchTemplateResolver: suspend (String) -> String?
+    ): String {
+        val template = if (searchLink.hasSearchTemplateToken()) {
+            searchLink
+        } else {
+            openSearchTemplateResolver(searchLink) ?: searchLink
+        }
+        return expandSearchTemplate(template, query)
+    }
+
+    fun expandSearchTemplate(template: String, query: String): String {
+        val encoded = query.percentEncode()
+        val expandedSearchTerms = template
+            .replace("{searchTerms}", encoded)
+            .replace("{count}", DefaultSearchCount)
+            .replace("{startPage}", DefaultSearchStartPage)
+            .replace("{startIndex}", DefaultSearchStartIndex)
+            .replace("{language}", DefaultSearchLanguage)
+            .replace("{inputEncoding}", DefaultSearchEncoding)
+            .replace("{outputEncoding}", DefaultSearchEncoding)
+        if (expandedSearchTerms != template) return expandedSearchTerms
+
+        val queryTemplate = Regex("""\{([?&])([^}]+)\}""").find(template)
+        if (queryTemplate != null) {
+            val operator = queryTemplate.groupValues[1]
+            val variables = queryTemplate.groupValues[2]
+                .split(',')
+                .map { it.substringBefore(':').substringBefore('*').trim() }
+                .filter { it.isNotBlank() }
+            val parameterName = variables.firstOrNull { it.equals("searchTerms", ignoreCase = true) }
+                ?: variables.firstOrNull()
+                ?: "query"
+            val prefix = template.substringBefore(queryTemplate.value)
+            val suffix = template.substringAfter(queryTemplate.value)
+            val separator = when {
+                operator == "&" -> "&"
+                prefix.contains("?") -> "&"
+                else -> "?"
+            }
+            return "$prefix$separator$parameterName=$encoded$suffix"
+        }
+
+        val expandedQuery = template
+            .replace("{query}", encoded)
+            .replace("{keyword}", encoded)
+        if (expandedQuery != template) return expandedQuery
+
+        val separator = if (template.contains("?")) "&" else "?"
+        return "$template${separator}query=$encoded"
+    }
+
+    private fun String.hasSearchTemplateToken(): Boolean {
+        return contains("{searchTerms}") ||
+            Regex("""\{[?&][^}]+\}""").containsMatchIn(this) ||
+            contains("{query}") ||
+            contains("{keyword}")
+    }
+
+    private const val DefaultSearchCount = "12"
+    private const val DefaultSearchStartPage = "1"
+    private const val DefaultSearchStartIndex = "1"
+    private const val DefaultSearchLanguage = "*"
+    private const val DefaultSearchEncoding = "UTF-8"
+}
+
+object SharedOpdsDownloadNamer {
+    fun cleanFileName(title: String, extension: String): String {
+        val normalizedExtension = extension.takeIf { it.startsWith('.') } ?: ".$extension"
+        val stem = safeFileStem(title)
+        return if (stem.endsWith(normalizedExtension, ignoreCase = true)) stem else "$stem$normalizedExtension"
+    }
+
+    fun resolveExtension(
+        acquisition: OpdsAcquisition,
+        contentDisposition: String?,
+        urlPathSegment: String?
+    ): String {
+        val candidates = listOfNotNull(
+            extractContentDispositionFilename(contentDisposition),
+            urlPathSegment
+        )
+
+        candidates.forEach { candidate ->
+            extensionSuffixFromName(candidate.percentDecode())?.let { return it }
+        }
+
+        return when (acquisition.formatName) {
+            "EPUB" -> ".epub"
+            "PDF" -> ".pdf"
+            "PPTX" -> ".pptx"
+            "MOBI" -> ".mobi"
+            "FB2" -> ".fb2"
+            "CBZ" -> ".cbz"
+            "CBR" -> ".cbr"
+            "CB7" -> ".cb7"
+            "CBT" -> ".cbt"
+            "MD" -> ".md"
+            "HTML" -> ".html"
+            "TXT" -> ".txt"
+            else -> ".epub"
+        }
+    }
+
+    fun safeFileStem(title: String, fallback: String = "opds_book"): String {
+        val safe = title
+            .replace(Regex("""[^\p{L}\p{N}._-]+"""), "_")
+            .trim('_')
+            .take(80)
+        return safe.ifBlank { fallback }
+    }
+
+    fun extractContentDispositionFilename(contentDisposition: String?): String? {
+        if (contentDisposition.isNullOrBlank()) return null
+        val encodedFilename = Regex("""filename\*=UTF-8''([^;]+)""", RegexOption.IGNORE_CASE)
+            .find(contentDisposition)
+            ?.groupValues
+            ?.getOrNull(1)
+        if (!encodedFilename.isNullOrBlank()) return encodedFilename.trim('"')
+
+        return Regex("""filename="?([^";]+)"?""", RegexOption.IGNORE_CASE)
+            .find(contentDisposition)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?.trim('"')
+    }
+
+    private fun extensionSuffixFromName(fileName: String?): String? {
+        if (fileName.isNullOrBlank()) return null
+        val cleanName = fileName.substringBefore('?').substringBefore('#')
+        val extension = cleanName.substringAfterLast('.', missingDelimiterValue = "")
+            .lowercase()
+            .takeIf { it.isNotBlank() }
+            ?: return null
+        if (SharedFileCapabilities.fileTypeForName(cleanName) == com.aryan.reader.shared.FileType.UNKNOWN) return null
+        return ".$extension"
+    }
+}
+
+object SharedOpdsLocalBookMatcher {
+    private const val MAX_MATCH_KEY_INPUT_CHARS = 512
+    fun findBook(entry: OpdsEntry, books: List<BookItem>): BookItem? {
+        return find(
+            entry = entry,
+            books = books,
+            displayName = { it.displayName },
+            path = { it.path }
+        )
+    }
+
+    fun <T> find(
+        entry: OpdsEntry,
+        books: List<T>,
+        displayName: (T) -> String?,
+        path: (T) -> String?
+    ): T? {
+        val entryKeys = entry.matchKeys()
+        return books.firstOrNull { book ->
+            book.matchKeys(displayName, path).any { it in entryKeys }
+        }
+    }
+
+    private fun OpdsEntry.matchKeys(): Set<String> {
+        return buildSet {
+            addNormalized(title)
+            val safeTitle = SharedOpdsDownloadNamer.safeFileStem(title, fallback = "")
+            addNormalized(safeTitle)
+            addNormalized(safeTitle.take(50))
+            acquisitions.forEach { acquisition ->
+                addFileNameKeys(acquisition.url)
+            }
+        }
+    }
+
+    private fun <T> T.matchKeys(
+        displayName: (T) -> String?,
+        path: (T) -> String?
+    ): Set<String> {
+        return buildSet {
+            addFileNameKeys(displayName(this@matchKeys))
+            addFileNameKeys(path(this@matchKeys))
+        }
+    }
+
+    private fun MutableSet<String>.addFileNameKeys(value: String?) {
+        val decodedName = value
+            ?.substringBefore('?')
+            ?.substringBefore('#')
+            ?.substringAfterLast('/')
+            ?.substringAfterLast('\\')
+            ?.take(MAX_MATCH_KEY_INPUT_CHARS)
+            ?.percentDecode()
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+        if (!decodedName.isCredibleFileMatchName()) return
+        addNormalized(decodedName)
+        addNormalized(decodedName.withoutKnownExtension())
+        addNormalized(decodedName.withoutKnownExtension().withoutOpdsDownloadPrefix())
+    }
+
+    private fun String.isCredibleFileMatchName(): Boolean {
+        val stem = withoutKnownExtension().withoutOpdsDownloadPrefix().trim().lowercase()
+        if (stem.isBlank() || stem.all(Char::isDigit)) return false
+        return stem !in setOf("download", "downloads", "file", "book", "opds_book", "acquire", "acquisition")
+    }
+
+    private fun MutableSet<String>.addNormalized(value: String?) {
+        val normalized = value?.normalizedMatchKey() ?: return
+        if (normalized.isNotBlank()) add(normalized)
+    }
+
+    private fun String.withoutKnownExtension(): String {
+        val knownSuffix = SharedFileCapabilities.fileExtensionSuffixForName(this)
+        if (knownSuffix != null && endsWith(knownSuffix, ignoreCase = true)) {
+            return dropLast(knownSuffix.length)
+        }
+        val extension = substringAfterLast('.', missingDelimiterValue = "")
+        return if (extension.length in 1..8 && extension.all { it.isLetterOrDigit() }) {
+            substringBeforeLast('.')
+        } else {
+            this
+        }
+    }
+
+    private fun String.normalizedMatchKey(): String {
+        val decoded = take(MAX_MATCH_KEY_INPUT_CHARS)
+            .percentDecode()
+            .withoutOpdsDownloadPrefix()
+        val normalized = StringBuilder(decoded.length)
+        var previousWasSeparator = true
+        decoded.forEach { char ->
+            if (char.isLetterOrDigit()) {
+                normalized.append(char.lowercaseChar())
+                previousWasSeparator = false
+            } else if (!previousWasSeparator) {
+                normalized.append(' ')
+                previousWasSeparator = true
+            }
+        }
+        return normalized.toString().trim().removePrefix("opds dl ")
+    }
+
+    private fun String.withoutOpdsDownloadPrefix(): String {
+        var index = 0
+        if (!regionMatches(0, "opds", 0, 4, ignoreCase = true)) return this
+        index += 4
+        index = skipOpdsDownloadPrefixSeparators(index)
+        if (!regionMatches(index, "dl", 0, 2, ignoreCase = true)) return this
+        index += 2
+        val afterDl = skipOpdsDownloadPrefixSeparators(index)
+        return if (afterDl > index) substring(afterDl) else this
+    }
+
+    private fun String.skipOpdsDownloadPrefixSeparators(startIndex: Int): Int {
+        var index = startIndex
+        while (index < length) {
+            val char = this[index]
+            if (char != '_' && char != '-' && !char.isWhitespace()) break
+            index += 1
+        }
+        return index
+    }
+}
+
+object SharedOpdsStreamUri {
+    private const val SCHEME_PREFIX = "opds-pse://stream"
+
+    fun build(reference: OpdsStreamReference): String {
+        return "$SCHEME_PREFIX?id=${reference.id.percentEncode()}" +
+            "&count=${reference.count}" +
+            "&url=${reference.urlTemplate.percentEncode()}" +
+            reference.catalogId?.let { "&catalogId=${it.percentEncode()}" }.orEmpty()
+    }
+
+    fun parse(uriString: String?): OpdsStreamReference? {
+        if (uriString.isNullOrBlank() || !uriString.startsWith(SCHEME_PREFIX)) return null
+        val query = uriString.substringAfter('?', missingDelimiterValue = "")
+        val params = query.split('&')
+            .mapNotNull { pair ->
+                if (pair.isBlank()) return@mapNotNull null
+                val key = pair.substringBefore('=').percentDecode()
+                val value = pair.substringAfter('=', missingDelimiterValue = "").percentDecode()
+                key to value
+            }
+            .toMap()
+        val id = params["id"]?.takeIf { it.isNotBlank() } ?: return null
+        val count = params["count"]?.toIntOrNull()?.takeIf { it > 0 } ?: return null
+        val url = params["url"]?.takeIf { it.isNotBlank() } ?: return null
+        return OpdsStreamReference(
+            id = id,
+            count = count,
+            urlTemplate = url,
+            catalogId = params["catalogId"]?.takeIf { it.isNotBlank() }
+        )
+    }
+}
+
+object SharedOpdsStreamRequest {
+    const val DefaultMaxWidth = 1600
+    const val ResourceScheme = "reader-opds-page"
+    private const val RESOURCE_PREFIX = "$ResourceScheme://stream"
+
+    /**
+     * Stream page URLs are used exactly as the feed advertises them (relative
+     * links are already resolved to absolute URLs by the parser). Never
+     * rewrite the host: feeds may legitimately serve pages from a CDN host,
+     * and swapping in the catalog authority can downgrade HTTPS to HTTP and
+     * leak credentials over cleartext.
+     */
+    fun buildPageUrl(
+        reference: OpdsStreamReference,
+        pageIndex: Int,
+        maxWidth: Int = DefaultMaxWidth,
+    ): String {
+        require(pageIndex >= 0) { "OPDS stream page index must be non-negative" }
+        require(maxWidth > 0) { "OPDS stream max width must be positive" }
+        return reference.urlTemplate
+            .replace("{pageNumber}", pageIndex.toString())
+            .replace("{maxWidth}", maxWidth.toString())
+    }
+
+    fun buildResourceUri(
+        reference: OpdsStreamReference,
+        pageIndex: Int,
+        maxWidth: Int = DefaultMaxWidth,
+    ): String {
+        require(pageIndex in 0 until reference.count) {
+            "OPDS stream page index is outside the declared page count"
+        }
+        require(maxWidth > 0) { "OPDS stream max width must be positive" }
+        return "$RESOURCE_PREFIX?id=${reference.id.percentEncode()}" +
+            "&count=${reference.count}" +
+            "&page=$pageIndex" +
+            "&width=$maxWidth" +
+            "&url=${reference.urlTemplate.percentEncode()}" +
+            reference.catalogId?.let { "&catalogId=${it.percentEncode()}" }.orEmpty()
+    }
+
+    fun parseResourceUri(uriString: String?): SharedOpdsStreamPageRequest? {
+        if (uriString.isNullOrBlank() || !uriString.startsWith(RESOURCE_PREFIX)) return null
+        val params = uriString.substringAfter('?', missingDelimiterValue = "")
+            .split('&')
+            .mapNotNull { pair ->
+                if (pair.isBlank()) return@mapNotNull null
+                val key = pair.substringBefore('=').percentDecode()
+                val value = pair.substringAfter('=', missingDelimiterValue = "").percentDecode()
+                key to value
+            }
+            .toMap()
+        val id = params["id"]?.takeIf { it.isNotBlank() } ?: return null
+        val count = params["count"]?.toIntOrNull()?.takeIf { it > 0 } ?: return null
+        val pageIndex = params["page"]?.toIntOrNull()?.takeIf { it in 0 until count } ?: return null
+        val maxWidth = params["width"]?.toIntOrNull()?.takeIf { it > 0 } ?: return null
+        val urlTemplate = params["url"]?.takeIf { it.isNotBlank() } ?: return null
+        return SharedOpdsStreamPageRequest(
+            reference = OpdsStreamReference(
+                id = id,
+                count = count,
+                urlTemplate = urlTemplate,
+                catalogId = params["catalogId"]?.takeIf { it.isNotBlank() },
+            ),
+            pageIndex = pageIndex,
+            maxWidth = maxWidth,
+        )
+    }
+}
+
+/** Streamed books owned by a catalog, used when that catalog is deleted. */
+fun List<BookItem>.opdsStreamBooksForCatalog(catalogId: String): List<BookItem> = filter { book ->
+    SharedOpdsStreamUri.parse(book.path)?.catalogId == catalogId
+}
+
+fun String.percentEncode(): String {
+    val bytes = encodeToByteArray()
+    return buildString(bytes.size) {
+        bytes.forEach { byte ->
+            val value = byte.toInt() and 0xFF
+            val char = value.toChar()
+            if (char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' || char in "-_.~") {
+                append(char)
+            } else {
+                append('%')
+                append(value.toString(16).uppercase().padStart(2, '0'))
+            }
+        }
+    }
+}
+
+fun String.percentDecode(): String {
+    val bytes = mutableListOf<Byte>()
+    var index = 0
+    while (index < length) {
+        val char = this[index]
+        if (char == '%' && index + 2 < length) {
+            val value = substring(index + 1, index + 3).toIntOrNull(16)
+            if (value != null) {
+                bytes += value.toByte()
+                index += 3
+                continue
+            }
+        }
+        val encoded = char.toString().encodeToByteArray()
+        encoded.forEach { bytes += it }
+        index += 1
+    }
+    return bytes.toByteArray().decodeToString()
+}
+
+object SharedOpdsText {
+    fun cleanSummary(summary: String?): String {
+        if (summary.isNullOrBlank()) return ""
+        return stripXmlTags(
+            summary
+                .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
+                .replace(Regex("""</p\s*>""", RegexOption.IGNORE_CASE), "\n\n")
+        )
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    /**
+     * Replaces `<...>` tag spans with a single space, matching the old
+     * `<[^>]+>` behavior exactly: a `<` is only treated as a tag when a
+     * closing `>` exists later (and `<>` is kept literally).
+     *
+     * Single forward pass, O(n). The regex it replaces backtracks
+     * quadratically on text with many `<` and no following `>` (e.g. a long
+     * plain-text summary full of comparisons), which froze the UI thread
+     * for tens of seconds on ~250KB inputs.
+     */
+    fun stripXmlTags(input: String): String {
+        var scanIndex = 0
+        var output: StringBuilder? = null
+        while (scanIndex < input.length) {
+            val nextOpen = input.indexOf('<', scanIndex)
+            if (nextOpen < 0) break
+            val nextClose = input.indexOf('>', nextOpen + 1)
+            // No closing '>' anywhere ahead: no tag can start in the
+            // remainder, so it is kept verbatim without rescanning.
+            if (nextClose < 0) break
+            if (nextClose == nextOpen + 1) {
+                // "<>" is not a tag; keep scanning after this '<'.
+                scanIndex = nextOpen + 1
+                continue
+            }
+            if (output == null) output = StringBuilder(input.length)
+            output.append(input, scanIndex, nextOpen).append(' ')
+            scanIndex = nextClose + 1
+        }
+        if (output == null) return input
+        output.append(input, scanIndex, input.length)
+        return output.toString()
+    }
+}

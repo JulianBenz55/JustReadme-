@@ -1,0 +1,1062 @@
+package com.aryan.reader.shared.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.aryan.reader.shared.AppContrastOption
+import com.aryan.reader.shared.AppThemeMode
+import com.aryan.reader.shared.CustomAppTheme
+import com.materialkolor.PaletteStyle
+import com.materialkolor.dynamicColorScheme
+import kotlin.random.Random
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
+private val SharedLightColorScheme = lightColorScheme(
+    primary = Color(0xFF4C662B),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFCDEDA3),
+    onPrimaryContainer = Color(0xFF354E16),
+    secondary = Color(0xFF586249),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFDCE7C8),
+    onSecondaryContainer = Color(0xFF404A33),
+    tertiary = Color(0xFF386663),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFBCECE7),
+    onTertiaryContainer = Color(0xFF1F4E4B),
+    error = Color(0xFFBA1A1A),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF93000A),
+    background = Color(0xFFF9FAEF),
+    onBackground = Color(0xFF1A1C16),
+    surface = Color(0xFFF9FAEF),
+    onSurface = Color(0xFF1A1C16),
+    surfaceVariant = Color(0xFFE1E4D5),
+    onSurfaceVariant = Color(0xFF44483D),
+    outline = Color(0xFF75796C),
+    outlineVariant = Color(0xFFC5C8BA),
+    scrim = Color(0xFF000000),
+    inverseSurface = Color(0xFF2F312A),
+    inverseOnSurface = Color(0xFFF1F2E6),
+    inversePrimary = Color(0xFFB1D18A),
+    surfaceDim = Color(0xFFDADBD0),
+    surfaceBright = Color(0xFFF9FAEF),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF3F4E9),
+    surfaceContainer = Color(0xFFEEEFE3),
+    surfaceContainerHigh = Color(0xFFE8E9DE),
+    surfaceContainerHighest = Color(0xFFE2E3D8)
+)
+
+private val SharedDarkColorScheme = darkColorScheme(
+    primary = Color(0xFFB1D18A),
+    onPrimary = Color(0xFF1F3701),
+    primaryContainer = Color(0xFF354E16),
+    onPrimaryContainer = Color(0xFFCDEDA3),
+    secondary = Color(0xFFBFCBAD),
+    onSecondary = Color(0xFF2A331E),
+    secondaryContainer = Color(0xFF404A33),
+    onSecondaryContainer = Color(0xFFDCE7C8),
+    tertiary = Color(0xFFA0D0CB),
+    onTertiary = Color(0xFF003735),
+    tertiaryContainer = Color(0xFF1F4E4B),
+    onTertiaryContainer = Color(0xFFBCECE7),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    background = Color(0xFF12140E),
+    onBackground = Color(0xFFE2E3D8),
+    surface = Color(0xFF12140E),
+    onSurface = Color(0xFFE2E3D8),
+    surfaceVariant = Color(0xFF44483D),
+    onSurfaceVariant = Color(0xFFC5C8BA),
+    outline = Color(0xFF8F9285),
+    outlineVariant = Color(0xFF44483D),
+    scrim = Color(0xFF000000),
+    inverseSurface = Color(0xFFE2E3D8),
+    inverseOnSurface = Color(0xFF2F312A),
+    inversePrimary = Color(0xFF4C662B),
+    surfaceDim = Color(0xFF12140E),
+    surfaceBright = Color(0xFF383A32),
+    surfaceContainerLowest = Color(0xFF0C0F09),
+    surfaceContainerLow = Color(0xFF1A1C16),
+    surfaceContainer = Color(0xFF1E201A),
+    surfaceContainerHigh = Color(0xFF282B24),
+    surfaceContainerHighest = Color(0xFF33362E)
+)
+
+@Composable
+fun SharedAppTheme(
+    appThemeMode: AppThemeMode,
+    appContrastOption: AppContrastOption,
+    appTextDimFactorLight: Float,
+    appTextDimFactorDark: Float,
+    appSeedColor: Color?,
+    appFontFamily: FontFamily? = null,
+    content: @Composable () -> Unit
+) {
+    val darkTheme = resolveSharedAppDarkTheme(appThemeMode, isSystemInDarkTheme())
+    val textDimFactor = sharedAppTextDimFactor(darkTheme, appTextDimFactorLight, appTextDimFactorDark)
+    val colorScheme = remember(darkTheme, appContrastOption, textDimFactor, appSeedColor) {
+        sharedAppColorScheme(
+            darkTheme = darkTheme,
+            seedColor = appSeedColor,
+            contrastLevel = appContrastOption.value,
+            textDimFactor = textDimFactor
+        )
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = appFontFamily?.let { Typography().withAppFontFamily(it) } ?: Typography(),
+        content = content
+    )
+}
+
+fun Typography.withAppFontFamily(fontFamily: FontFamily): Typography {
+    return copy(
+        displayLarge = displayLarge.copy(fontFamily = fontFamily),
+        displayMedium = displayMedium.copy(fontFamily = fontFamily),
+        displaySmall = displaySmall.copy(fontFamily = fontFamily),
+        headlineLarge = headlineLarge.copy(fontFamily = fontFamily),
+        headlineMedium = headlineMedium.copy(fontFamily = fontFamily),
+        headlineSmall = headlineSmall.copy(fontFamily = fontFamily),
+        titleLarge = titleLarge.copy(fontFamily = fontFamily),
+        titleMedium = titleMedium.copy(fontFamily = fontFamily),
+        titleSmall = titleSmall.copy(fontFamily = fontFamily),
+        bodyLarge = bodyLarge.copy(fontFamily = fontFamily),
+        bodyMedium = bodyMedium.copy(fontFamily = fontFamily),
+        bodySmall = bodySmall.copy(fontFamily = fontFamily),
+        labelLarge = labelLarge.copy(fontFamily = fontFamily),
+        labelMedium = labelMedium.copy(fontFamily = fontFamily),
+        labelSmall = labelSmall.copy(fontFamily = fontFamily)
+    )
+}
+
+fun resolveSharedAppDarkTheme(mode: AppThemeMode, isSystemDark: Boolean): Boolean {
+    return when (mode) {
+        AppThemeMode.LIGHT -> false
+        AppThemeMode.DARK -> true
+        AppThemeMode.SYSTEM -> isSystemDark
+    }
+}
+
+fun sharedAppTextDimFactor(
+    darkTheme: Boolean,
+    lightFactor: Float,
+    darkFactor: Float
+): Float {
+    return if (darkTheme) darkFactor else lightFactor
+}
+
+fun sharedAppColorScheme(
+    darkTheme: Boolean,
+    seedColor: Color?,
+    contrastLevel: Double,
+    textDimFactor: Float
+): ColorScheme {
+    val baseColorScheme = seedColor?.let {
+        dynamicColorScheme(
+            seedColor = it,
+            isDark = darkTheme,
+            contrastLevel = contrastLevel,
+            style = PaletteStyle.Fidelity
+        )
+    } ?: if (darkTheme) {
+        SharedDarkColorScheme
+    } else {
+        SharedLightColorScheme
+    }
+
+    return baseColorScheme.withTextDimFactor(textDimFactor)
+}
+
+@Composable
+fun SharedAppThemeSettingsDialog(
+    appThemeMode: AppThemeMode,
+    appContrastOption: AppContrastOption,
+    appTextDimFactorLight: Float,
+    appTextDimFactorDark: Float,
+    appSeedColor: Color?,
+    customAppThemes: List<CustomAppTheme>,
+    onThemeModeChanged: (AppThemeMode) -> Unit,
+    onContrastOptionChanged: (AppContrastOption) -> Unit,
+    onTextDimFactorLightChanged: (Float) -> Unit,
+    onTextDimFactorDarkChanged: (Float) -> Unit,
+    onSeedColorChanged: (Color?) -> Unit,
+    onCustomThemeAdded: (CustomAppTheme) -> Unit,
+    onCustomThemeDeleted: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(readerString("app_theme_title", "App theme"), fontWeight = FontWeight.Bold) },
+        text = {
+            SharedAppThemeControls(
+                appThemeMode = appThemeMode,
+                appContrastOption = appContrastOption,
+                appTextDimFactorLight = appTextDimFactorLight,
+                appTextDimFactorDark = appTextDimFactorDark,
+                appSeedColor = appSeedColor,
+                customAppThemes = customAppThemes,
+                onThemeModeChanged = onThemeModeChanged,
+                onContrastOptionChanged = onContrastOptionChanged,
+                onTextDimFactorLightChanged = onTextDimFactorLightChanged,
+                onTextDimFactorDarkChanged = onTextDimFactorDarkChanged,
+                onSeedColorChanged = onSeedColorChanged,
+                onCustomThemeAdded = onCustomThemeAdded,
+                onCustomThemeDeleted = onCustomThemeDeleted,
+                modifier = Modifier
+                    .widthIn(max = 620.dp)
+                    .heightIn(max = 620.dp)
+                    .verticalScroll(rememberScrollState())
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(readerString("action_done", "Done"))
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SharedAppThemeBottomSheet(
+    appThemeMode: AppThemeMode,
+    appContrastOption: AppContrastOption,
+    appTextDimFactorLight: Float,
+    appTextDimFactorDark: Float,
+    appSeedColor: Color?,
+    customAppThemes: List<CustomAppTheme>,
+    onThemeModeChanged: (AppThemeMode) -> Unit,
+    onContrastOptionChanged: (AppContrastOption) -> Unit,
+    onTextDimFactorLightChanged: (Float) -> Unit,
+    onTextDimFactorDarkChanged: (Float) -> Unit,
+    onSeedColorChanged: (Color?) -> Unit,
+    onCustomThemeAdded: (CustomAppTheme) -> Unit,
+    onCustomThemeDeleted: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = readerString("app_theme_title", "App theme"),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            SharedAppThemeControls(
+                appThemeMode = appThemeMode,
+                appContrastOption = appContrastOption,
+                appTextDimFactorLight = appTextDimFactorLight,
+                appTextDimFactorDark = appTextDimFactorDark,
+                appSeedColor = appSeedColor,
+                customAppThemes = customAppThemes,
+                onThemeModeChanged = onThemeModeChanged,
+                onContrastOptionChanged = onContrastOptionChanged,
+                onTextDimFactorLightChanged = onTextDimFactorLightChanged,
+                onTextDimFactorDarkChanged = onTextDimFactorDarkChanged,
+                onSeedColorChanged = onSeedColorChanged,
+                onCustomThemeAdded = onCustomThemeAdded,
+                onCustomThemeDeleted = onCustomThemeDeleted,
+            )
+            Spacer(Modifier.height(16.dp))
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Text(readerString("action_done", "Done"))
+            }
+        }
+    }
+}
+
+@Composable
+fun SharedAppThemeControls(
+    appThemeMode: AppThemeMode,
+    appContrastOption: AppContrastOption,
+    appTextDimFactorLight: Float,
+    appTextDimFactorDark: Float,
+    appSeedColor: Color?,
+    customAppThemes: List<CustomAppTheme>,
+    onThemeModeChanged: (AppThemeMode) -> Unit,
+    onContrastOptionChanged: (AppContrastOption) -> Unit,
+    onTextDimFactorLightChanged: (Float) -> Unit,
+    onTextDimFactorDarkChanged: (Float) -> Unit,
+    onSeedColorChanged: (Color?) -> Unit,
+    onCustomThemeAdded: (CustomAppTheme) -> Unit,
+    onCustomThemeDeleted: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var showCreateDialog by remember { mutableStateOf(false) }
+    val defaultCustomThemeName = readerString("desktop_custom_theme_default", "Custom")
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        SettingsLabel(readerString("app_theme_appearance", "Appearance"))
+        SegmentedControl(
+            values = AppThemeMode.entries,
+            selectedValue = appThemeMode,
+            label = { it.localizedLabel() },
+            onValueSelected = onThemeModeChanged
+        )
+
+        SettingsLabel(readerString("app_theme_contrast", "Contrast"))
+        SegmentedControl(
+            values = AppContrastOption.entries,
+            selectedValue = appContrastOption,
+            label = { it.localizedLabel() },
+            onValueSelected = onContrastOptionChanged
+        )
+
+        if (appThemeMode == AppThemeMode.SYSTEM) {
+            TextBrightnessSlider(
+                label = readerString("app_theme_text_brightness_light", "Text brightness (Light)"),
+                value = appTextDimFactorLight,
+                onValueChange = onTextDimFactorLightChanged
+            )
+            TextBrightnessSlider(
+                label = readerString("app_theme_text_brightness_dark", "Text brightness (Dark)"),
+                value = appTextDimFactorDark,
+                onValueChange = onTextDimFactorDarkChanged
+            )
+        } else {
+            TextBrightnessSlider(
+                label = readerString("app_theme_text_brightness", "Text brightness"),
+                value = if (appThemeMode == AppThemeMode.DARK) appTextDimFactorDark else appTextDimFactorLight,
+                onValueChange = if (appThemeMode == AppThemeMode.DARK) onTextDimFactorDarkChanged else onTextDimFactorLightChanged
+            )
+        }
+
+        SettingsLabel(readerString("app_theme_color_scheme", "Color scheme"))
+        // Android benchmark: keyed lazy rows so swatch recomposition stays scoped
+        // to the changed item.
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            item(key = "dynamic") {
+                ThemeSwatch(
+                    color = MaterialTheme.colorScheme.primary,
+                    selected = appSeedColor == null,
+                    label = readerString("app_theme_dynamic", "Dynamic"),
+                    onClick = { onSeedColorChanged(null) }
+                )
+            }
+            items(AppThemePresets.size, key = { it }) { index ->
+                val preset = AppThemePresets[index]
+                ThemeSwatch(
+                    color = preset.color,
+                    selected = appSeedColor == preset.color,
+                    label = readerString(preset.nameKey, preset.nameFallback),
+                    onClick = { onSeedColorChanged(preset.color) }
+                )
+            }
+        }
+
+        HorizontalDivider()
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SettingsLabel(readerString("theme_my_themes", "My themes"))
+            IconButton(onClick = { showCreateDialog = true }) {
+                Icon(Icons.Default.Add, contentDescription = readerString("content_desc_add_custom_theme", "Add custom theme"))
+            }
+        }
+
+        if (customAppThemes.isEmpty()) {
+            Text(
+                readerString("desktop_no_custom_themes_yet", "No custom themes yet"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(customAppThemes.size, key = { customAppThemes[it].id }) { index ->
+                    val theme = customAppThemes[index]
+                    ThemeSwatch(
+                        color = theme.seedColor,
+                        selected = appSeedColor == theme.seedColor,
+                        label = theme.name,
+                        onClick = { onSeedColorChanged(theme.seedColor) },
+                        onDelete = { onCustomThemeDeleted(theme.id) }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showCreateDialog) {
+        SharedCreateAppThemeDialog(
+            onDismiss = { showCreateDialog = false },
+            onSave = { name, color ->
+                onCustomThemeAdded(
+                    CustomAppTheme(
+                        id = Random.nextLong().toString(),
+                        name = name.ifBlank { defaultCustomThemeName },
+                        seedColor = color
+                    )
+                )
+                showCreateDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsLabel(label: String) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+@Composable
+private fun <T> SegmentedControl(
+    values: List<T>,
+    selectedValue: T,
+    label: @Composable (T) -> String,
+    onValueSelected: (T) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(24.dp))
+            .padding(4.dp)
+    ) {
+        values.forEach { value ->
+            val selected = selectedValue == value
+            val valueLabel = label(value)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .clickable { onValueSelected(value) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = valueLabel,
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TextBrightnessSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsLabel(label)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(24.dp))
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "A",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+            )
+            Slider(
+                value = value.coerceIn(0.3f, 1.0f),
+                onValueChange = { onValueChange(it.coerceIn(0.3f, 1.0f)) },
+                valueRange = 0.3f..1.0f,
+                modifier = Modifier.weight(1f).padding(horizontal = 16.dp)
+            )
+            Text(
+                "A",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThemeSwatch(
+    color: Color,
+    selected: Boolean,
+    label: String,
+    onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(color)
+                .border(
+                    width = if (selected) 3.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
+                    shape = CircleShape
+                )
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = if (color.luminance() > 0.5f) Color.Black else Color.White
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 72.dp)
+            )
+            if (onDelete != null) {
+                // Android benchmark: 48dp hit target around a 16dp glyph, so the
+                // delete affordance is actually tappable.
+                IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = readerString("action_delete", "Delete"),
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedCreateAppThemeDialog(
+    initialColor: Color = Color(0xFF6750A4),
+    onDismiss: () -> Unit,
+    onSave: (String, Color) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var hsv by remember(initialColor) { mutableStateOf(initialColor.toSharedHsvColor()) }
+    val color = hsv.toComposeColor()
+    val defaultCustomThemeName = readerString("desktop_custom_theme_default", "Custom")
+
+    fun updateFromColor(nextColor: Color) {
+        hsv = nextColor.toSharedHsvColor()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(readerString("desktop_create_theme", "Create theme")) },
+        text = {
+            Column(
+                modifier = Modifier.widthIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                SharedStableOutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(readerString("theme_name", "Theme name")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SharedSpectrumBox(
+                    hue = hsv.hue,
+                    saturation = hsv.saturation,
+                    currentColor = color,
+                    onHueSatChanged = { hue, saturation ->
+                        hsv = hsv.copy(hue = hue, saturation = saturation)
+                    },
+                    modifier = Modifier.fillMaxWidth().height(220.dp)
+                )
+
+                SharedBrightnessSlider(
+                    hue = hsv.hue,
+                    saturation = hsv.saturation,
+                    value = hsv.value,
+                    onValueChanged = { hsv = hsv.copy(value = it) },
+                    modifier = Modifier.fillMaxWidth().height(24.dp).clip(RoundedCornerShape(12.dp))
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    SharedColorComparePill(
+                        oldColor = initialColor,
+                        newColor = color,
+                        modifier = Modifier.width(64.dp).height(36.dp)
+                    )
+
+                    Column(
+                        modifier = Modifier.weight(1.6f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(readerString("theme_color_hex", "Hex"), color = Color.Gray, fontSize = 12.sp, maxLines = 1)
+                        Spacer(Modifier.height(4.dp))
+                        SharedHexInput(color = color, onHexChanged = { updateFromColor(it) })
+                    }
+
+                    Row(
+                        modifier = Modifier.weight(2.4f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SharedRgbInputColumn(
+                            label = "R",
+                            value = color.red,
+                            onValueChange = { updateFromColor(color.copy(red = it)) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        SharedRgbInputColumn(
+                            label = "G",
+                            value = color.green,
+                            onValueChange = { updateFromColor(color.copy(green = it)) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        SharedRgbInputColumn(
+                            label = "B",
+                            value = color.blue,
+                            onValueChange = { updateFromColor(color.copy(blue = it)) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(name.trim().ifBlank { defaultCustomThemeName }, color) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = color,
+                    contentColor = if (color.luminance() > 0.5f) Color.Black else Color.White
+                )
+            ) {
+                Text(readerString("action_save", "Save"), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(readerString("action_cancel", "Cancel"))
+            }
+        }
+    )
+}
+
+@Composable
+fun SharedHsvColorPickerDialog(
+    initialColor: Color,
+    title: String,
+    onDismiss: () -> Unit,
+    onSave: (Color) -> Unit,
+    modifier: Modifier = Modifier,
+    resetColor: Color? = null,
+    stateKey: Any? = null,
+    onLiveColorChange: (Color) -> Unit = {},
+    preview: @Composable (Color) -> Unit = {}
+) {
+    val effectiveStateKey = stateKey ?: initialColor
+    var hsv by remember(effectiveStateKey) { mutableStateOf(initialColor.toSharedHsvColor()) }
+    val color = hsv.toComposeColor()
+
+    LaunchedEffect(effectiveStateKey, color) {
+        onLiveColorChange(color)
+    }
+
+    // Android parity (ToolSettingsPopup.kt ColorPickerDialog +
+    // HighlightColorPickerDialog): dark 0xFF2C2C2C surface, pill title,
+    // rectangular spectrum (NOT the wheel), brightness slider, compare pill +
+    // hex + RGB, Cancel (gray) + Done/Save (white). Reset (red) only when
+    // resetColor is provided, like the highlight editor.
+    // The picker body itself is SharedHsvColorPickerEditor, which
+    // SharedHighlightPaletteSlotDialog also builds on.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF2C2C2C),
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .padding(8.dp)
+                .heightIn(max = 600.dp)
+                .then(modifier)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFF3E3E3E), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                SharedHsvColorPickerEditor(
+                    hsv = hsv,
+                    onHsvChange = { hsv = it },
+                    oldColor = initialColor,
+                    stateKey = effectiveStateKey,
+                    preview = preview
+                )
+
+                Spacer(Modifier.height(24.dp))
+
+                if (resetColor != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { hsv = resetColor.toSharedHsvColor() }) {
+                            Text(
+                                readerString("action_reset", "Reset"),
+                                color = Color(0xFFFF5252)
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = onDismiss) {
+                                Text(
+                                    readerString("action_cancel", "Cancel"),
+                                    color = Color.Gray
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Button(
+                                onClick = { onSave(color) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color.White,
+                                    contentColor = Color.Black
+                                )
+                            ) {
+                                Text(
+                                    readerString("action_save", "Save"),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text(
+                                readerString("action_cancel", "Cancel"),
+                                color = Color.Gray
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { onSave(color) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.White,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Text(
+                                readerString("action_done", "Done"),
+                                color = Color.Black
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class SharedReaderThemeColorPickerLabels(
+    val livePreview: String,
+    val previewText: String,
+    val hex: String,
+    val red: String,
+    val green: String,
+    val blue: String,
+    val save: String,
+)
+
+@Composable
+fun SharedReaderThemeColorPickerDialog(
+    initialColor: Color,
+    title: String,
+    backgroundColor: Color,
+    textColor: Color,
+    editingBackground: Boolean,
+    maxDialogHeight: androidx.compose.ui.unit.Dp,
+    labels: SharedReaderThemeColorPickerLabels,
+    onDismiss: () -> Unit,
+    onColorChanged: (Color) -> Unit,
+) {
+    var hsv by remember(initialColor) { mutableStateOf(initialColor.toSharedHsvColor()) }
+    val currentColor = hsv.toComposeColor()
+
+    LaunchedEffect(currentColor) {
+        onColorChanged(currentColor)
+    }
+
+    fun updateFromColor(color: Color) {
+        hsv = color.toSharedHsvColor()
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = Color(0xFF2C2C2C),
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .padding(16.dp)
+                .heightIn(max = maxDialogHeight),
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFF3E3E3E), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                val liveBackground = if (editingBackground) currentColor else backgroundColor
+                val liveText = if (editingBackground) textColor else currentColor
+                Surface(
+                    modifier = Modifier.fillMaxWidth().height(64.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = liveBackground,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(labels.livePreview, color = liveText, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        Text(labels.previewText, color = liveText, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                SharedHsvSpectrumBox(
+                    hue = hsv.hue,
+                    saturation = hsv.saturation,
+                    currentColor = currentColor,
+                    onHueSatChanged = { hue, saturation -> hsv = hsv.copy(hue = hue, saturation = saturation) },
+                    modifier = Modifier.fillMaxWidth().height(220.dp),
+                )
+                Spacer(Modifier.height(20.dp))
+                SharedBrightnessSlider(
+                    hue = hsv.hue,
+                    saturation = hsv.saturation,
+                    value = hsv.value,
+                    onValueChanged = { hsv = hsv.copy(value = it) },
+                    modifier = Modifier.fillMaxWidth().height(24.dp).clip(RoundedCornerShape(12.dp)),
+                    gestureKey = initialColor,
+                )
+                Spacer(Modifier.height(24.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    SharedColorComparePill(initialColor, currentColor, Modifier.width(64.dp).height(36.dp))
+                    Column(Modifier.weight(1.6f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(labels.hex, color = Color.Gray, fontSize = 12.sp, maxLines = 1)
+                        Spacer(Modifier.height(4.dp))
+                        SharedHexInput(currentColor, ::updateFromColor)
+                    }
+                    Row(Modifier.weight(2.4f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SharedRgbInputColumn(labels.red, currentColor.red, { updateFromColor(currentColor.copy(red = it)) }, Modifier.weight(1f))
+                        SharedRgbInputColumn(labels.green, currentColor.green, { updateFromColor(currentColor.copy(green = it)) }, Modifier.weight(1f))
+                        SharedRgbInputColumn(labels.blue, currentColor.blue, { updateFromColor(currentColor.copy(blue = it)) }, Modifier.weight(1f))
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = Color.White)) {
+                        Text(labels.save, color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+private fun ColorScheme.withTextDimFactor(factor: Float): ColorScheme {
+    val dimFactor = factor.coerceIn(0.3f, 1.0f)
+    if (dimFactor >= 1.0f) return this
+    return copy(
+        primary = primary.copy(alpha = dimFactor),
+        secondary = secondary.copy(alpha = dimFactor),
+        tertiary = tertiary.copy(alpha = dimFactor),
+        error = error.copy(alpha = dimFactor),
+        primaryContainer = primaryContainer.copy(alpha = dimFactor),
+        secondaryContainer = secondaryContainer.copy(alpha = dimFactor),
+        tertiaryContainer = tertiaryContainer.copy(alpha = dimFactor),
+        errorContainer = errorContainer.copy(alpha = dimFactor),
+        outline = outline.copy(alpha = dimFactor),
+        outlineVariant = outlineVariant.copy(alpha = dimFactor),
+        inversePrimary = inversePrimary.copy(alpha = dimFactor),
+        inverseOnSurface = inverseOnSurface.copy(alpha = dimFactor),
+        onPrimary = onPrimary.copy(alpha = dimFactor),
+        onSecondary = onSecondary.copy(alpha = dimFactor),
+        onTertiary = onTertiary.copy(alpha = dimFactor),
+        onBackground = onBackground.copy(alpha = dimFactor),
+        onSurface = onSurface.copy(alpha = dimFactor),
+        onSurfaceVariant = onSurfaceVariant.copy(alpha = dimFactor),
+        onError = onError.copy(alpha = dimFactor),
+        onPrimaryContainer = onPrimaryContainer.copy(alpha = dimFactor),
+        onSecondaryContainer = onSecondaryContainer.copy(alpha = dimFactor),
+        onTertiaryContainer = onTertiaryContainer.copy(alpha = dimFactor),
+        onErrorContainer = onErrorContainer.copy(alpha = dimFactor)
+    )
+}
+
+private data class AppThemePreset(
+    val nameKey: String,
+    val nameFallback: String,
+    val color: Color
+)
+
+private val AppThemePresets = listOf(
+    AppThemePreset("desktop_theme_preset_ocean", "Ocean", Color(0xFF00668B)),
+    AppThemePreset("desktop_theme_preset_mint", "Mint", Color(0xFF006C4C)),
+    AppThemePreset("desktop_theme_preset_rose", "Rose", Color(0xFF9C4146)),
+    AppThemePreset("desktop_theme_preset_sepia", "Sepia", Color(0xFF705D49)),
+    AppThemePreset("desktop_theme_preset_amethyst", "Amethyst", Color(0xFF9B59B6)),
+    AppThemePreset("desktop_theme_preset_amber", "Amber", Color(0xFFFFC107)),
+    AppThemePreset("desktop_theme_preset_sapphire", "Sapphire", Color(0xFF0F52BA))
+)
+
+@Composable
+private fun AppThemeMode.localizedLabel(): String {
+    return when (this) {
+        AppThemeMode.SYSTEM -> readerString("language_system_default", "System")
+        AppThemeMode.LIGHT -> readerString("app_theme_mode_light", "Light")
+        AppThemeMode.DARK -> readerString("app_theme_mode_dark", "Dark")
+    }
+}
+
+@Composable
+private fun AppContrastOption.localizedLabel(): String {
+    return when (this) {
+        AppContrastOption.STANDARD -> readerString("app_contrast_standard", "Standard")
+        AppContrastOption.MEDIUM -> readerString("app_contrast_medium", "Medium")
+        AppContrastOption.HIGH -> readerString("app_contrast_high", "High")
+    }
+}
+

@@ -1,0 +1,339 @@
+/*
+ * Episteme Reader - A native Android document reader.
+ * Copyright (C) 2026 Episteme
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * mail: epistemereader@gmail.com
+ */
+package com.aryan.reader.paginatedreader
+
+import android.content.Context
+import timber.log.Timber
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
+import com.aryan.reader.epub.EpubBook
+import com.aryan.reader.epub.EpubChapter
+import com.aryan.reader.epub.contentFilePath
+import com.aryan.reader.paginatedreader.data.BookCacheDao
+import com.aryan.reader.paginatedreader.data.ProcessedChapter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.encodeToByteArray
+import kotlinx.serialization.protobuf.ProtoBuf
+import java.io.File
+import com.aryan.reader.shared.reader.MOBILE_EPUB_MAX_LOCATOR_ON_DEMAND_HTML_BYTES
+import com.aryan.reader.shared.reader.MOBILE_EPUB_MAX_LOCATOR_ON_DEMAND_HTML_CHARS
+
+typealias Locator = ReaderNavigationTarget
+
+/**
+ * Converts between view-specific locators (like CFI) and the abstract Locator model.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+class LocatorConverter(
+    private val bookCacheDao: BookCacheDao,
+    private val proto: ProtoBuf,
+    private val context: Context,
+    private val stableBookId: String? = null
+) {
+    private val chapterProcessingLocksGuard = Mutex()
+    private val chapterProcessingLocks = mutableMapOf<Pair<String, Int>, Mutex>()
+
+    private fun cacheBookId(book: EpubBook, overrideBookId: String? = null): String {
+        return overrideBookId ?: stableBookId ?: book.title
+    }
+
+    private suspend fun chapterProcessingLockFor(bookId: String, chapterIndex: Int): Mutex {
+        return chapterProcessingLocksGuard.withLock {
+            chapterProcessingLocks.getOrPut(bookId to chapterIndex) { Mutex() }
+        }
+    }
+
+    private suspend fun processAndCacheChapter(
+        book: EpubBook,
+        chapterIndex: Int,
+        explicitBookId: String? = null
+    ): List<SemanticBlock>? {
+        val cacheBookId = cacheBookId(book, explicitBookId)
+        val processingLock = chapterProcessingLockFor(cacheBookId, chapterIndex)
+        return processingLock.withLock {
+            decodeCachedBlocks(getProcessedChapterSafely(cacheBookId, chapterIndex), chapterIndex)?.takeIf { it.isNotEmpty() }?.let {
+                return@withLock it
+            }
+
+            withContext(Dispatchers.IO) {
+                Timber.tag("POS_DIAG").d("processAndCacheChapter: Processing for bookId='$cacheBookId' index=$chapterIndex")
+                try {
+                    val chapter = book.chapters.getOrNull(chapterIndex) ?: return@withContext null
+                    val htmlToParse = readChapterHtmlForLocator(book, chapter, chapterIndex)
+
+                    if (htmlToParse.isNullOrBlank()) {
+                        return@withContext null
+                    }
+
+                    val mergedByTag = mutableMapOf<String, MutableList<CssRule>>()
+                    val mergedByClass = mutableMapOf<String, MutableList<CssRule>>()
+                    val mergedById = mutableMapOf<String, MutableList<CssRule>>()
+                    val mergedOtherComplex = mutableListOf<CssRule>()
+
+                    val density = Density(context)
+                    val displayMetrics = context.resources.displayMetrics
+                    val constraints = Constraints(maxWidth = displayMetrics.widthPixels, maxHeight = displayMetrics.heightPixels)
+
+                    fun aggregateRules(
+                        target: MutableMap<String, MutableList<CssRule>>,
+                        source: Map<String, List<CssRule>>
+                    ) {
+                        source.forEach { (k, v) ->
+                            target.getOrPut(k) { mutableListOf() }.addAll(v)
+                        }
+                    }
+
+                    book.css.forEach { (path, content) ->
+                        val bookCssResult = CssParser.parse(
+                            cssContent = content,
+                            cssPath = path,
+                            baseFontSizeSp = 16f,
+                            density = density.density,
+                            constraints = constraints,
+                            isDarkTheme = false,
+                            adaptThemeColors = false
+                        )
+
+                        val rules = bookCssResult.rules
+                        aggregateRules(mergedByTag, rules.byTag)
+                        aggregateRules(mergedByClass, rules.byClass)
+                        aggregateRules(mergedById, rules.byId)
+                        mergedOtherComplex.addAll(rules.otherComplex)
+                    }
+
+                    val parsingCssRules = OptimizedCssRules(
+                        byTag = mergedByTag,
+                        byClass = mergedByClass,
+                        byId = mergedById,
+                        otherComplex = mergedOtherComplex
+                    )
+
+                    val semanticBlocks = androidHtmlToSemanticBlocks(
+                        html = htmlToParse,
+                        cssRules = parsingCssRules,
+                        textStyle = TextStyle(),
+                        chapterAbsPath = chapter.absPath,
+                        extractionBasePath = book.extractionBasePath,
+                        density = density,
+                        fontFamilyMap = emptyMap(),
+                        constraints = constraints,
+                        adaptThemeColors = false
+                    )
+
+                    val protoBytes = proto.encodeToByteArray(semanticBlocks)
+                    val newCacheEntry = ProcessedChapter(
+                        bookId = cacheBookId,
+                        chapterIndex = chapterIndex,
+                        contentBlocksProto = protoBytes,
+                        estimatedPageCount = estimateSemanticPageCount(semanticBlocks)
+                    )
+                    bookCacheDao.insertProcessedChapters(listOf(newCacheEntry))
+                    semanticBlocks
+                } catch (e: OutOfMemoryError) {
+                    Timber.e(e, "Out of memory while processing locator cache for chapter $chapterIndex")
+                    null
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun readChapterHtmlForLocator(
+        book: EpubBook,
+        chapter: EpubChapter,
+        chapterIndex: Int
+    ): String? {
+        chapter.htmlContent.takeIf { it.isNotBlank() }?.let { inlineHtml ->
+            if (inlineHtml.length > MOBILE_EPUB_MAX_LOCATOR_ON_DEMAND_HTML_CHARS) {
+                Timber.w(
+                    "Skipping on-demand locator processing for chapter $chapterIndex: " +
+                        "inline HTML is ${inlineHtml.length} chars"
+                )
+                return null
+            }
+            return inlineHtml
+        }
+
+        return try {
+            val file = File(book.extractionBasePath, chapter.contentFilePath())
+            if (!file.isFile) return null
+            if (file.length() > MOBILE_EPUB_MAX_LOCATOR_ON_DEMAND_HTML_BYTES) {
+                Timber.w(
+                    "Skipping on-demand locator processing for chapter $chapterIndex: " +
+                        "HTML file is ${file.length()} bytes"
+                )
+                return null
+            }
+            file.bufferedReader().use { it.readText() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun decodeCachedBlocks(
+        processedChapter: ProcessedChapter?,
+        chapterIndex: Int
+    ): List<SemanticBlock>? {
+        if (processedChapter == null || processedChapter.contentBlocksProto.isEmpty()) {
+            return null
+        }
+        return try {
+            proto.decodeFromByteArray<List<SemanticBlock>>(processedChapter.contentBlocksProto)
+        } catch (e: OutOfMemoryError) {
+            Timber.e(e, "Out of memory while decoding locator cache for chapter $chapterIndex")
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun getProcessedChapterSafely(bookId: String, chapterIndex: Int): ProcessedChapter? {
+        return try {
+            bookCacheDao.getProcessedChapter(bookId = bookId, chapterIndex = chapterIndex)
+        } catch (e: OutOfMemoryError) {
+            Timber.e(e, "Out of memory while loading locator cache for chapter $chapterIndex")
+            null
+        }
+    }
+
+    suspend fun getLocatorFromCfi(book: EpubBook, chapterIndex: Int, cfi: String, bookId: String? = null): Locator? = withContext(Dispatchers.IO) {
+        Timber.tag("POS_DIAG").d("getLocatorFromCfi: Input CFI='$cfi' for chapterIndex=$chapterIndex")
+        val processedChapter = getProcessedChapterSafely(bookId = cacheBookId(book, bookId), chapterIndex = chapterIndex)
+
+        var allBlocks = decodeCachedBlocks(processedChapter, chapterIndex)
+
+        if (allBlocks.isNullOrEmpty()) {
+            allBlocks = processAndCacheChapter(book, chapterIndex, bookId)
+        }
+
+        if (allBlocks.isNullOrEmpty()) {
+            return@withContext null
+        }
+
+        val parsedCfi = parseSemanticCfi(cfi)
+        val bestMatch = findBestMatchingSemanticBlock(allBlocks, parsedCfi.basePath)
+
+        if (bestMatch != null) {
+            val absoluteCharOffset = when (bestMatch) {
+                is SemanticTextBlock -> {
+                    val localOffset = parsedCfi.charOffset.coerceIn(0, bestMatch.text.length)
+                    bestMatch.startCharOffsetInSource + localOffset
+                }
+                else -> parsedCfi.charOffset.coerceAtLeast(0)
+            }
+            val locator = Locator(
+                chapterIndex = chapterIndex,
+                blockIndex = bestMatch.blockIndex,
+                charOffset = absoluteCharOffset
+            )
+            Timber.tag("POS_DIAG").d("getLocatorFromCfi: Successfully resolved to $locator")
+            locator
+        } else {
+            Timber.tag("POS_DIAG").e("getLocatorFromCfi: Failed to find semantic block match for CFI path ${parsedCfi.basePath}")
+            null
+        }
+    }
+
+    suspend fun getTtsChunksForChapter(book: EpubBook, chapterIndex: Int, bookId: String? = null): List<TtsChunk>? = withContext(Dispatchers.IO) {
+        val processedChapter = getProcessedChapterSafely(bookId = cacheBookId(book, bookId), chapterIndex = chapterIndex)
+
+        var allBlocks = decodeCachedBlocks(processedChapter, chapterIndex)
+
+        if (allBlocks.isNullOrEmpty()) {
+            allBlocks = processAndCacheChapter(book, chapterIndex, bookId)
+        }
+
+        if (allBlocks.isNullOrEmpty()) return@withContext null
+
+        val chunks = mutableListOf<TtsChunk>()
+
+        fun traverse(blocks: List<SemanticBlock>) {
+            for (block in blocks) {
+                if (block is SemanticTextBlock && block.cfi != null && block.text.isNotBlank()) {
+                    // Offsets come from the splitter rather than a search for each chunk's first
+                    // word, which drifts by the whitespace the split removed and so records a
+                    // position earlier than the text it names.
+                    com.aryan.reader.tts.splitTextIntoChunksWithSourceOffsets(block.text)
+                        .forEach { span ->
+                            chunks.add(
+                                TtsChunk(
+                                    text = span.text,
+                                    sourceCfi = block.cfi!!,
+                                    startOffsetInSource =
+                                        block.startCharOffsetInSource + span.startOffsetInSource
+                                )
+                            )
+                        }
+                }
+                when (block) {
+                    is SemanticFlexContainer -> traverse(block.children)
+                    is SemanticTable -> block.rows.forEach { row -> row.forEach { cell -> traverse(cell.content) } }
+                    is SemanticList -> traverse(block.items)
+                    is SemanticWrappingBlock -> traverse(block.paragraphsToWrap)
+                    else -> Unit
+                }
+            }
+        }
+
+        traverse(allBlocks)
+        chunks
+    }
+
+    suspend fun getCfiFromLocator(book: EpubBook, locator: Locator, bookId: String? = null): String? = withContext(Dispatchers.IO) {
+        Timber.tag("POS_DIAG").d("getCfiFromLocator: Input $locator")
+        val processedChapter = getProcessedChapterSafely(bookId = cacheBookId(book, bookId), chapterIndex = locator.chapterIndex)
+
+        var blocks = decodeCachedBlocks(processedChapter, locator.chapterIndex)
+
+        if (blocks.isNullOrEmpty()) {
+            blocks = processAndCacheChapter(book, locator.chapterIndex, bookId)
+        }
+
+        if (blocks.isNullOrEmpty()) {
+            return@withContext null
+        }
+
+        val foundBlock = findSemanticBlockByIndex(blocks, locator.blockIndex)
+        val resultCfi = foundBlock?.let { semanticCfiForBlock(it, locator.charOffset) }
+        Timber.tag("POS_DIAG").d("getCfiFromLocator: Resulting CFI='$resultCfi'")
+        resultCfi
+    }
+
+    suspend fun getTextOffset(book: EpubBook, locator: Locator, bookId: String? = null): Int? = withContext(Dispatchers.IO) {
+        val processedChapter = getProcessedChapterSafely(bookId = cacheBookId(book, bookId), chapterIndex = locator.chapterIndex)
+
+        var allBlocks = decodeCachedBlocks(processedChapter, locator.chapterIndex)
+
+        if (allBlocks.isNullOrEmpty()) {
+            allBlocks = processAndCacheChapter(book, locator.chapterIndex, bookId)
+        }
+
+        if (allBlocks.isNullOrEmpty()) return@withContext null
+
+        return@withContext semanticTextOffset(allBlocks, locator.blockIndex, locator.charOffset)
+    }
+}

@@ -1,0 +1,82 @@
+package com.aryan.reader.shared
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class SharedAppThemeReducerTest {
+
+    @Test
+    fun `app appearance actions update shared settings`() {
+        val seedColor = Color(0xFF006C4C)
+        val state = SharedReaderScreenState()
+            .reduce(AppAction.AppThemeChanged(AppThemeMode.DARK))
+            .reduce(AppAction.AppContrastChanged(AppContrastOption.HIGH))
+            .reduce(AppAction.AppTextDimFactorLightChanged(0.75f))
+            .reduce(AppAction.AppTextDimFactorDarkChanged(0.65f))
+            .reduce(AppAction.AppSeedColorChanged(seedColor))
+            .reduce(AppAction.AppFontPreferenceChanged(AppFontPreference.Monospace))
+
+        assertEquals(AppThemeMode.DARK, state.appThemeMode)
+        assertEquals(AppContrastOption.HIGH, state.appContrastOption)
+        assertEquals(0.75f, state.appTextDimFactorLight)
+        assertEquals(0.65f, state.appTextDimFactorDark)
+        assertEquals(seedColor, state.appSeedColor)
+        assertEquals(AppFontPreference.Monospace, state.appFontPreference)
+    }
+
+    @Test
+    fun `custom app theme add replaces matching id and selects seed color`() {
+        val first = CustomAppTheme(id = "theme", name = "First", seedColor = Color(0xFF123456))
+        val second = CustomAppTheme(id = "theme", name = "Second", seedColor = Color(0xFF654321))
+
+        val state = SharedReaderScreenState()
+            .reduce(AppAction.CustomAppThemeAdded(first))
+            .reduce(AppAction.CustomAppThemeAdded(second))
+
+        assertEquals(listOf(second), state.customAppThemes)
+        assertEquals(second.seedColor, state.appSeedColor)
+    }
+
+    @Test
+    fun `deleting selected custom app theme clears orphaned seed color`() {
+        val theme = CustomAppTheme(id = "forest", name = "Forest", seedColor = Color(0xFF006C4C))
+        val state = SharedReaderScreenState()
+            .reduce(AppAction.CustomAppThemeAdded(theme))
+            .reduce(AppAction.CustomAppThemeDeleted(theme.id))
+
+        assertTrue(state.customAppThemes.isEmpty())
+        assertNull(state.appSeedColor)
+    }
+
+    @Test
+    fun `text dim factors stay inside supported slider range`() {
+        val state = SharedReaderScreenState()
+            .reduce(AppAction.AppTextDimFactorLightChanged(0.1f))
+            .reduce(AppAction.AppTextDimFactorDarkChanged(1.2f))
+
+        assertEquals(0.3f, state.appTextDimFactorLight)
+        assertEquals(1.0f, state.appTextDimFactorDark)
+    }
+
+    @Test
+    fun `custom app font preference without an id falls back to system`() {
+        val state = SharedReaderScreenState()
+            .reduce(AppAction.AppFontPreferenceChanged(AppFontPreference(AppFontPreferenceKind.CUSTOM)))
+
+        assertEquals(AppFontPreference.System, state.appFontPreference)
+    }
+
+    @Test
+    fun `baseline app font family matches android benchmark`() {
+        assertNull(AppFontPreference.System.toBaselineAppFontFamily())
+        assertEquals(FontFamily.Serif, AppFontPreference.Serif.toBaselineAppFontFamily())
+        assertEquals(FontFamily.SansSerif, AppFontPreference.SansSerif.toBaselineAppFontFamily())
+        assertEquals(FontFamily.Monospace, AppFontPreference.Monospace.toBaselineAppFontFamily())
+        // CUSTOM needs a platform file lookup, so the shared baseline stays null.
+        assertNull(AppFontPreference.custom("font-id").toBaselineAppFontFamily())
+    }
+}

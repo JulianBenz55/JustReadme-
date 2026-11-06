@@ -1,0 +1,66 @@
+package com.aryan.reader
+
+import android.content.Intent
+import com.aryan.reader.shared.ExternalDocumentOpenMode
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ExternalFileOpenRouteDeciderTest {
+    @Test
+    fun `temporary behavior routes to temporary activity`() {
+        assertTrue(ExternalFileOpenRouteDecider.shouldOpenTemporary("TEMPORARY"))
+        assertEquals(
+            TemporaryExternalFileActivity::class.java,
+            ExternalFileOpenRouteDecider.targetActivityClass("TEMPORARY")
+        )
+    }
+
+    @Test
+    fun `existing behaviors route to main activity`() {
+        listOf(null, "ASK", "KEEP", "COPY", "DELETE", "temporary", "unknown").forEach { behavior ->
+            assertFalse(ExternalFileOpenRouteDecider.shouldOpenTemporary(behavior))
+            assertEquals(
+                MainActivity::class.java,
+                ExternalFileOpenRouteDecider.targetActivityClass(behavior)
+            )
+        }
+    }
+    @Test
+    fun `internal forward keeps uri grants but drops source task flags`() {
+        val sourceFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+
+        val forwardedFlags = ExternalFileOpenRouteDecider.flagsForInternalForward(sourceFlags)
+
+        assertEquals(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                Intent.FLAG_ACTIVITY_NEW_TASK,
+            forwardedFlags
+        )
+    }
+
+    @Test
+    fun `temporary behavior only applies to single document handoffs`() {
+        assertTrue(
+            ExternalFileOpenRouteDecider.shouldOpenTemporarily(
+                externalFileBehavior = "TEMPORARY",
+                openMode = ExternalDocumentOpenMode.OPEN_SINGLE,
+            )
+        )
+        assertFalse(
+            ExternalFileOpenRouteDecider.shouldOpenTemporarily(
+                externalFileBehavior = "TEMPORARY",
+                openMode = ExternalDocumentOpenMode.IMPORT_BATCH,
+            )
+        )
+    }
+}

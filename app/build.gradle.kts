@@ -1,0 +1,362 @@
+@file:Suppress("UnstableApiUsage")
+
+import java.util.Properties
+import java.io.StringReader
+import javax.xml.parsers.DocumentBuilderFactory
+import com.android.build.api.artifact.SingleArtifact
+import org.gradle.api.tasks.PathSensitivity
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.tasks.Copy
+import org.xml.sax.InputSource
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.ksp)
+    id("com.diffplug.spotless") version "8.2.1"
+    alias(libs.plugins.kover)
+}
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+
+fun configuredAppLocaleTags(): Set<String> {
+    val localesConfigXml = providers
+        .fileContents(layout.projectDirectory.file("src/main/res/xml/locales_config.xml"))
+        .asText
+        .get()
+    val androidNamespace = "http://schemas.android.com/apk/res/android"
+    val document = DocumentBuilderFactory.newInstance()
+        .apply { isNamespaceAware = true }
+        .newDocumentBuilder()
+        .parse(InputSource(StringReader(localesConfigXml)))
+    val localeNodes = document.getElementsByTagName("locale")
+
+    return buildSet {
+        for (index in 0 until localeNodes.length) {
+            val name = localeNodes.item(index)
+                .attributes
+                ?.getNamedItemNS(androidNamespace, "name")
+                ?.nodeValue
+                ?.takeIf { it.isNotBlank() }
+            if (name != null) add(name)
+        }
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_21)
+    }
+}
+
+android {
+    namespace = "com.aryan.reader"
+    compileSdk = 37
+    compileSdkMinor = 0
+
+    defaultConfig {
+        applicationId = "com.aryan.reader"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 64
+        versionName = "1.0.58"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        externalNativeBuild {
+            cmake {
+                cppFlags += ""
+            }
+        }
+        buildConfigField("boolean", "IS_PRO", "false")
+        buildConfigField("boolean", "IS_OFFLINE", "true")
+    }
+
+    flavorDimensions += "version"
+    productFlavors {
+        create("oss") {
+            dimension = "version"
+            applicationIdSuffix = ".oss"
+            versionNameSuffix = "-oss"
+            buildConfigField("String", "AI_WORKER_URL", "\"\"")
+            buildConfigField("String", "VERIFIER_WORKER_URL", "\"\"")
+            buildConfigField("String", "FEEDBACK_WORKER_URL", "\"\"")
+            buildConfigField("boolean", "IS_PRO", "false")
+            buildConfigField("String", "TTS_WORKER_URL", "\"\"")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            excludes += "**/libbrotlienc.so"
+            excludes += "**/libbrotlidec.so"
+            excludes += "**/libbrotlicommon.so"
+        }
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/services/io.grpc.LoadBalancerProvider"
+            excludes += "composeResources/**"
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            val storePath = localProperties.getProperty("MYAPP_RELEASE_STORE_FILE")
+            if (!storePath.isNullOrEmpty()) {
+                storeFile = file(storePath)
+                storePassword = localProperties.getProperty("MYAPP_RELEASE_STORE_PASSWORD")
+                keyAlias = localProperties.getProperty("MYAPP_RELEASE_KEY_ALIAS")
+                keyPassword = localProperties.getProperty("MYAPP_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            val storePath = localProperties.getProperty("MYAPP_RELEASE_STORE_FILE")
+            if (!storePath.isNullOrEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+
+        create("releaseOffline") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            buildConfigField("boolean", "IS_OFFLINE", "true")
+            buildConfigField("String", "TTS_WORKER_URL", "\"\"")
+            isShrinkResources = true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+    androidResources {
+        localeFilters += configuredAppLocaleTags()
+            .map { it.toAndroidResourceConfiguration() }
+    }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+    publishing {
+        singleVariant("release") {
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        unitTests.all {
+            it.maxHeapSize = "4g"
+            it.jvmArgs("-Xss2m")
+            // The resource-contract tests (launcher icon, string resources) read src/main/res
+            // straight off disk rather than through the merged resources, so Gradle sees no
+            // input change when only an asset does and skips them as up-to-date. That leaves
+            // the launcher icon's own contract green against an icon it no longer describes,
+            // which is the one case it exists to catch -- regenerating the icon changes nothing
+            // else the test task depends on.
+            it.inputs.dir(layout.projectDirectory.dir("src/main/res"))
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+                .optional()
+        }
+    }
+    configurations {
+        named("testImplementation") {
+            exclude(group = "org.slf4j", module = "slf4j-android")
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        val flavor = variant.productFlavors.firstOrNull()?.second.orEmpty()
+        val buildType = variant.buildType.orEmpty()
+        val versionName = variant.outputs.single().versionName
+        val taskName = "copy${variant.name.replaceFirstChar { it.uppercase() }}Apk"
+
+        val copyApk = tasks.register<Copy>(taskName) {
+            from(variant.artifacts.get(SingleArtifact.APK))
+            include("*.apk")
+            into(layout.buildDirectory.dir("outputs/renamed-apk/${variant.name}"))
+            rename {
+                "Episteme-$flavor-v${versionName.get()}-$buildType.apk"
+            }
+        }
+
+        val assembleTaskName = "assemble${variant.name.replaceFirstChar { it.uppercase() }}"
+        tasks.configureEach {
+            if (name == assembleTaskName) {
+                finalizedBy(copyApk)
+            }
+        }
+    }
+}
+
+fun String.toAndroidResourceConfiguration(): String {
+    if (this == "id") return "in"
+
+    val languageTagParts = split("-")
+    return if (languageTagParts.size == 2 && languageTagParts[1].length == 2) {
+        "${languageTagParts[0]}-r${languageTagParts[1].uppercase()}"
+    } else {
+        this
+    }
+}
+
+kover {
+    reports {
+        filters {
+            excludes {
+                classes(
+                    "*.BuildConfig",
+                    "*.ComposableSingletons*",
+                    "*_Impl",
+                    "*Database_Impl",
+                    "*Dao_Impl"
+                )
+            }
+        }
+    }
+}
+//noinspection UseTomlInstead
+dependencies {
+
+    implementation(project(":shared"))
+
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.material3.window.size.class1.android)
+    implementation(libs.androidx.credentials)
+
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation("androidx.test.espresso:espresso-web:3.7.0")
+    androidTestImplementation("com.google.truth:truth:1.4.2")
+    androidTestImplementation("androidx.navigation:navigation-testing:2.10.0")
+    androidTestImplementation("io.mockk:mockk-android:1.13.11") {
+        exclude(group = "org.junit.jupiter")
+    }
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+
+    debugImplementation(libs.androidx.ui.test.manifest)
+
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+
+    ksp(libs.androidx.room.compiler)
+
+    implementation("androidx.appcompat:appcompat:1.7.1")
+
+    //noinspection GradleDependency (Updating these might cause the custom toolbox in pagination to break)
+    implementation("androidx.navigation:navigation-compose:2.10.0")
+    //noinspection GradleDependency
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.2")
+    //noinspection GradleDependency
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
+    //noinspection GradleDependency
+    implementation("androidx.compose.material3.adaptive:adaptive:1.2.0-alpha11")
+
+    implementation("org.jsoup:jsoup:1.17.2")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf:1.7.3")
+
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-svg:2.7.0")
+
+    implementation("androidx.media3:media3-exoplayer:1.10.1")
+    implementation("androidx.media3:media3-session:1.10.1")
+    implementation("androidx.media3:media3-ui:1.10.1")
+
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
+    implementation("androidx.compose.runtime:runtime-livedata:1.9.3")
+
+    implementation("org.slf4j:slf4j-android:1.7.36")
+
+    implementation("org.commonmark:commonmark:0.22.0")
+
+    implementation("com.jakewharton.timber:timber:5.0.1")
+
+    implementation("me.zhanghai.android.libarchive:library:1.1.6")
+
+    implementation("androidx.paging:paging-runtime-ktx:3.3.6")
+    implementation("androidx.paging:paging-compose:3.3.6")
+    implementation("androidx.room:room-paging:2.7.1")
+
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.browser:browser:1.8.0")
+
+    implementation("io.legere:pdfiumandroid:2.0.0")
+    implementation("org.zwobble.mammoth:mammoth:1.4.2")
+
+    implementation("com.materialkolor:material-kolor:5.0.0-alpha07")
+
+    debugImplementation("org.tensorflow:tensorflow-lite:2.17.0")
+    debugImplementation("org.tensorflow:tensorflow-lite-support:0.5.0")
+    debugImplementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
+    debugImplementation("org.tensorflow:tensorflow-lite-gpu-api:2.17.0")
+
+    implementation("androidx.core:core-splashscreen:1.2.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.google.truth:truth:1.4.2")
+    testImplementation("io.mockk:mockk-android:1.14.9")
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation("org.json:json:20251224")
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("org.slf4j:slf4j-nop:2.0.17")
+}
+
+spotless {
+    kotlin {
+        target("src/main/java/**/*.kt", "src/main/kotlin/**/*.kt")
+        licenseHeaderFile(rootProject.file("spotless/copyright.kt"))
+    }
+    cpp {
+        target("src/main/cpp/mobi_jni_bridge.c", "src/main/cpp/Woff2Converter.cpp")
+        licenseHeaderFile(rootProject.file("spotless/copyright.kt"))
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        if (variant.buildType != "debug") {
+            variant.externalNativeBuild?.abiFilters?.set(setOf("arm64-v8a", "armeabi-v7a"))
+            variant.packaging.jniLibs.excludes.addAll(
+                setOf("**/x86/**", "**/x86_64/**")
+            )
+        }
+    }
+}

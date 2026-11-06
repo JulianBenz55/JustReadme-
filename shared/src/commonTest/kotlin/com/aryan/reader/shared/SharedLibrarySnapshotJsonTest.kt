@@ -1,0 +1,465 @@
+package com.aryan.reader.shared
+
+import androidx.compose.ui.graphics.Color
+import com.aryan.reader.shared.pdf.SharedPdfReaderViewport
+import com.aryan.reader.shared.reader.ReaderBookmark
+import com.aryan.reader.shared.reader.ReaderPageSpreadMode
+import com.aryan.reader.shared.reader.ReaderReadingMode
+import com.aryan.reader.shared.reader.ReaderSettings
+import com.aryan.reader.shared.reader.DefaultIosPdfReaderSettings
+import com.aryan.reader.shared.reader.DefaultPdfReaderSettings
+import com.aryan.reader.shared.reader.SharedReaderTextAlign
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import androidx.compose.ui.graphics.toArgb
+
+class SharedLibrarySnapshotJsonTest {
+
+    @Test
+    fun `missing settings use android recent and external-file defaults`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty("""{"schemaVersion":26}""")
+
+        assertEquals(0, decoded.recentFilesLimit)
+        assertEquals("ASK", decoded.externalFileBehavior)
+        assertFalse(decoded.isFolderSyncEnabled)
+        assertEquals(SortOrder.RECENT, decoded.sortOrder)
+        assertEquals(LibraryFilters(), decoded.libraryFilters)
+        assertEquals(0, decoded.mainScreenStartPage)
+        assertEquals(0, decoded.libraryScreenStartPage)
+        assertFalse(decoded.hideReaderAi)
+    }
+
+    @Test
+    fun `legacy ios copy behavior migrates to android keep behavior`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(
+            """{"schemaVersion":26,"externalFileBehavior":"COPY"}"""
+        )
+
+        assertEquals("KEEP", decoded.externalFileBehavior)
+    }
+
+    @Test
+    fun `legacy ios recent limits migrate to nearest android option`() {
+        assertEquals(
+            10,
+            SharedLibrarySnapshotJson.decodeOrEmpty(
+                """{"schemaVersion":26,"recentFilesLimit":12}"""
+            ).recentFilesLimit
+        )
+        assertEquals(
+            20,
+            SharedLibrarySnapshotJson.decodeOrEmpty(
+                """{"schemaVersion":26,"recentFilesLimit":24}"""
+            ).recentFilesLimit
+        )
+    }
+    @Test
+    fun `cloud book tombstones survive snapshot round trip`() {
+        val tombstone = CloudBookTombstone(
+            bookId = "deleted-book",
+            type = FileType.PDF.name,
+            deletedAt = 1234L,
+        )
+
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(
+            SharedLibrarySnapshotJson.encode(
+                SharedLibrarySnapshot(bookTombstones = listOf(tombstone))
+            )
+        )
+
+        assertEquals(listOf(tombstone), decoded.bookTombstones)
+    }
+
+
+    @Test
+    fun `snapshot json round trips library records used by desktop persistence`() {
+        val tag = Tag(id = "favorite", name = "Favorite", color = 7)
+        val snapshot = SharedLibrarySnapshot(
+            books = listOf(
+                BookItem(
+                    id = "book",
+                    path = "C:/Books/book.epub",
+                    type = FileType.EPUB,
+                    displayName = "book.epub",
+                    timestamp = 10L,
+                    coverImagePath = "C:/Covers/book.png",
+                    title = "Book",
+                    author = "Ada",
+                    description = "<p>A compact shared summary.</p>",
+                    originalTitle = "Original Book",
+                    originalAuthor = "Original Ada",
+                    originalSeriesName = "Original Series",
+                    originalSeriesIndex = 1.0,
+                    originalDescription = "Original summary",
+                    progressPercentage = 42f,
+                    fileSize = 99L,
+                    fileContentModifiedTimestamp = 123_456L,
+                    metadataModifiedTimestamp = 8_500L,
+                    isAvailable = false,
+                    sourceFolder = "C:/Books",
+                    folderTextMetadataParsed = true,
+                    seriesName = "Series",
+                    seriesIndex = 2.0,
+                    tags = listOf(tag),
+                    lastPageIndex = 4,
+                    readerPosition = ReaderLocator(
+                        chapterIndex = 1,
+                        pageIndex = 4,
+                        startOffset = 220,
+                        endOffset = 220,
+                        textQuote = "Precise place",
+                        cfi = "desktop:1:220:220"
+                    ),
+                    readerSettings = ReaderSettings(
+                        fontSize = 22,
+                        lineSpacing = 1.7f,
+                        margin = 64,
+                        darkMode = true,
+                        readingMode = ReaderReadingMode.VERTICAL,
+                        textAlign = SharedReaderTextAlign.JUSTIFY,
+                        pageWidth = 840,
+                        fontFamily = "Serif",
+                        paragraphSpacing = 1.4f,
+                        imageScale = 1.2f,
+                        horizontalMargin = 40,
+                        verticalMargin = 72,
+                        themeId = "sepia",
+                        textureId = "paper",
+                        textureAlpha = 0.35f,
+                        customFontPath = "C:/Fonts/custom.ttf",
+                        backgroundColorArgb = -328967L,
+                        textColorArgb = -12345678L,
+                        systemUiMode = SystemUiMode.HIDDEN,
+                        pageInfoMode = PageInfoMode.SYNC,
+                        pageInfoPosition = PageInfoPosition.TOP,
+                        pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE,
+                        rightToLeftPagination = true,
+                        pageTurnAnimationEnabled = true,
+                        pdfVerticalPageGapVisible = false,
+                        pdfPageNumberOverlayVisible = false,
+                        pdfFirstPageStandaloneInSpread = true,
+                        seamlessChapterNavigation = false,
+                        chapterTurnDragMultiplier = 1.6f
+                    ),
+                    readerFormatIsLocal = true,
+            readerLocalFormatSettings = ReaderSettings(
+                        fontSize = 27,
+                        lineSpacing = 1.9f,
+                        textAlign = SharedReaderTextAlign.LEFT,
+                fontFamily = "Lora"
+            ),
+            readerAutoScrollIsLocal = true,
+            readerAutoScrollLocalSpeed = 72f,
+            readerAutoScrollLocalMinSpeed = 0.5f,
+            readerAutoScrollLocalMaxSpeed = 4f,
+            pdfAutoScrollIsLocal = true,
+            pdfAutoScrollLocalSpeed = 2.5f,
+            pdfAutoScrollLocalMinSpeed = 0.5f,
+            pdfAutoScrollLocalMaxSpeed = 8f,
+                    readerBookmarks = listOf(
+                        ReaderBookmark(
+                            id = "book_4",
+                            pageIndex = 4,
+                            chapterTitle = "Chapter",
+                            preview = "A useful paragraph",
+                            label = "Important passage",
+                            locator = ReaderLocator(
+                                chapterIndex = 0,
+                                pageIndex = 4,
+                                startOffset = 100,
+                                endOffset = 180,
+                                textQuote = "A useful paragraph"
+                            )
+                        )
+                    ),
+                    readerHighlights = listOf(
+                        UserHighlight(
+                            id = "highlight_1",
+                            cfi = "desktop:0:128:144",
+                            text = "useful paragraph",
+                            color = HighlightColor.YELLOW,
+                            chapterIndex = 0,
+                            note = "Remember this",
+                            colorArgb = 0xFF12ABEF.toInt(),
+                            locator = ReaderLocator(
+                                chapterIndex = 0,
+                                pageIndex = 4,
+                                startOffset = 128,
+                                endOffset = 144,
+                                textQuote = "useful paragraph",
+                                cfi = "desktop:0:128:144"
+                            )
+                        )
+                    ),
+                    pdfReaderViewport = SharedPdfReaderViewport(
+                        pageIndex = 4,
+                        displayMode = PdfDisplayMode.VERTICAL_SCROLL,
+                        zoom = 1.8f,
+                        horizontalScrollOffset = 90,
+                        paginatedVerticalScrollOffset = 140,
+                        verticalFirstPageIndex = 3,
+                        verticalFirstPageScrollOffset = 44
+                    ),
+                    readingPositionModifiedTimestamp = 9_000L
+                )
+            ),
+            shelfRecords = listOf(ShelfRecord(id = "shelf", name = "Shelf", isSmart = true, smartRulesJson = "{}")),
+            shelfRefs = listOf(BookShelfRef(bookId = "book", shelfId = "shelf", addedAt = 11L)),
+            tags = listOf(tag),
+            customFonts = listOf(
+                CustomFontItem(
+                    id = "font",
+                    displayName = "Literata",
+                    fileName = "font.ttf",
+                    fileExtension = "ttf",
+                    path = "C:/Fonts/font.ttf",
+                    timestamp = 13L
+                )
+            ),
+            syncedFolders = listOf(SyncedFolder("C:/Books", "Books", lastScanTime = 12L, allowedFileTypes = setOf(FileType.EPUB, FileType.PDF))),
+            recentFilesLimit = 20,
+            isTabsEnabled = true,
+            openTabIds = listOf("book"),
+            activeTabBookId = "book",
+            pinnedHomeBookIds = setOf("book"),
+            pinnedLibraryBookIds = setOf("book"),
+            useStrictFileFilter = true,
+            appThemeMode = AppThemeMode.DARK,
+            appContrastOption = AppContrastOption.HIGH,
+            appTextDimFactorLight = 0.75f,
+            appTextDimFactorDark = 0.65f,
+            appSeedColor = Color(0xFF006C4C),
+            appFontPreference = AppFontPreference.custom("font"),
+            customAppThemes = listOf(
+                CustomAppTheme(id = "forest", name = "Forest", seedColor = Color(0xFF006C4C))
+            ),
+            customReaderThemes = listOf(
+                ReaderTheme(
+                    id = "my_solid",
+                    name = "My Solid",
+                    backgroundColor = Color(0xFFF5F5F5),
+                    textColor = Color(0xFF111111),
+                    isDark = false,
+                    isCustom = true
+                ),
+                ReaderTheme(
+                    id = "my_texture",
+                    name = "My Texture",
+                    backgroundColor = Color(0xFF222222),
+                    textColor = Color(0xFFEFEFEF),
+                    isDark = true,
+                    textureId = ReaderTexture.CANVAS.id,
+                    isCustom = true
+                )
+            ),
+            readerDefaultSettings = ReaderSettings(themeId = "sepia"),
+            pdfReaderDefaultSettings = ReaderSettings(themeId = "reverse"),
+            readerToolbarPreferences = ReaderToolbarPreferences(
+                hiddenToolIds = setOf(ReaderTool.SEARCH.id),
+                toolOrder = listOf(ReaderTool.BOOKMARK, ReaderTool.THEME, ReaderTool.SEARCH),
+                bottomToolIds = setOf(ReaderTool.BOOKMARK.id)
+            ).sanitized(),
+            readerHighlightPalette = ReaderHighlightPalette(
+                colors = listOf(
+                    HighlightColor.YELLOW.color.toArgb(),
+                    HighlightColor.CYAN.color.toArgb(),
+                    0xFF123456.toInt(),
+                    HighlightColor.WHITE.color.toArgb()
+                )
+            ),
+            readerTtsReplacementPreferences = ReaderTtsReplacementPreferences(
+                globalRules = listOf(
+                    ReaderTtsReplacementRule(
+                        id = "dr",
+                        from = "Dr.",
+                        to = "Doctor",
+                        wholeWord = false
+                    )
+                ),
+                bookRules = mapOf(
+                    "book" to listOf(
+                        ReaderTtsReplacementRule(
+                            id = "st",
+                            from = "St.",
+                            to = "Saint",
+                            wholeWord = false
+                        )
+                    )
+                ),
+                bookSettings = mapOf(
+                    "book" to ReaderTtsReplacementBookSettings(disabledGlobalRuleIds = setOf("dr"))
+                )
+            ),
+            readerBookReplacementPreferences = ReaderBookReplacementPreferences(
+                fileRules = mapOf(
+                    "book" to listOf(ReaderWordReplacementRule("visible", "Alice", "Mina"))
+                )
+            )
+        )
+
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(SharedLibrarySnapshotJson.encode(snapshot))
+
+        assertEquals(snapshot, decoded)
+        assertEquals(0xFF12ABEF.toInt(), decoded.books.single().readerHighlights.single().colorArgb)
+    }
+
+    @Test
+    fun `snapshot json tolerates malformed or missing data`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty("""{"books":[{"id":"missingName"}]}""")
+
+        assertTrue(SharedLibrarySnapshotJson.decodeOrEmpty("not json").books.isEmpty())
+        assertTrue(decoded.books.isEmpty())
+        assertEquals(AppFontPreference.System, decoded.appFontPreference)
+    }
+
+    @Test
+    fun `missing tab setting defaults to enabled for new desktop snapshots`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty("""{"schemaVersion":14}""")
+
+        assertTrue(decoded.isTabsEnabled)
+    }
+
+    @Test
+    fun `legacy untouched epub default settings migrate to vertical mode`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(
+            """
+            {
+              "schemaVersion": 16,
+              "readerDefaultSettings": {
+                "readingMode": "PAGINATED"
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(ReaderReadingMode.VERTICAL, decoded.readerDefaultSettings.readingMode)
+    }
+
+    @Test
+    fun `legacy reader settings default pdf visual options to current behavior`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(
+            """
+            {
+              "books": [
+                {
+                  "id": "book",
+                  "path": "C:/Books/book.pdf",
+                  "type": "PDF",
+                  "displayName": "book.pdf",
+                  "timestamp": 10,
+                  "readerSettings": {
+                    "themeId": "no_theme"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        val settings = decoded.books.single().readerSettings ?: error("Expected settings")
+
+        assertTrue(settings.pdfVerticalPageGapVisible)
+        assertTrue(settings.pdfPageNumberOverlayVisible)
+        assertFalse(settings.rightToLeftPagination)
+        assertFalse(settings.pageTurnAnimationEnabled)
+    }
+
+    @Test
+    fun `legacy snapshot hides imported only books from recent home`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(
+            """
+            {
+              "schemaVersion": 2,
+              "books": [
+                {
+                  "id": "imported",
+                  "path": "C:/Books/imported.epub",
+                  "type": "EPUB",
+                  "displayName": "imported.epub",
+                  "timestamp": 10,
+                  "isRecent": true
+                },
+                {
+                  "id": "opened",
+                  "path": "C:/Books/opened.epub",
+                  "type": "EPUB",
+                  "displayName": "opened.epub",
+                  "timestamp": 11,
+                  "isRecent": true
+                }
+              ],
+              "openTabIds": ["opened"]
+            }
+            """.trimIndent()
+        )
+
+        assertFalse(decoded.books.first { it.id == "imported" }.isRecent)
+        assertTrue(decoded.books.first { it.id == "opened" }.isRecent)
+    }
+
+    @Test
+    fun `synced folder allowed types exclude unknown while preserving valid selections`() {
+        val decoded = SharedLibrarySnapshotJson.decodeOrEmpty(
+            """
+            {
+              "syncedFolders": [
+                {
+                  "uriString": "C:/Books",
+                  "name": "Books",
+                  "lastScanTime": 12,
+                  "allowedFileTypes": ["PDF", "UNKNOWN", "EPUB"],
+                  "localSyncEnabled": false
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        val folder = decoded.syncedFolders.single()
+
+        assertEquals(setOf(FileType.PDF, FileType.EPUB), folder.allowedFileTypes)
+        assertFalse(folder.localSyncEnabled)
+        assertFalse(FileType.UNKNOWN in folder.allowedFileTypes)
+
+        val encoded = SharedLibrarySnapshotJson.encode(
+            SharedLibrarySnapshot(
+                syncedFolders = listOf(
+                    SyncedFolder("C:/Books", "Books", lastScanTime = 12L, allowedFileTypes = setOf(FileType.PDF, FileType.UNKNOWN))
+                )
+            )
+        )
+
+        assertFalse("\"UNKNOWN\"" in encoded)
+    }
+
+    @Test
+    fun `missing pdf defaults fall back to platform default`() {
+        val android = SharedLibrarySnapshotJson.decodeOrEmpty("""{"schemaVersion":31}""")
+
+        assertEquals(SystemUiMode.SYNC, android.pdfReaderDefaultSettings.systemUiMode)
+
+        val ios = SharedLibrarySnapshotJson.decodeOrEmpty(
+            """{"schemaVersion":31}""",
+            pdfDefaults = DefaultIosPdfReaderSettings,
+        )
+
+        assertEquals(SystemUiMode.DEFAULT, ios.pdfReaderDefaultSettings.systemUiMode)
+    }
+
+    @Test
+    fun `explicit pdf system ui choice survives platform default`() {
+        val raw = """{"schemaVersion":31,"pdfReaderDefaultSettings":{"themeId":"no_theme","systemUiMode":"SYNC"}}"""
+
+        assertEquals(
+            SystemUiMode.SYNC,
+            SharedLibrarySnapshotJson.decodeOrEmpty(
+                raw,
+                pdfDefaults = DefaultIosPdfReaderSettings,
+            ).pdfReaderDefaultSettings.systemUiMode,
+        )
+        assertEquals(
+            DefaultPdfReaderSettings,
+            SharedLibrarySnapshotJson.decodeOrEmpty(raw).pdfReaderDefaultSettings,
+        )
+    }
+}

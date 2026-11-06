@@ -1,0 +1,575 @@
+package com.aryan.reader.pdf
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import com.aryan.reader.BuildConfig
+import com.aryan.reader.FileType
+import com.aryan.reader.pdf.data.AnnotationSettingsRepository
+import com.aryan.reader.pdf.data.AnnotationToolSettings
+import com.aryan.reader.pdf.data.TextStyleConfig
+import com.aryan.reader.pdf.data.ToolConfig
+import com.aryan.reader.shared.HighlightStyle
+import com.aryan.reader.shared.PdfToolbarPreferences
+import com.aryan.reader.shared.ui.SharedToolbarFlatItemType
+import com.aryan.reader.shared.ui.SharedToolbarSection
+import com.aryan.reader.shared.ui.buildSharedPdfToolbarItems
+import com.aryan.reader.shared.pdf.PdfAnnotationKind
+import com.aryan.reader.shared.pdf.PdfInkTool
+import com.aryan.reader.shared.pdf.PdfPageBounds
+import com.aryan.reader.shared.pdf.PdfPagePoint
+import com.aryan.reader.shared.pdf.PdfZoomSpec
+import com.aryan.reader.shared.pdf.SharedPdfAnnotation
+import com.aryan.reader.shared.pdf.SharedPdfAnnotationDefaults
+import com.aryan.reader.shared.pdf.SharedPdfAnnotationSerializer
+import com.aryan.reader.shared.pdf.sanitizedSharedPdfTextAnnotation
+import com.aryan.reader.shared.pdf.SharedPdfHighlighterPalette
+import com.aryan.reader.shared.ui.sharedPdfInkPreviewBounds
+import com.aryan.reader.shared.ui.sharedPdfPreviewFitsCanvas
+import com.aryan.reader.shared.ui.sharedPdfSelectionRingRadius
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class PdfReaderSettingsAndSharedModelsTest {
+
+    @Test
+    fun `AnnotationToolSettings falls back safely for invalid selected and last tools`() {
+        val settings = AnnotationToolSettings(
+            selectedToolName = "BROKEN",
+            lastActivePenType = "MISSING",
+            lastActiveHighlighterType = "NOPE"
+        )
+
+        assertEquals(InkType.PEN, settings.getActiveTool())
+        assertEquals(InkType.PEN, settings.getLastPenTool())
+        assertEquals(InkType.HIGHLIGHTER, settings.getLastHighlighterTool())
+    }
+
+    @Test
+    fun `AnnotationToolSettings returns custom configs and palettes`() {
+        val settings = AnnotationToolSettings(
+            selectedToolName = InkType.TEXT.name,
+            toolConfigs = mapOf(InkType.PEN.name to ToolConfig(Color.Cyan.toArgb(), 0.25f)),
+            penPaletteArgb = listOf(Color.Red.toArgb(), Color.Green.toArgb()),
+            highlighterPaletteArgb = listOf(Color.Yellow.toArgb()),
+            textStyle = TextStyleConfig(colorArgb = Color.Magenta.toArgb(), fontSize = 22f),
+            isHighlighterSnapEnabled = true
+        )
+
+        assertEquals(InkType.TEXT, settings.getActiveTool())
+        assertEquals(Color.Cyan.toArgb(), settings.getToolColor(InkType.PEN).toArgb())
+        assertEquals(0.25f, settings.getToolThickness(InkType.PEN), 0.0001f)
+        assertEquals(Color.Red.toArgb(), settings.getPenPalette().first().toArgb())
+        assertEquals(Color.Yellow.toArgb(), settings.getHighlighterPalette().single().toArgb())
+        assertTrue(settings.isHighlighterSnapEnabled)
+        assertEquals(22f, settings.textStyle.fontSize, 0.0001f)
+    }
+
+    @Test
+    fun `AnnotationSettingsRepository default configs cover every ink type`() {
+        InkType.entries.forEach { type ->
+            val config = AnnotationSettingsRepository.getDefaultConfig(type)
+
+            assertTrue("Expected positive thickness for $type", config.thickness > 0f)
+        }
+    }
+
+    @Test
+    fun `android ink preview flourish stays inside the icon canvas`() {
+        val canvases = listOf(44f to 100f, 44f to 150f, 88f to 200f, 132f to 300f, 200f to 120f)
+
+        for ((width, height) in canvases) {
+            val penExtents = pdfInkPreviewCommands(isHighlighter = false, straight = false)
+                .sharedPdfInkPreviewBounds()
+            assertTrue(
+                "pen flourish clipped on ${width}x$height canvas",
+                sharedPdfPreviewFitsCanvas(width, height, penExtents, 8f)
+            )
+            for (straight in listOf(false, true)) {
+                val highlighterExtents = pdfInkPreviewCommands(isHighlighter = true, straight = straight)
+                    .sharedPdfInkPreviewBounds()
+                assertTrue(
+                    "highlighter flourish clipped on ${width}x$height canvas (straight=$straight)",
+                    sharedPdfPreviewFitsCanvas(width, height, highlighterExtents, 16f)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `selection ring keeps its stroke inside the canvas`() {
+        assertEquals(26f, sharedPdfSelectionRingRadius(56f, 4f), 0.0001f)
+    }
+
+    @Test
+    fun `AnnotationSettingsRepository loads stored settings off construction path`() {
+        val source = readSourceFile("src/main/java/com/aryan/reader/pdf/data/AnnotationSettingsRepository.kt")
+
+        assertTrue(source.contains("MutableStateFlow(AnnotationToolSettings())"))
+        assertTrue(source.contains("scope.launch"))
+        assertFalse(source.contains("MutableStateFlow(loadSettings())"))
+    }
+
+    @Test
+    fun `pagination draw handler stays live to straight-line toggle`() {
+        val source = readSourceFile("src/main/java/com/aryan/reader/pdf/PdfViewerScreen.kt")
+
+        assertTrue(source.contains("currentIsHighlighterState by rememberUpdatedState(currentIsHighlighter)"))
+        assertTrue(source.contains("currentSnapEnabledState by rememberUpdatedState(currentSnapEnabled)"))
+        assertTrue(source.contains("if (currentIsHighlighterState && currentSnapEnabledState)"))
+        // Scope the stale check to the pagination handler: the vertical handler
+        // legitimately uses the plain flags inside a remember keyed on them.
+        val paginationBlock = source.substringAfter("val onDrawPagination")
+        assertFalse(paginationBlock.contains("if (currentIsHighlighter && currentSnapEnabled)"))
+    }
+
+    @Test
+    fun `annotation settings updates are atomic read-modify-write`() {
+        val source = readSourceFile("src/main/java/com/aryan/reader/pdf/data/AnnotationSettingsRepository.kt")
+
+        assertTrue(source.contains("updateAndGet"))
+        assertFalse(source.contains("_settings.value.copy"))
+    }
+
+    /**
+     * Android batches finger/stylus samples into one MotionEvent and Compose
+     * only exposes all but the last of them through
+     * `PointerInputChange.historical`. A loop that reads `change.position` alone
+     * drops the curve between two surviving points, which is what turned
+     * handwriting into straight-line segments on heavy documents. Every ink
+     * loop has to go through the shared batch expansion.
+     */
+    @Test
+    fun `every android ink loop replays coalesced pointer samples`() {
+        val loops = mapOf(
+            "src/main/java/com/aryan/reader/pdf/PdfVerticalReader.kt" to "globalDrawingModifier",
+            "src/main/java/com/aryan/reader/pdf/PdfPageComposable.kt" to "slopPendingSamples"
+        )
+
+        for ((path, marker) in loops) {
+            val block = normalizeWhitespace(readSourceFile(path).substringAfter(marker))
+            assertTrue("$path must expand the batch", block.contains("sharedPdfInkSamplesForChange("))
+            assertTrue(
+                "$path must read the coalesced samples",
+                block.contains("historical = change.historical.map {")
+            )
+            // Geometry comes from the replayed sample, and `change.position` is
+            // only ever the batch's final entry.
+            assertTrue(
+                "$path must derive the stroke from the replayed sample",
+                block.contains("sample.position")
+            )
+            assertTrue(
+                "$path must keep change.position as the batch's last sample",
+                block.contains("current = SharedPdfInkSample(")
+            )
+        }
+    }
+
+    @Test
+    fun `ink points are stamped from the pointer event not the handling clock`() {
+        val source = normalizeWhitespace(readSourceFile("src/main/java/com/aryan/reader/pdf/PdfViewerScreen.kt"))
+
+        // A batched change is handled inside one millisecond; stamping on
+        // arrival collapses its samples onto one instant and leaves the fountain
+        // pen and pencil renderers without a usable velocity.
+        assertFalse(source.contains("point.copy(timestamp = System.currentTimeMillis())"))
+        assertFalse(source.contains("effectivePoint.copy(timestamp = System.currentTimeMillis())"))
+        assertTrue(source.contains("drawingState.onDraw(resolveInkPointTimestamp(point))"))
+        assertTrue(source.contains("drawingState.updateDrag(resolveInkPointTimestamp(effectivePoint))"))
+    }
+
+    @Test
+    fun `the ink gesture detector is not restarted by page render state`() {
+        val source = normalizeWhitespace(readSourceFile("src/main/java/com/aryan/reader/pdf/PdfPageComposable.kt"))
+        val keys = source.substringAfter(".pointerInput( isEditMode,").substringBefore(") {")
+
+        // Keying on these restarts the detector mid-stroke when a large
+        // document's bitmap settles late or the pan/zoom moves, which drops the
+        // tail of the stroke in flight.
+        for (unstable in listOf("actualBitmapWidthPx", "actualBitmapHeightPx", "scale", "offset", "isScrolling")) {
+            assertFalse("$unstable must not key the ink detector", keys.contains(unstable))
+        }
+        assertTrue(source.contains("val latestBitmapWidthPx by rememberUpdatedState(actualBitmapWidthPx)"))
+        assertTrue(source.contains("val latestIsScrolling by rememberUpdatedState(isScrolling)"))
+        // ...and the teardown has to discard the stroke such a restart orphaned.
+        assertTrue(source.contains("if (strokeInFlight) { drawingState?.onDrawCancel()"))
+    }
+
+    /**
+     * Reading the in-flight stroke during composition made every page recompose
+     * once per input sample, which is the cost the draw-phase read in
+     * PdfAnnotationLayer exists to avoid.
+     */
+    @Test
+    fun `page composition does not observe the in-flight stroke`() {
+        val source = normalizeWhitespace(readSourceFile("src/main/java/com/aryan/reader/pdf/PdfPageComposable.kt"))
+        val composableBody = source.substringAfter("internal fun PdfPageComposable(")
+
+        assertFalse(
+            "composition must not read the live stroke",
+            composableBody.contains("drawingState?.currentAnnotation")
+        )
+    }
+
+    private fun normalizeWhitespace(source: String): String =
+        source.replace(Regex("\\s+"), " ")
+
+    @Test
+    fun `annotation bridge keeps tool color size and snap observable`() {
+        val source = readSourceFile("src/main/java/com/aryan/reader/pdf/PdfViewerScreen.kt")
+
+        val observableFields = listOf(
+            "isHighlighterSnapEnabled",
+            "isCurrentToolHighlighter",
+            "currentIsHighlighter",
+            "currentSnapEnabled",
+            "isDrawingActive",
+            "currentStrokeColor",
+            "currentStrokeWidth",
+            "currentEraserStrokeWidth",
+            "eraserToolThickness",
+            "activeToolThickness",
+            "dockPenColor",
+            "dockHighlighterColor",
+            "fountainPenColor",
+            "markerColor",
+            "pencilColor",
+            "highlighterColor",
+            "highlighterRoundColor",
+            "lastPenTool",
+            "lastHighlighterTool",
+            "penPalette",
+            "highlighterPalette",
+            "toolSettings"
+        )
+
+        observableFields.forEach { field ->
+            val declaration = source.lines().firstOrNull { line ->
+                line.contains(field) && (line.contains("var $field") || line.contains("lateinit var $field"))
+            }
+            assertTrue("Expected an observable bridge declaration for $field", declaration != null)
+            assertTrue(
+                "Bridge field $field must use snapshot state so color/size updates recompose (got: $declaration)",
+                declaration!!.contains(" by ") && declaration.contains("mutableStateOf")
+            )
+        }
+    }
+
+    @Test
+    fun `SharedPdfAnnotationSerializer round trips current store shape`() {
+        val annotation = SharedPdfAnnotation(
+            id = "ann-1",
+            pageIndex = 7,
+            kind = PdfAnnotationKind.TEXT,
+            tool = PdfInkTool.TEXT,
+            points = listOf(PdfPagePoint(0.1f, 0.2f, 100L)),
+            bounds = PdfPageBounds(0.1f, 0.2f, 0.3f, 0.4f),
+            text = "Margin note",
+            colorArgb = 0xFF112233.toInt(),
+            backgroundArgb = 0x66112233,
+            strokeWidth = 1.5f,
+            fontSize = 19f,
+            isBold = true,
+            isItalic = true,
+            createdAt = 1234L
+        )
+
+        val decoded = SharedPdfAnnotationSerializer.decode(
+            SharedPdfAnnotationSerializer.encode(listOf(annotation))
+        )
+
+        assertEquals(listOf(annotation.sanitizedSharedPdfTextAnnotation()), decoded)
+        assertEquals(emptyList<SharedPdfAnnotation>(), SharedPdfAnnotationSerializer.decode(""))
+        assertEquals(emptyList<SharedPdfAnnotation>(), SharedPdfAnnotationSerializer.decode("bad json"))
+    }
+
+
+    @Test
+    fun `SharedPdfAnnotationSerializer round trips highlight style and defaults legacy highlights`() {
+        val annotation = SharedPdfAnnotation(
+            id = "highlight-1",
+            pageIndex = 1,
+            kind = PdfAnnotationKind.HIGHLIGHT,
+            tool = PdfInkTool.HIGHLIGHTER,
+            bounds = PdfPageBounds(0.1f, 0.2f, 0.3f, 0.4f),
+            text = "Marked text",
+            colorArgb = 0x8C123456.toInt(),
+            highlightStyle = HighlightStyle.WAVY_UNDERLINE
+        )
+
+        val decoded = SharedPdfAnnotationSerializer.decode(
+            SharedPdfAnnotationSerializer.encode(listOf(annotation))
+        ).single()
+        val legacyDecoded = SharedPdfAnnotationSerializer.decode(
+            """
+            [
+              {
+                "id": "legacy-highlight",
+                "pageIndex": 1,
+                "kind": "HIGHLIGHT",
+                "tool": "HIGHLIGHTER",
+                "bounds": {"left":0.1,"top":0.2,"right":0.3,"bottom":0.4},
+                "colorArgb": -1
+              }
+            ]
+            """.trimIndent()
+        ).single()
+
+        assertEquals(HighlightStyle.WAVY_UNDERLINE, decoded.highlightStyle)
+        assertEquals(HighlightStyle.BACKGROUND, legacyDecoded.highlightStyle)
+    }
+
+    @Test
+    fun `SharedPdfAnnotationSerializer decodes legacy bare annotation array`() {
+        val legacyJson = """
+            [
+              {
+                "id": "legacy",
+                "pageIndex": 1,
+                "kind": "INK",
+                "tool": "PEN",
+                "points": [{"x":0.2,"y":0.3,"timestamp":9}],
+                "colorArgb": -1
+              }
+            ]
+        """.trimIndent()
+
+        val decoded = SharedPdfAnnotationSerializer.decode(legacyJson).single()
+
+        assertEquals("legacy", decoded.id)
+        assertEquals(1, decoded.pageIndex)
+        assertEquals(PdfAnnotationKind.INK, decoded.kind)
+        assertEquals(PdfInkTool.PEN, decoded.tool)
+        assertEquals(PdfPagePoint(0.2f, 0.3f, 9L), decoded.points.single())
+    }
+
+    @Test
+    fun `SharedPdfAnnotationDefaults supplies expected tool defaults and palettes`() {
+        assertEquals(5, SharedPdfAnnotationDefaults.penPalette.size)
+        assertEquals(SharedPdfHighlighterPalette.MaxColors, SharedPdfAnnotationDefaults.highlighterPalette.size)
+
+        val pen = SharedPdfAnnotationDefaults.configFor(PdfInkTool.PEN)
+        val eraser = SharedPdfAnnotationDefaults.configFor(PdfInkTool.ERASER)
+        val highlighter = SharedPdfAnnotationDefaults.configFor(PdfInkTool.HIGHLIGHTER)
+
+        assertTrue(pen.strokeWidth > 0f)
+        assertEquals(0x00000000, eraser.colorArgb)
+        assertTrue(highlighter.strokeWidth > pen.strokeWidth)
+    }
+
+    @Test
+    fun `SharedPdfHighlighterPalette preserves slots and normalizes alpha`() {
+        val palette = SharedPdfHighlighterPalette(
+            colors = listOf(0xFFFF0000.toInt())
+        ).sanitized()
+
+        assertEquals(SharedPdfHighlighterPalette.MaxColors, palette.colors.size)
+        assertEquals(0x8CFF0000.toInt(), palette.colors.first())
+        assertTrue(palette.colors.all { (it ushr 24) == SharedPdfHighlighterPalette.DefaultAlpha })
+
+        val updated = palette.withColorAt(2, 0xFF123456.toInt())
+
+        assertEquals(0x8C123456.toInt(), updated.colors[2])
+    }
+
+    @Test
+    fun `PdfZoomSpec clamps scale and keeps render size under pixel budget`() {
+        val spec = PdfZoomSpec(min = 0.5f, max = 4f, default = 1f, maxRenderPixels = 1_000_000)
+
+        assertEquals(0.5f, spec.clamp(0.1f), 0.0001f)
+        assertEquals(4f, spec.clamp(10f), 0.0001f)
+
+        val safeScale = spec.safeRenderScale(pageWidth = 2_000f, pageHeight = 2_000f, requestedScale = 4f)
+        assertTrue(safeScale < 1f)
+        assertTrue(safeScale >= 0.1f)
+
+        val (width, height) = spec.renderSize(pageWidth = 2_000f, pageHeight = 2_000f, requestedScale = 4f)
+        assertTrue(width * height <= 1_000_000)
+        assertTrue(width >= 1)
+        assertTrue(height >= 1)
+    }
+
+    @Test
+    fun `pdf toolbar reset defaults match first-run toolbar defaults`() {
+        assertEquals(
+            setOf(
+                PdfReaderTool.SCREEN_ORIENTATION.name,
+                PdfReaderTool.HIGHLIGHT_ALL.name,
+                PdfReaderTool.BRIGHTNESS.name
+            ),
+            defaultPdfHiddenTools()
+        )
+        val expectedToolOrder = PdfReaderTool.entries.filter(::isPdfReaderToolAvailable)
+
+        assertEquals(expectedToolOrder, defaultPdfToolOrder())
+        assertEquals(
+            expectedToolOrder.filter { it.category == "Bottom Bar" }.map { it.name }.toSet(),
+            defaultPdfBottomTools()
+        )
+
+        val defaultItems = buildSharedPdfToolbarItems(
+            preferences = PdfToolbarPreferences(
+                hiddenToolIds = defaultPdfHiddenTools().mapNotNullTo(mutableSetOf()) { PdfReaderTool.fromId(it)?.id },
+                toolOrder = defaultPdfToolOrder(),
+                bottomToolIds = defaultPdfBottomTools().mapNotNullTo(mutableSetOf()) { PdfReaderTool.fromId(it)?.id },
+            ),
+            availableTools = defaultPdfToolOrder().toSet(),
+        )
+
+        assertEquals(
+            SharedToolbarSection.HIDDEN,
+            defaultItems.single { it.toolId == PdfReaderTool.SCREEN_ORIENTATION.id }.section
+        )
+        assertEquals(
+            SharedToolbarSection.HIDDEN,
+            defaultItems.single { it.toolId == PdfReaderTool.HIGHLIGHT_ALL.id }.section
+        )
+        assertEquals(
+            SharedToolbarSection.HIDDEN,
+            defaultItems.single { it.toolId == PdfReaderTool.BRIGHTNESS.id }.section
+        )
+        assertEquals(
+            SharedToolbarSection.BOTTOM,
+            defaultItems.single { it.toolId == PdfReaderTool.SLIDER.id }.section
+        )
+
+        val customPlacementItems = buildSharedPdfToolbarItems(
+            preferences = PdfToolbarPreferences(
+                hiddenToolIds = emptySet(),
+                toolOrder = defaultPdfToolOrder(),
+                bottomToolIds = setOf(PdfReaderTool.THEME.id),
+            ),
+            availableTools = defaultPdfToolOrder().toSet(),
+        )
+        assertEquals(
+            SharedToolbarSection.BOTTOM,
+            customPlacementItems.single { it.toolId == PdfReaderTool.THEME.id }.section
+        )
+
+        val expectedMoreTools = buildSet {
+            addAll(
+                setOf(
+                    PdfReaderTool.FILE_INFO,
+                    PdfReaderTool.VISUAL_OPTIONS,
+                    PdfReaderTool.TAP_TO_TURN,
+                    PdfReaderTool.PAGE_TURN_ANIM,
+                    PdfReaderTool.READING_MODE,
+                    PdfReaderTool.KEEP_SCREEN_ON,
+                    PdfReaderTool.AUTO_SCROLL,
+                    PdfReaderTool.TTS_SETTINGS,
+                    PdfReaderTool.TTS_REPLACEMENTS,
+                    PdfReaderTool.BOOKMARK,
+                    PdfReaderTool.PAGE_MANAGEMENT,
+                    PdfReaderTool.REFLOW,
+                    PdfReaderTool.SHARE,
+                    PdfReaderTool.SAVE_COPY,
+                    PdfReaderTool.PRINT
+                )
+            )
+            if (BuildConfig.IS_PRO) add(PdfReaderTool.OCR_LANGUAGE)
+        }
+
+        assertEquals(
+            expectedMoreTools,
+            defaultItems
+                .filter { it.type == SharedToolbarFlatItemType.MORE_TOOL }
+                .mapNotNull { it.toolId?.let(PdfReaderTool::fromId) }
+                .toSet()
+        )
+        assertFalse(defaultItems.any { it.toolId == "FULL_SCREEN" })
+        if (!BuildConfig.IS_PRO) {
+            assertFalse(defaultItems.any { it.toolId == PdfReaderTool.OCR_LANGUAGE.id })
+        }
+    }
+
+    @Test
+    fun `pdf overflow sections end at reflow when all file actions are hidden`() {
+        val sections = pdfOverflowMenuSections(
+            hiddenTools = setOf(
+                PdfReaderTool.SHARE.name,
+                PdfReaderTool.SAVE_COPY.name,
+                PdfReaderTool.PRINT.name
+            ),
+            hasHiddenToolbarTools = false,
+            isPro = false,
+            effectiveFileType = FileType.PDF,
+            hasFileInfo = false
+        )
+
+        assertEquals(PdfOverflowMenuSection.REFLOW, sections.last())
+        assertTrue(PdfOverflowMenuSection.FILE_ACTIONS !in sections)
+    }
+
+    @Test
+    fun `pdf overflow sections keep file actions when only print is hidden`() {
+        val sections = pdfOverflowMenuSections(
+            hiddenTools = setOf(PdfReaderTool.PRINT.name),
+            hasHiddenToolbarTools = false,
+            isPro = false,
+            effectiveFileType = FileType.PDF,
+            hasFileInfo = false
+        )
+
+        assertEquals(PdfOverflowMenuSection.FILE_ACTIONS, sections.last())
+    }
+
+    @Test
+    fun `pdf overflow sections hide file actions when only unavailable print remains`() {
+        val sections = pdfOverflowMenuSections(
+            hiddenTools = setOf(
+                PdfReaderTool.SHARE.name,
+                PdfReaderTool.SAVE_COPY.name
+            ),
+            hasHiddenToolbarTools = false,
+            isPro = false,
+            effectiveFileType = FileType.PDF,
+            hasFileInfo = false,
+            canPrintDocument = false
+        )
+
+        assertFalse(PdfOverflowMenuSection.FILE_ACTIONS in sections)
+    }
+
+    @Test
+    fun `pdf overflow sections expose file info only when available and visible`() {
+        val visibleSections = pdfOverflowMenuSections(
+            hiddenTools = emptySet(),
+            hasHiddenToolbarTools = false,
+            isPro = false,
+            effectiveFileType = FileType.PDF,
+            hasFileInfo = true
+        )
+        val missingItemSections = pdfOverflowMenuSections(
+            hiddenTools = emptySet(),
+            hasHiddenToolbarTools = false,
+            isPro = false,
+            effectiveFileType = FileType.PDF,
+            hasFileInfo = false
+        )
+        val hiddenSections = pdfOverflowMenuSections(
+            hiddenTools = setOf(PdfReaderTool.FILE_INFO.name),
+            hasHiddenToolbarTools = false,
+            isPro = false,
+            effectiveFileType = FileType.PDF,
+            hasFileInfo = true
+        )
+
+        assertTrue(PdfOverflowMenuSection.FILE_INFO in visibleSections)
+        assertEquals(PdfOverflowMenuSection.FILE_INFO, visibleSections.last())
+        assertFalse(PdfOverflowMenuSection.FILE_INFO in missingItemSections)
+        assertFalse(PdfOverflowMenuSection.FILE_INFO in hiddenSections)
+    }
+
+    private fun readSourceFile(path: String): String {
+        val candidates = listOf(
+            File(path),
+            File("app", path)
+        )
+        val file = candidates.firstOrNull { it.isFile }
+        requireNotNull(file) { "Unable to locate $path" }
+        return file.readText()
+    }
+}

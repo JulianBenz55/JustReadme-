@@ -1,0 +1,385 @@
+package com.aryan.reader.epubreader
+
+import android.webkit.WebView
+import com.aryan.reader.RenderMode
+import io.mockk.mockk
+import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
+import com.aryan.reader.shared.HighlightStyle
+import com.aryan.reader.shared.ReaderToolbarPreferences
+import com.aryan.reader.shared.ui.SharedToolbarFlatItem
+import com.aryan.reader.shared.ui.SharedToolbarFlatItemType
+import com.aryan.reader.shared.ui.SharedToolbarSection
+import com.aryan.reader.shared.ui.buildSharedEpubToolbarItems
+import com.aryan.reader.shared.ui.sanitizeSharedToolbarPlaceholders
+import kotlinx.coroutines.test.runTest
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.io.File
+import kotlin.io.path.createTempDirectory
+
+@RunWith(RobolectricTestRunner::class)
+class EpubReaderBridgeAndControlsTest {
+
+    @Test
+    fun `touchpad scrolling hands off only at a chapter boundary`() {
+        assertEquals(
+            WebViewTouchpadBoundary.TOP,
+            webViewTouchpadBoundary(
+                verticalScroll = 1f,
+                canScrollUp = false,
+                canScrollDown = true
+            )
+        )
+        assertEquals(
+            WebViewTouchpadBoundary.BOTTOM,
+            webViewTouchpadBoundary(
+                verticalScroll = -1f,
+                canScrollUp = true,
+                canScrollDown = false
+            )
+        )
+        assertNull(
+            webViewTouchpadBoundary(
+                verticalScroll = -1f,
+                canScrollUp = true,
+                canScrollDown = true
+            )
+        )
+    }
+
+    @Test
+    fun `reader webview viewport policy follows device width css`() {
+        assertFalse(readerResponsiveViewportPolicy.useWideViewPort)
+        assertFalse(readerResponsiveViewportPolicy.loadWithOverviewMode)
+    }
+
+    @Test
+    fun `sanitizePlaceholders keeps one header per toolbar section and inserts empty placeholders`() {
+        val input = listOf(
+            SharedToolbarFlatItem("old_header", SharedToolbarFlatItemType.SECTION_HEADER, section = SharedToolbarSection.BOTTOM),
+            SharedToolbarFlatItem("format", SharedToolbarFlatItemType.TOOL, section = SharedToolbarSection.BOTTOM, toolId = ReaderTool.FORMAT.id),
+            SharedToolbarFlatItem("more_header", SharedToolbarFlatItemType.MORE_HEADER, title = "More"),
+            SharedToolbarFlatItem("reading_mode", SharedToolbarFlatItemType.MORE_TOOL, toolId = ReaderTool.READING_MODE.id)
+        )
+
+        val sanitized = sanitizeSharedToolbarPlaceholders(input)
+
+        assertEquals(
+            listOf(
+                SharedToolbarFlatItemType.SECTION_HEADER,
+                SharedToolbarFlatItemType.EMPTY_PLACEHOLDER,
+                SharedToolbarFlatItemType.SECTION_HEADER,
+                SharedToolbarFlatItemType.TOOL,
+                SharedToolbarFlatItemType.SECTION_HEADER,
+                SharedToolbarFlatItemType.EMPTY_PLACEHOLDER,
+                SharedToolbarFlatItemType.MORE_HEADER,
+                SharedToolbarFlatItemType.MORE_TOOL
+            ),
+            sanitized.map { it.type }
+        )
+        assertEquals(listOf(SharedToolbarSection.TOP, SharedToolbarSection.BOTTOM, SharedToolbarSection.HIDDEN), sanitized.filter { it.type == SharedToolbarFlatItemType.SECTION_HEADER }.map { it.section })
+        assertEquals(ReaderTool.FORMAT.id, sanitized.single { it.type == SharedToolbarFlatItemType.TOOL }.toolId)
+    }
+
+    @Test
+    fun `auto scroll bridge invokes chapter end callback`() {
+        var calls = 0
+
+        AutoScrollJsBridge { calls++ }.onChapterEnd()
+
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `tts bridge relays nonblank structured text and normalizes blank payloads`() = runTest {
+        val received = CompletableDeferred<String>()
+        val bridge = TtsJsBridge(scope = this, ttsStructuredTextHandler = { received.complete(it) })
+
+        bridge.onStructuredTextExtracted("[{\"text\":\"Hello\"}]")
+
+        assertEquals("[{\"text\":\"Hello\"}]", received.await())
+
+        val blankReceived = CompletableDeferred<String>()
+        TtsJsBridge(scope = this, ttsStructuredTextHandler = { blankReceived.complete(it) }).onStructuredTextExtracted("   ")
+        assertEquals("[]", blankReceived.await())
+    }
+
+    @Test
+    fun `highlight bridge forwards create and click events`() {
+        var created: List<Any>? = null
+        var clicked: List<Any>? = null
+        val bridge = HighlightJsBridge(
+            onCreateCallback = { cfi, text, color, style -> created = listOf(cfi, text, color, style) },
+            onClickCallback = { cfi, text, left, top, right, bottom ->
+                clicked = listOf(cfi, text, left, top, right, bottom)
+            }
+        )
+
+        bridge.onHighlightCreated("/4", "Text", "yellow", "wavy_underline")
+        bridge.onHighlightClicked("/4", "Text", 1, 2, 3, 4)
+
+        assertEquals(listOf("/4", "Text", "yellow", HighlightStyle.WAVY_UNDERLINE), created)
+        assertEquals(listOf("/4", "Text", 1, 2, 3, 4), clicked)
+    }
+
+    @Test
+    fun `content snippet progress footnote and ai bridges forward callbacks`() = runTest {
+        var requestedChunk = -1
+        var snippet = "" to ""
+        var progressCalls = 0
+        var lastChunk = -1
+        var footnote = ""
+        val aiContent = CompletableDeferred<String>()
+
+        ContentBridge { requestedChunk = it }.requestChunk(7)
+        SnippetJsBridge { cfi, text -> snippet = cfi to text }.onSnippetExtracted("/6", "Snippet")
+        val progress = ProgressJsBridge {
+            progressCalls++
+            lastChunk = it
+        }
+        progress.updateTopChunk(2)
+        progress.updateTopChunk(2)
+        progress.updateTopChunk(3)
+        FootnoteJsBridge { footnote = it }.onFootnoteRequested("<p>Note</p>")
+        AiJsBridge(scope = this, onContentReady = { aiContent.complete(it) }).onContentExtractedForSummarization("Chapter text")
+
+        assertEquals(7, requestedChunk)
+        assertEquals("/6" to "Snippet", snippet)
+        assertEquals(2, progressCalls)
+        assertEquals(3, lastChunk)
+        assertEquals("<p>Note</p>", footnote)
+        assertEquals("Chapter text", aiContent.await())
+    }
+
+    @Test
+    fun `footnote bridge resolves a cross chapter label anchor`() {
+        val root = createTempDirectory("webview-note-").toFile()
+        try {
+            val chapters = File(root, "chapters").apply { mkdirs() }
+            File(chapters, "notes.xhtml").writeText(
+                """<ol><li><a id="fn1">1</a> Cross chapter note.</li></ol>"""
+            )
+            val baseUrl = chapters.toURI().toString()
+            val bridge = FootnoteJsBridge(
+                resolveFootnoteLinkCallback = { href -> resolveWebViewFootnoteLink(baseUrl, href) },
+                onFootnoteRequestCallback = {}
+            )
+
+            val result = bridge.resolveFootnoteLink("notes.xhtml#fn1")
+
+            assertTrue(result.orEmpty().contains("Cross chapter note."))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `ai bridge ignores blank content`() = runTest {
+        var called = false
+
+        AiJsBridge(scope = this, onContentReady = { called = true }).onContentExtractedForSummarization("   ")
+
+        assertFalse(called)
+    }
+
+    @Test
+    fun `cfi bridge parses save bookmark and scroll callbacks with fallback for invalid save json`() {
+        val saved = mutableListOf<String>()
+        val bookmark = mutableListOf<String>()
+        val scrollResults = mutableListOf<Boolean>()
+        val bridge = CfiJsBridge(
+            onCfiReady = { saved.add(it) },
+            onCfiForBookmarkReady = { bookmark.add(it) },
+            onScrollFinishedCallback = { scrollResults.add(it) }
+        )
+
+        bridge.onCfiExtracted(JSONObject().put("cfi", "/4/2:8").put("log", JSONArray()).toString())
+        bridge.onCfiExtracted(JSONObject().put("cfi", "").toString())
+        bridge.onCfiExtracted("broken")
+        bridge.onCfiForBookmarkExtracted(JSONObject().put("cfi", "/6/4:1").toString())
+        bridge.onCfiForBookmarkExtracted("broken")
+        bridge.onScrollFinished(true)
+        bridge.onScrollFinished(false)
+
+        assertEquals(listOf("/4/2:8", "/4"), saved)
+        assertEquals(listOf("/6/4:1"), bookmark)
+        assertEquals(listOf(true, false), scrollResults)
+    }
+
+    @Test
+    fun `cfi bridge preserves full reading position cfi payloads for save and bookmark callbacks`() {
+        val saved = mutableListOf<String>()
+        val bookmark = mutableListOf<String>()
+        val bridge = CfiJsBridge(
+            onCfiReady = { saved.add(it) },
+            onCfiForBookmarkReady = { bookmark.add(it) },
+            onScrollFinishedCallback = {}
+        )
+        val cfi = "/6/4[chapter]!/4/2/8:137"
+
+        bridge.onCfiExtracted(JSONObject().put("cfi", cfi).put("log", JSONArray().put("exact")).toString())
+        bridge.onCfiForBookmarkExtracted(JSONObject().put("cfi", cfi).put("log", JSONArray()).toString())
+
+        assertEquals(listOf(cfi), saved)
+        assertEquals(listOf(cfi), bookmark)
+    }
+
+    @Test
+    fun `updateAutoScrollJs emits start and stop commands`() {
+        val webView = mockk<WebView>(relaxed = true)
+
+        updateAutoScrollJs(webView, playing = true, speed = 1.25f)
+        updateAutoScrollJs(webView, playing = false, speed = 9f)
+
+        verify { webView.evaluateJavascript("javascript:window.autoScroll.start(1.25);", null) }
+        verify { webView.evaluateJavascript("javascript:window.autoScroll.stop();", null) }
+    }
+
+    @Test
+    fun `web view hit test guard treats chromium null state as unknown tap`() {
+        val type = readWebViewHitTestTypeOrNull {
+            throw NullPointerException("chromium hit test result missing")
+        }
+
+        assertNull(type)
+        assertFalse(isWebViewAnchorHitTestType(type))
+    }
+
+    @Test
+    fun `web view hit test helper detects anchor result types`() {
+        assertTrue(isWebViewAnchorHitTestType(WebView.HitTestResult.SRC_ANCHOR_TYPE))
+        assertTrue(isWebViewAnchorHitTestType(WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE))
+        assertFalse(isWebViewAnchorHitTestType(null))
+        assertFalse(isWebViewAnchorHitTestType(WebView.HitTestResult.IMAGE_TYPE))
+    }
+
+    @Test
+    fun `initiateTtsPlayback chooses web extraction for vertical mode and callback for paginated mode`() {
+        val webView = mockk<WebView>(relaxed = true)
+        var paginatedStarts = 0
+
+        initiateTtsPlayback(RenderMode.VERTICAL_SCROLL, webView) { paginatedStarts++ }
+        initiateTtsPlayback(RenderMode.PAGINATED, webView) { paginatedStarts++ }
+
+        verify { webView.evaluateJavascript("javascript:TtsBridgeHelper.extractAndRelayText();", null) }
+        assertEquals(1, paginatedStarts)
+    }
+
+    @Test
+    fun `reader tool metadata has stable unique names and categories`() {
+        assertEquals(ReaderTool.entries.size, ReaderTool.entries.map { it.name }.toSet().size)
+        assertTrue(ReaderTool.entries.any { it.category == "Top Bar" })
+        assertTrue(ReaderTool.entries.any { it.category == "Bottom Bar" })
+        assertTrue(ReaderTool.entries.any { it.category == "Overflow Menu" })
+        assertEquals("Top Bar", ReaderTool.SCREEN_ORIENTATION.category)
+        assertEquals("Top Bar", ReaderTool.BRIGHTNESS.category)
+    }
+
+    @Test
+    fun `reader toolbar reset defaults match first-run toolbar defaults`() {
+        assertEquals(
+            setOf(ReaderTool.SCREEN_ORIENTATION.name, ReaderTool.BRIGHTNESS.name),
+            defaultReaderHiddenTools()
+        )
+        assertEquals(ReaderTool.entries.toList(), defaultReaderToolOrder())
+        assertEquals(
+            ReaderTool.entries.filter { it.category == "Bottom Bar" }.map { it.name }.toSet(),
+            defaultReaderBottomTools()
+        )
+
+        val defaultItems = buildSharedEpubToolbarItems(
+            preferences = ReaderToolbarPreferences(
+                hiddenToolIds = defaultReaderHiddenTools().mapNotNullTo(mutableSetOf()) { ReaderTool.fromId(it)?.id },
+                toolOrder = defaultReaderToolOrder(),
+                bottomToolIds = defaultReaderBottomTools().mapNotNullTo(mutableSetOf()) { ReaderTool.fromId(it)?.id },
+            ),
+            toolbarTools = epubToolbarTools,
+            availableTools = ReaderTool.entries.toSet(),
+        )
+
+        assertEquals(
+            SharedToolbarSection.HIDDEN,
+            defaultItems.single { it.toolId == ReaderTool.SCREEN_ORIENTATION.id }.section
+        )
+        assertEquals(
+            SharedToolbarSection.HIDDEN,
+            defaultItems.single { it.toolId == ReaderTool.BRIGHTNESS.id }.section
+        )
+        assertEquals(
+            SharedToolbarSection.BOTTOM,
+            defaultItems.single { it.toolId == ReaderTool.SLIDER.id }.section
+        )
+        assertTrue(defaultItems.any { it.type == SharedToolbarFlatItemType.MORE_TOOL && it.toolId == ReaderTool.FILE_INFO.id })
+    }
+
+    @Test
+    fun `epub overflow sections end at auto scroll when tts submenu and file info are hidden`() {
+        val sections = epubOverflowMenuSections(
+            hiddenTools = setOf(
+                ReaderTool.TTS_SETTINGS.name,
+                ReaderTool.TTS_REPLACEMENTS.name,
+                ReaderTool.BOOK_REPLACEMENTS.name
+            ),
+            hasHiddenToolbarTools = false,
+            hasToggleReflow = false,
+            hasDeleteReflow = false,
+            hasFileInfo = false
+        )
+
+        assertEquals(EpubOverflowMenuSection.AUTO_SCROLL, sections.last())
+        assertTrue(EpubOverflowMenuSection.TTS_SETTINGS !in sections)
+        assertTrue(EpubOverflowMenuSection.BOOK_REPLACEMENTS !in sections)
+    }
+
+    @Test
+    fun `epub overflow sections expose book replacements when visible`() {
+        val sections = epubOverflowMenuSections(
+            hiddenTools = emptySet(),
+            hasHiddenToolbarTools = false,
+            hasToggleReflow = false,
+            hasDeleteReflow = false,
+            hasFileInfo = false
+        )
+
+        assertTrue(EpubOverflowMenuSection.BOOK_REPLACEMENTS in sections)
+        assertTrue(sections.indexOf(EpubOverflowMenuSection.BOOK_REPLACEMENTS) < sections.indexOf(EpubOverflowMenuSection.TTS_SETTINGS))
+    }
+
+    @Test
+    fun `epub overflow sections expose file info only when available and visible`() {
+        val visibleSections = epubOverflowMenuSections(
+            hiddenTools = emptySet(),
+            hasHiddenToolbarTools = false,
+            hasToggleReflow = false,
+            hasDeleteReflow = false,
+            hasFileInfo = true
+        )
+        val missingItemSections = epubOverflowMenuSections(
+            hiddenTools = emptySet(),
+            hasHiddenToolbarTools = false,
+            hasToggleReflow = false,
+            hasDeleteReflow = false,
+            hasFileInfo = false
+        )
+        val hiddenSections = epubOverflowMenuSections(
+            hiddenTools = setOf(ReaderTool.FILE_INFO.name),
+            hasHiddenToolbarTools = false,
+            hasToggleReflow = false,
+            hasDeleteReflow = false,
+            hasFileInfo = true
+        )
+
+        assertTrue(EpubOverflowMenuSection.FILE_INFO in visibleSections)
+        assertEquals(EpubOverflowMenuSection.FILE_INFO, visibleSections.last())
+        assertFalse(EpubOverflowMenuSection.FILE_INFO in missingItemSections)
+        assertFalse(EpubOverflowMenuSection.FILE_INFO in hiddenSections)
+    }
+}

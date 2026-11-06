@@ -1,0 +1,1961 @@
+package com.aryan.reader.shared.reader
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import com.aryan.reader.paginatedreader.BlockStyle
+import com.aryan.reader.paginatedreader.BorderStyle
+import com.aryan.reader.paginatedreader.BoxBorders
+import com.aryan.reader.paginatedreader.CssStyle
+import com.aryan.reader.paginatedreader.SemanticImage
+import com.aryan.reader.paginatedreader.SemanticList
+import com.aryan.reader.paginatedreader.SemanticListItem
+import com.aryan.reader.paginatedreader.SemanticParagraph
+import com.aryan.reader.paginatedreader.SemanticSpan
+import com.aryan.reader.paginatedreader.SemanticTable
+import com.aryan.reader.paginatedreader.SemanticTableCell
+import com.aryan.reader.shared.HighlightColor
+import com.aryan.reader.shared.HighlightStyle
+import com.aryan.reader.shared.ReaderLocator
+import com.aryan.reader.shared.ReaderHighlightPalette
+import com.aryan.reader.shared.ReaderTexture
+import com.aryan.reader.shared.UserHighlight
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import androidx.compose.ui.graphics.toArgb
+
+class ReaderHtmlDocumentBuilderTest {
+
+    @Test
+    fun `selection copy reports async failures and uses native fallback`() {
+        val script = readerHtmlSelectionScript()
+
+        assertTrue(script.contains("navigator.clipboard.writeText(text)"))
+        assertTrue(script.contains(".catch(function (error)"))
+        assertTrue(script.contains("document.execCommand('copy')"))
+        assertTrue(script.contains("readerCopyText"))
+        assertTrue(script.contains("READER_COPY failed"))
+    }
+
+    @Test
+    fun `vertical position reports are throttled during scrolling instead of deferred until scroll stops`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(),
+        )
+
+        assertTrue(html.contains("if (reportTimer !== null) return;"))
+        assertTrue(html.contains("}, 80);"))
+    }
+
+    @Test
+    fun `page document writes right alignment reader css variable`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(0, 0, "One", "alpha beta", 0, 10),
+            settings = ReaderSettings(textAlign = SharedReaderTextAlign.RIGHT)
+        )
+
+        assertTrue(html.contains("--reader-align: right;"))
+    }
+
+    @Test
+    fun `default alignment renders left and only explicit justify hyphenates`() {
+        val defaultHtml = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(),
+        )
+        assertTrue(defaultHtml.contains("--reader-align: left;"))
+        assertFalse(defaultHtml.contains("-webkit-hyphens: auto !important;"))
+
+        val justifiedHtml = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(textAlign = SharedReaderTextAlign.JUSTIFY),
+        )
+        assertTrue(justifiedHtml.contains("--reader-align: justify;"))
+        assertTrue(justifiedHtml.contains("-webkit-hyphens: auto !important;"))
+    }
+
+    @Test
+    fun `reader documents neutralize publication root height rules in both reading modes`() {
+        val verticalHtml = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+        )
+        val paginatedHtml = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(0, 0, "One", "alpha beta", 0, 10),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.PAGINATED)
+        )
+
+        val expectedSelectors = listOf("html.reader-vertical-root,", "html.reader-paginated-root {")
+        listOf(verticalHtml, paginatedHtml).forEach { html ->
+            expectedSelectors.forEach { selector -> assertTrue(html.contains(selector)) }
+            assertTrue(html.contains("height: auto !important;"))
+        }
+        assertTrue(verticalHtml.contains("body.reader-vertical {"))
+    }
+
+    @Test
+    fun `vertical documents cover the viewport and clear the home indicator`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+        )
+
+        assertTrue(html.contains("viewport-fit=cover"))
+        assertTrue(html.contains("env(safe-area-inset-bottom, 0px)"))
+    }
+
+    @Test
+    fun `plain text fallback preserves txt line breaks and spacing`() {
+        val text = """
+            [ID]          72694621
+            [Title]       DAMN.
+            [Artists]     Kendrick Lamar
+            [ReleaseDate] 2017-04-14
+            [SongNum]     14
+            [Duration]    3294
+
+            ===========CD 1=============
+            [1]     BLOOD.
+            [2]     DNA.
+        """.trimIndent()
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook(text),
+            page = ReaderPage(0, 0, "One", text, 0, text.length),
+            settings = ReaderSettings()
+        )
+
+        assertEquals(2, Regex("white-space:pre-wrap").findAll(html).count())
+        assertTrue(html.contains("[ID]          72694621\n[Title]       DAMN."))
+        assertTrue(html.contains("===========CD 1=============\n[1]     BLOOD.\n[2]     DNA."))
+
+        val semanticHtml = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook(text),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = text,
+                startOffset = 0,
+                endOffset = text.length,
+                semanticBlocks = listOf(
+                    SemanticParagraph(
+                        text = text.substringBefore("\n\n"),
+                        spans = emptyList(),
+                        style = CssStyle(),
+                        elementId = null,
+                        cfi = null,
+                        startCharOffsetInSource = 0
+                    ),
+                    SemanticParagraph(
+                        text = text.substringAfter("\n\n"),
+                        spans = emptyList(),
+                        style = CssStyle(),
+                        elementId = null,
+                        cfi = null,
+                        startCharOffsetInSource = text.indexOf("===========CD 1=============")
+                    )
+                )
+            ),
+            settings = ReaderSettings()
+        )
+
+        assertEquals(2, Regex("white-space:pre-wrap").findAll(semanticHtml).count())
+        assertTrue(semanticHtml.contains("===========CD 1=============\n[1]     BLOOD.\n[2]     DNA."))
+    }
+
+    @Test
+    fun `page document renders only the highlighted occurrence from locator offsets`() {
+        val text = "alpha beta alpha beta"
+        val page = ReaderPage(
+            pageIndex = 0,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = text,
+            startOffset = 0,
+            endOffset = text.length
+        )
+        val highlight = UserHighlight(
+            id = "highlight-1",
+            cfi = "desktop:0:11:16",
+            text = "alpha",
+            color = HighlightColor.YELLOW,
+            colorArgb = 0xFF12ABEF.toInt(),
+            chapterIndex = 0,
+            locator = ReaderLocator(
+                chapterIndex = 0,
+                pageIndex = 0,
+                startOffset = 11,
+                endOffset = 16,
+                textQuote = "alpha",
+                cfi = "desktop:0:11:16"
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook(text),
+            page = page,
+            settings = ReaderSettings(),
+            highlights = listOf(highlight)
+        )
+
+        assertEquals(1, Regex("<span class=\"reader-user-highlight").findAll(html).count())
+        assertTrue(html.contains("""alpha beta <span class="reader-user-highlight user-highlight-yellow" style="background-color:rgba(18,171,239,0.4) !important" data-reader-highlight-style="background" data-reader-highlight-color-argb="4279413743" data-reader-highlight-id="highlight-1" data-cfi="desktop:0:11:16" data-reader-start-offset="11" data-reader-end-offset="16">alpha</span> beta"""))
+    }
+
+    @Test
+    fun `stored highlights split around paragraph markup`() {
+        val text = "alpha\n\nbeta"
+        val highlight = UserHighlight(
+            id = "highlight-1",
+            cfi = "desktop:0:0:${text.length}",
+            text = "alpha beta",
+            color = HighlightColor.YELLOW,
+            chapterIndex = 0,
+            locator = ReaderLocator(
+                chapterIndex = 0,
+                pageIndex = 0,
+                startOffset = 0,
+                endOffset = text.length,
+                textQuote = "alpha beta",
+                cfi = "desktop:0:0:${text.length}"
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook(text),
+            page = ReaderPage(0, 0, "One", text, 0, text.length),
+            settings = ReaderSettings(),
+            highlights = listOf(highlight)
+        )
+
+        assertEquals(2, Regex("<span class=\"reader-user-highlight").findAll(html).count())
+        assertFalse(html.contains("<span class=\"reader-user-highlight user-highlight-yellow\" data-reader-highlight-id=\"highlight-1\" data-cfi=\"desktop:0:0:${text.length}\" data-reader-start-offset=\"0\" data-reader-end-offset=\"${text.length}\"><p"))
+        assertFalse(html.contains("</p></span>"))
+    }
+
+    @Test
+    fun `reader highlight script verifies stored text before applying offsets`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta alpha beta"),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = "alpha beta alpha beta",
+                startOffset = 0,
+                endOffset = 21
+            ),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("actualNormalized !== expectedNormalized"))
+        assertTrue(html.contains("startOffset >= pageEnd || endOffset <= pageStart"))
+        assertTrue(html.contains("normalizedRangeForText(searchRoot, expectedNormalized, false)"))
+        assertTrue(html.contains("locator.textQuote || highlight.text"))
+        assertTrue(html.contains("var sourceCfiBases = readerCfiBases(sourceCfi);"))
+        assertTrue(html.contains("return readerHostMatchesCfi(host, sourceCfiBases);"))
+        assertTrue(html.contains("if (cfiOffsets) {"))
+        // A highlight whose offsets address nothing in this document is placed from its stored text
+        // instead of being dropped. It used to return early whenever the offsets looked precise, which
+        // left a highlight unpainted in this surface and placed correctly in every other one, because
+        // the same offsets addressed a chapter split differently here.
+        assertFalse(
+            html.contains("if (hasPreciseOffsets) return;"),
+            "precise offsets must not abandon a highlight; they only say where it was recorded"
+        )
+        assertTrue(html.contains("logHighlightWebDecision(highlight, 'no_target_chapters'"))
+        assertTrue(html.contains("logHighlightWebDecision(highlight, 'no_segments_applied'"))
+    }
+
+    @Test
+    fun `reader highlight script wraps locally before guarded bridge send`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(0, 0, "One", "alpha beta", 0, 10),
+            settings = ReaderSettings()
+        )
+        val localWrapIndex = html.indexOf("paintRangeWithUserHighlightRegistry(localRange")
+        val bridgeSendIndex = html.indexOf("sendReaderHighlightCreated(payload, 0)")
+
+        assertTrue(html.contains("function sendReaderHighlightCreated(payload, attempt)"))
+        assertTrue(html.contains("highlight_bridge_error attempt="))
+        assertTrue(html.contains("var marker = document.createElement('span');"))
+        assertTrue(html.contains("range.intersectsNode(node)"))
+        assertTrue(html.contains("function readerHighlightCfiForRange(startSegment, endSegment, chapterIndex, startOffset, endOffset)"))
+        assertTrue(html.contains("function readerOffsetsForSourceCfi(chapterIndex, sourceCfi, expectedText)"))
+        assertFalse(html.contains("paintUserHighlightRange(payload"))
+        assertTrue(localWrapIndex >= 0)
+        assertTrue(bridgeSendIndex > localWrapIndex)
+    }
+
+    @Test
+    fun `reader highlight script wraps text fallback highlights without stale overlay rects`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(0, 0, "One", "alpha beta", 0, 10),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("function applyHighlightTextFallback(highlight)"))
+        assertTrue(html.contains("applyHighlightTextFallback(highlight);"))
+        assertTrue(html.contains("normalizedRangeForText(content, expectedText, false)"))
+        assertTrue(html.contains("paintRangeWithUserHighlightRegistry(range, paintParamsForHighlight("))
+        assertFalse(html.contains("function paintUserHighlightRange("))
+        assertFalse(html.contains("reader-user-highlight-layer"))
+        assertFalse(html.contains("reader-user-highlight-rect"))
+    }
+
+    @Test
+    fun `reader highlight script rejects mismatched fallback text ranges`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta alpha beta"),
+            page = ReaderPage(0, 0, "One", "alpha beta alpha beta", 0, 21),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("function rangeMatchesStoredOffsets(content, range, startOffset, endOffset)"))
+        assertTrue(html.contains("rangeMatchesStoredOffsets(content, textRange, segmentStart, segmentEnd)"))
+        assertTrue(html.contains("highlight_expected_mismatch id="))
+    }
+
+    @Test
+    fun `reader highlight script reconciles unsaved local highlight wrappers`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(0, 0, "One", "alpha beta", 0, 10),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("var readerCurrentHighlights = [];"))
+        assertTrue(html.contains("function scheduleReaderHighlightReconcile()"))
+        assertTrue(html.contains("scheduleReaderHighlightReconcile();"))
+    }
+
+    @Test
+    fun `page document can render a two page spread`() {
+        val left = ReaderPage(
+            pageIndex = 2,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = "left page",
+            startOffset = 0,
+            endOffset = 9
+        )
+        val right = ReaderPage(
+            pageIndex = 3,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = "right page",
+            startOffset = 10,
+            endOffset = 20
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("left page\n\nright page"),
+            page = left,
+            visiblePages = listOf(left, right),
+            settings = ReaderSettings(pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE)
+        )
+
+        assertTrue(html.contains("reader-spread"))
+        assertEquals(2, Regex("<section class=\"page\"").findAll(html).count())
+        assertTrue(html.contains("data-reader-page-index=\"2\""))
+        assertTrue(html.contains("data-reader-page-index=\"3\""))
+        assertTrue(html.contains("readerPaginationLayoutLog"))
+        assertTrue(html.contains("EpistemeEpubPagination"))
+    }
+
+    @Test
+    fun `page document scopes android locator highlights to one page in a spread`() {
+        val pageText = "prefix  target suffix"
+        val book = semanticHighlightBook(
+            leftText = pageText,
+            rightText = pageText
+        )
+        val left = ReaderPage(
+            pageIndex = 0,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = pageText,
+            startOffset = 100,
+            endOffset = 100 + pageText.length,
+            semanticBlocks = listOf(
+                SemanticParagraph(pageText, emptyList(), CssStyle(), null, "/4/2", startCharOffsetInSource = 100, blockIndex = 42)
+            )
+        )
+        val right = ReaderPage(
+            pageIndex = 1,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = pageText,
+            startOffset = 200,
+            endOffset = 200 + pageText.length,
+            semanticBlocks = listOf(
+                SemanticParagraph(pageText, emptyList(), CssStyle(), null, "/4/4", startCharOffsetInSource = 200, blockIndex = 43)
+            )
+        )
+        val highlight = UserHighlight(
+            id = "highlight-android",
+            cfi = "android-locator:0:42:108",
+            text = "target",
+            color = HighlightColor.YELLOW,
+            chapterIndex = 0,
+            locator = ReaderLocator.fromLegacy(
+                chapterIndex = 0,
+                cfi = "android-locator:0:42:108",
+                textQuote = "target"
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = book,
+            page = left,
+            visiblePages = listOf(left, right),
+            settings = ReaderSettings(pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE),
+            highlights = listOf(highlight)
+        )
+
+        assertEquals(1, Regex("data-reader-highlight-id=\"highlight-android\"").findAll(html).count())
+        assertTrue(html.contains("""data-reader-page-index="0""""))
+        assertTrue(html.contains("""data-reader-page-index="1""""))
+    }
+
+    @Test
+    fun `page document scopes source cfi text fallback highlights to cfi page`() {
+        val pageText = "prefix  target suffix"
+        val book = semanticHighlightBook(
+            leftText = pageText,
+            rightText = pageText
+        )
+        val left = ReaderPage(
+            pageIndex = 0,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = pageText,
+            startOffset = 100,
+            endOffset = 100 + pageText.length,
+            semanticBlocks = listOf(
+                SemanticParagraph(pageText, emptyList(), CssStyle(), null, "/4/2", startCharOffsetInSource = 100, blockIndex = 42)
+            )
+        )
+        val right = ReaderPage(
+            pageIndex = 1,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = pageText,
+            startOffset = 200,
+            endOffset = 200 + pageText.length,
+            semanticBlocks = listOf(
+                SemanticParagraph(pageText, emptyList(), CssStyle(), null, "/4/4", startCharOffsetInSource = 200, blockIndex = 43)
+            )
+        )
+        val highlight = UserHighlight(
+            id = "highlight-cfi",
+            cfi = "/4/2:8|/4/2:14",
+            text = "target",
+            color = HighlightColor.YELLOW,
+            chapterIndex = 0
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = book,
+            page = left,
+            visiblePages = listOf(left, right),
+            settings = ReaderSettings(pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE),
+            highlights = listOf(highlight)
+        )
+
+        assertEquals(1, Regex("data-reader-highlight-id=\"highlight-cfi\"").findAll(html).count())
+    }
+
+    @Test
+    fun `vertical document carries active locator for shared scroll navigation`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = SharedEpubBook(
+                id = "book",
+                fileName = "book.epub",
+                title = "Book",
+                chapters = listOf(
+                    SharedEpubChapter("one", "One", "First chapter text."),
+                    SharedEpubChapter("two", "Two", "Second chapter text.")
+                )
+            ),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            navigationLocator = ReaderLocator(
+                chapterIndex = 1,
+                startOffset = 7,
+                endOffset = 14,
+                cfi = "desktop:1:7:14"
+            )
+        )
+
+        assertTrue(html.contains("data-reader-active-chapter-index=\"1\""))
+        assertTrue(html.contains("data-reader-active-start-offset=\"7\""))
+        assertTrue(html.contains("scrollToActiveLocator"))
+        assertTrue(html.contains("readerDesktopPositionTraceLog"))
+        assertTrue(html.contains("bestVisibleReaderHost"))
+        assertTrue(html.contains("function prepareVerticalScrollMeasurement(targetChapter)"))
+        assertTrue(html.contains("pendingRestoreLocator = locator"))
+        assertTrue(html.contains("positionCfi = stableReaderCfi(positionCfi) || stableDesktopCfi(chapterIndex, offset, offset)"))
+        assertFalse(html.contains("positionCfi = 'desktop-scroll:' + metrics.scrollY"))
+    }
+
+    @Test
+    fun `vertical document follows tts locator only when it is not already visible`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta gamma"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL)
+        )
+        val activeScrollStart = html.indexOf("function scrollToActiveLocator()")
+        val activeCallStart = html.indexOf("scrollToLocator({", activeScrollStart)
+        val activeCallEnd = html.indexOf("});", activeCallStart)
+        assertTrue(activeScrollStart >= 0)
+        assertTrue(activeCallStart > activeScrollStart)
+        assertTrue(activeCallEnd > activeCallStart)
+        val activeScrollCall = html.substring(activeCallStart, activeCallEnd)
+
+        assertTrue(html.contains("function scrollToLocator(locator, options)"))
+        assertTrue(html.contains("function shouldCenterScrollTarget(options)"))
+        assertTrue(html.contains("function shouldTrackScrollRestore(options)"))
+        assertTrue(html.contains("return documentTop - Math.round((viewportHeight - rectHeight) / 2);"))
+        // Android parity (keepVisible = true): the TTS follow must not
+        // unconditionally re-center the spoken chunk, and when it does move the
+        // page it animates instead of jumping.
+        assertTrue(html.contains("function ttsLocatorNeedsFollowScroll(locator)"))
+        assertTrue(html.contains("if (ttsLocatorNeedsFollowScroll(locator))"))
+        assertTrue(html.contains("scrollToLocator(locator, { align: 'nearest', smooth: true, trackRestore: false })"))
+        assertFalse(html.contains("if (follow && locator) scrollToLocator(locator, { align: 'center', trackRestore: false });"))
+        assertFalse(activeScrollCall.contains("align: 'center'"))
+        assertFalse(activeScrollCall.contains("trackRestore: false"))
+    }
+
+    @Test
+    fun `vertical document reasserts restore landing while chunks settle`() {
+        val body = (0 until 45).joinToString("") { index -> "<p id=\"p$index\">Paragraph $index</p>" }
+        val book = SharedEpubBook(
+            id = "restore-settle-book",
+            fileName = "restore-settle.epub",
+            title = "Restore settle",
+            chapters = listOf(SharedEpubChapter("chapter", "Chapter", "Paragraph", htmlContent = body))
+        )
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = book,
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            renderedChapterRange = 0..0,
+            virtualizedChapterChunks = mapOf(0 to chunks),
+        )
+
+        // Restore settling contract (a reopen must not fall back to the
+        // chapter top after an exact landing): the window-load boot scroll
+        // skips once a landing is recorded, above-viewport chunk fills are
+        // traced, and each fill re-asserts the latest tracked landing
+        // exact-only while no takeover happened. Skipped exact scrolls
+        // return false so the didFinish navigation script keeps polling for
+        // the target chunk (Android scrollToCfi retry-loop parity).
+        assertTrue(html.contains("function restoreLandingUsable()"))
+        assertTrue(html.contains("function reassertRestoreLanding(reason)"))
+        assertTrue(html.contains("function scheduleRestoreSettle()"))
+        assertTrue(html.contains("reason=already_landed"))
+        assertTrue(html.contains("event=web_chunk_compensate index="))
+        assertTrue(html.contains("reassertRestoreLanding('chunk_settle')"))
+        assertTrue(html.contains("reassertRestoreLanding('fonts_ready')"))
+        assertTrue(html.contains("event=web_restore_settled"))
+        assertTrue(html.contains("reason=exact_only_no_range"))
+        assertTrue(html.contains("return false;"))
+    }
+
+    @Test
+    fun `vertical document reports visible locator from top reader edge`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta gamma"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL)
+        )
+
+        assertTrue(html.contains("return Math.max(1, Math.min(height - 1, 8));"))
+        assertFalse(html.contains("Math.round(height * 0.12)"))
+        assertTrue(html.contains("function firstVisibleLineRect()"))
+        assertTrue(html.contains("function firstVisibleLineStart(targetLineRect)"))
+        assertTrue(html.contains("var topLineStart = topLineRect ? firstVisibleLineStart(topLineRect) : null;"))
+        assertTrue(html.contains("event=web_line_start_choice"))
+        assertTrue(html.contains("return visibleResult(node, i, offset + i);"))
+        assertFalse(html.contains("charRect.top >= viewportTop - 0.5"))
+        assertTrue(html.contains("var sourceOffset = boundaryOffsetWithinContent(content, node, localOffset);"))
+        assertTrue(html.contains("return positionFromReaderHost(chapter, requestedOffset, preferredY, 'restore_locator_visible');"))
+        assertTrue(html.contains("var position = pendingRestoreVisiblePosition() || currentVisiblePosition();"))
+        assertTrue(html.contains("return fallback || { offset: contentStart, textNode: null };"))
+        assertTrue(html.contains("EpistemeDesktopTtsStartTrace"))
+        assertTrue(Regex("readerTtsStartTraceLog\\(\\s*'event=web_position_report_send").containsMatchIn(html))
+    }
+
+    @Test
+    fun `vertical document can render a chapter window while retaining page anchors`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = SharedEpubBook(
+                id = "book",
+                fileName = "book.epub",
+                title = "Book",
+                chapters = listOf(
+                    SharedEpubChapter("one", "One", "First chapter body."),
+                    SharedEpubChapter("two", "Two", "Second chapter body."),
+                    SharedEpubChapter("three", "Three", "Third chapter body.")
+                )
+            ),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            pages = listOf(
+                ReaderPage(0, 0, "One", "First chapter body.", 0, 19),
+                ReaderPage(1, 1, "Two", "Second chapter body.", 0, 20),
+                ReaderPage(2, 2, "Three", "Third chapter body.", 0, 19)
+            ),
+            renderedChapterRange = 1..1
+        )
+
+        assertFalse(html.contains("First chapter body."))
+        assertTrue(html.contains("Second chapter body."))
+        assertFalse(html.contains("Third chapter body."))
+        assertFalse(html.contains("data-reader-chapter-index=\"0\""))
+        assertTrue(html.contains("data-reader-chapter-index=\"1\""))
+        assertFalse(html.contains("data-reader-chapter-index=\"2\""))
+        assertTrue(html.contains("\"chapterIndex\":0"))
+        assertTrue(html.contains("\"chapterIndex\":1"))
+        assertTrue(html.contains("\"chapterIndex\":2"))
+        assertTrue(html.contains("function renderedVerticalPageAnchors()"))
+    }
+
+    @Test
+    fun `vertical document keeps native webview scrollbar at edge`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL)
+        )
+
+        assertTrue(html.contains("--reader-scrollbar-track: color-mix(in srgb, var(--reader-bg)"))
+        assertTrue(html.contains("--reader-scrollbar-thumb: color-mix(in srgb, var(--reader-fg)"))
+        assertTrue(html.contains("""<html lang="en" class="reader-vertical-root">"""))
+        assertTrue(
+            Regex(
+                "html\\.reader-vertical-root \\{\\s*" +
+                    "width: 100% !important;\\s*" +
+                    "max-width: 100% !important;\\s*" +
+                    "min-width: 0;\\s*" +
+                    "overflow-x: hidden !important;\\s*" +
+                    "overflow-y: scroll;\\s*" +
+                    "scrollbar-width: thin;",
+            ).containsMatchIn(html),
+        )
+        assertTrue(html.contains("html.reader-vertical-root::-webkit-scrollbar"))
+        assertFalse(html.contains("html.reader-vertical-root::-webkit-scrollbar,\n                body.reader-vertical::-webkit-scrollbar {\n                  width: 0;"))
+        assertTrue(html.contains("scrollbar-gutter: stable;"))
+        // Android benchmark parity: touch WebViews (iOS WKWebView + Android
+        // WebView) must use overlay scrollbars with zero reservation so side
+        // gaps stay exactly --reader-margin-x. Desktop keeps stable gutter.
+        assertTrue(html.contains("@media (hover: none)"))
+        assertTrue(html.contains("scrollbar-gutter: auto;"))
+        // Body box must beat publication CSS like Android's !important padding.
+        assertTrue(html.contains("margin: 0 !important;"))
+        assertTrue(html.contains("padding: var(--reader-margin-y) var(--reader-margin-x) !important;"))
+    }
+
+    @Test
+    fun `vertical document lays out continuous full width content`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL, pageWidth = 520)
+        )
+        val verticalExpansionCss = Regex(
+            "body\\.reader-vertical > \\.chapter,\\s*" +
+                "body\\.reader-vertical > :not\\(\\.chapter\\):not\\(#reader-selection-menu\\):not\\(\\.reader-selection-handle\\):not\\(#reader-tts-highlight-layer\\):not\\(#reader-media-overlay-highlight-layer\\):not\\(script\\):not\\(style\\),\\s*" +
+                "body\\.reader-vertical > \\.chapter > :not\\(\\.reader-content\\),\\s*" +
+                "body\\.reader-vertical > \\.chapter > \\.chapter-title,\\s*" +
+                "body\\.reader-vertical > \\.chapter > \\.reader-content \\{\\s*" +
+                "box-sizing: border-box !important;\\s*" +
+                "min-width: 0 !important;"
+        )
+        val verticalMarginCss = Regex(
+            "body\\.reader-vertical > \\.chapter \\{\\s*" +
+                "width: 100% !important;\\s*" +
+                "max-width: none !important;\\s*" +
+                "margin: 0 !important;"
+        )
+        val verticalContentCss = Regex(
+            "body\\.reader-vertical > :not\\(\\.chapter\\):not\\(#reader-selection-menu\\):not\\(\\.reader-selection-handle\\):not\\(#reader-tts-highlight-layer\\):not\\(#reader-media-overlay-highlight-layer\\):not\\(script\\):not\\(style\\),\\s*" +
+                "body\\.reader-vertical > \\.chapter > :not\\(\\.reader-content\\),\\s*" +
+                "body\\.reader-vertical > \\.chapter > \\.chapter-title,\\s*" +
+                "body\\.reader-vertical > \\.chapter > \\.reader-content \\{\\s*" +
+                "width: var\\(--reader-vertical-page-width\\) !important;\\s*" +
+                "max-width: none !important;\\s*" +
+                "margin-left: auto !important;\\s*" +
+                "margin-right: auto !important;"
+        )
+        val verticalChapterSiblingResetCss = Regex(
+            "body\\.reader-vertical > \\.chapter > :not\\(\\.reader-content\\) \\{\\s*" +
+                "position: static !important;\\s*" +
+                "left: auto !important;\\s*" +
+                "right: auto !important;"
+        )
+        val verticalContentClampCss = Regex(
+            "body\\.reader-vertical \\.reader-content p,\\s*" +
+                "body\\.reader-vertical \\.reader-content div,\\s*" +
+                "body\\.reader-vertical \\.reader-content h1,"
+        )
+        val verticalTextAlignCss = Regex(
+            "body\\.reader-vertical \\.reader-content,\\s*" +
+                "body\\.reader-vertical \\.reader-content p,\\s*" +
+                "body\\.reader-vertical \\.reader-content li,"
+        )
+        val verticalPositionResetCss = Regex(
+            "position: static !important;\\s*" +
+            "left: auto !important;\\s*" +
+            "right: auto !important;\\s*" +
+            "top: auto !important;\\s*" +
+            "bottom: auto !important;\\s*" +
+            "transform: none !important;\\s*" +
+            "float: none !important;\\s*" +
+            "clear: none !important;"
+        )
+        val verticalNestedWrapperResetCss = Regex(
+            "body\\.reader-vertical \\.reader-content div,\\s*" +
+                "body\\.reader-vertical \\.reader-content section,\\s*" +
+                "body\\.reader-vertical \\.reader-content article,"
+        )
+        val verticalTitleClampCss = Regex(
+            "body\\.reader-vertical \\.reader-content :where\\(h1, h2, h3, h4, h5, h6, hgroup, center,"
+        )
+        val verticalMarginResetCss = Regex(
+            "body\\.reader-vertical \\.reader-content > p,\\s*" +
+                "body\\.reader-vertical \\.reader-content > div,\\s*" +
+                "body\\.reader-vertical \\.reader-content > h1,"
+        )
+        val paginatedWidthCss = Regex(
+            "\\.chapter, \\.page \\{\\s*" +
+                "max-width: var\\(--reader-page-width\\);"
+        )
+        val verticalBodyCss = Regex(
+            "body\\.reader-vertical \\{\\s*" +
+                "width: 100% !important;\\s*" +
+                "max-width: 100% !important;\\s*" +
+                "height: auto !important;\\s*" +
+                "min-height: 100vh;\\s*" +
+                "min-height: 100dvh;\\s*" +
+                "min-width: 0;\\s*" +
+                "overflow-x: hidden !important;\\s*" +
+                "overflow-y: auto;\\s*" +
+                "padding: var\\(--reader-vertical-margin-y\\) 0 !important;"
+        )
+
+        assertTrue(html.contains("--reader-vertical-margin-y: 5px;"))
+        assertTrue(html.contains("--reader-vertical-content-width: 92ch;"))
+        assertTrue(html.contains("--reader-vertical-page-width: max(0px, calc(100% - (var(--reader-margin-x) * 2)));"))
+        assertFalse(html.contains("body.reader-vertical .chapter,"))
+        assertFalse(html.contains("body.reader-vertical .chapter > :not(.reader-content)"))
+        assertTrue(verticalBodyCss.containsMatchIn(html))
+        assertTrue(verticalExpansionCss.containsMatchIn(html))
+        assertTrue(html.contains("content-visibility: auto;"))
+        assertTrue(html.contains("contain-intrinsic-size: auto 1200px;"))
+        assertTrue(verticalMarginCss.containsMatchIn(html))
+        assertTrue(verticalContentCss.containsMatchIn(html))
+        assertTrue(verticalChapterSiblingResetCss.containsMatchIn(html))
+        assertTrue(verticalTextAlignCss.containsMatchIn(html))
+        assertFalse(html.contains("body.reader-vertical .reader-content {\n                  flex: 1 0 auto;"))
+        assertFalse(html.contains("min-height: 100dvh;\n                  display: flex;"))
+        assertTrue(html.contains("text-align: var(--reader-align) !important;"))
+        assertTrue(verticalContentClampCss.containsMatchIn(html))
+        assertTrue(verticalPositionResetCss.containsMatchIn(html))
+        assertTrue(verticalNestedWrapperResetCss.containsMatchIn(html))
+        assertTrue(verticalTitleClampCss.containsMatchIn(html))
+        assertTrue(verticalMarginResetCss.containsMatchIn(html))
+        assertTrue(paginatedWidthCss.containsMatchIn(html))
+    }
+
+    @Test
+    fun `vertical document exposes page anchor updater for in place format changes`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            pages = listOf(
+                ReaderPage(0, 0, "One", "alpha", 0, 5),
+                ReaderPage(1, 0, "One", "beta", 6, 10)
+            )
+        )
+
+        assertTrue(html.contains("var readerPageAnchors = ["))
+        assertTrue(html.contains("window.readerSetPageAnchors = function (anchors)"))
+        assertTrue(html.contains("readerPageAnchors = anchors;"))
+        assertTrue(html.contains("function pageForVerticalScroll()"))
+        assertTrue(html.contains("desktop-scroll-page:"))
+        assertTrue(html.contains("pageIndex: numberAttribute(document.body, 'data-reader-active-page-index', null)"))
+        assertTrue(html.contains("chapterId: host.getAttribute('data-reader-chapter-id')"))
+        assertTrue(html.contains("href: host.getAttribute('data-reader-chapter-href')"))
+        assertTrue(html.contains("blockIndex: blockPosition ? blockPosition.blockIndex : null"))
+        assertTrue(html.contains("charOffset: blockPosition ? blockPosition.charOffset : null"))
+        assertTrue(html.contains("blockIndex: numberAttribute(document.body, 'data-reader-active-block-index', null)"))
+        assertTrue(html.contains("charOffset: numberAttribute(document.body, 'data-reader-active-char-offset', null)"))
+        assertTrue(html.contains("cfi: document.body.getAttribute('data-reader-active-cfi')"))
+    }
+
+    @Test
+    fun `appearance update script carries vertical format settings`() {
+        val script = ReaderHtmlDocumentBuilder.appearanceUpdateScript(
+            settings = ReaderSettings(
+                fontSize = 24,
+                fontWeight = 800,
+                letterSpacing = 0.12f,
+                lineSpacing = 1.8f,
+                margin = 60,
+                horizontalMargin = 72,
+                verticalMargin = 90,
+                pageWidth = 940,
+                paragraphSpacing = 1.4f,
+                imageScale = 1.35f,
+                textAlign = SharedReaderTextAlign.JUSTIFY,
+                fontFamily = "Serif"
+            )
+        )
+
+        assertTrue(script.contains("root.style.setProperty('--reader-font-size', \"24px\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-font-weight', \"800\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-letter-spacing', \"0.12em\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-line-height', \"1.8\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-page-width', \"940px\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-margin-x', \"72px\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-vertical-margin-y', \"30px\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-vertical-page-width', 'max(0px, calc(100% - (var(--reader-margin-x) * 2)))');"))
+        assertTrue(script.contains("root.style.setProperty('--reader-image-scale', \"135%\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-align', \"justify\");"))
+        assertTrue(script.contains("root.style.setProperty('--reader-family', \"Georgia, 'Times New Roman', serif\");"))
+    }
+
+    @Test
+    fun hideImagesSettingTogglesCssVariableAndImageRuleAndAppearanceUpdateScript() {
+        val hiddenHtml = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(hideImages = true),
+            pages = listOf(ReaderPage(0, 0, "One", "alpha", 0, 5))
+        )
+        val visibleHtml = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(),
+            pages = listOf(ReaderPage(0, 0, "One", "alpha", 0, 5))
+        )
+
+        assertTrue(hiddenHtml.contains("--reader-hide-images: none;"))
+        assertTrue(visibleHtml.contains("--reader-hide-images: block;"))
+        assertTrue(hiddenHtml.contains("display: var(--reader-hide-images);"))
+
+        assertTrue(
+            ReaderHtmlDocumentBuilder.appearanceUpdateScript(
+                settings = ReaderSettings(hideImages = true)
+            ).contains("root.style.setProperty('--reader-hide-images', 'none');")
+        )
+        assertTrue(
+            ReaderHtmlDocumentBuilder.appearanceUpdateScript(
+                settings = ReaderSettings()
+            ).contains("root.style.setProperty('--reader-hide-images', 'block');")
+        )
+    }
+
+    @Test
+    fun `page anchor update script avoids full vertical document reload`() {
+        val script = ReaderHtmlDocumentBuilder.pageAnchorsUpdateScript(
+            listOf(
+                ReaderPage(3, 1, "Two", "chapter", 42, 84)
+            )
+        )
+
+        assertTrue(script.contains("window.readerSetPageAnchors"))
+        assertTrue(script.contains("""{"pageIndex":3,"chapterIndex":1,"startOffset":42,"endOffset":84}"""))
+    }
+
+    @Test
+    fun `selection menu keeps external lookup actions when ai and tts are disabled`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = "alpha beta",
+                startOffset = 0,
+                endOffset = 10
+            ),
+            settings = ReaderSettings(),
+            readerAiFeaturesEnabled = false,
+            cloudTtsEnabled = false
+        )
+
+        assertFalse(html.contains("""data-action="define""""))
+        assertFalse(html.contains("""data-action="speak""""))
+        assertTrue(html.contains("""data-action="web-search""""))
+        assertTrue(html.contains("""data-action="palette""""))
+        assertTrue(html.contains("""aria-label="Search""""))
+        assertTrue(html.contains("""<svg viewBox="0 0 960 960""""))
+        // Temporary: single Define entry only, no separate Dictionary button.
+        assertFalse(html.contains("""data-action="dictionary""""))
+        assertTrue(html.contains("""data-action="translate""""))
+        assertFalse(html.contains("sendSelectionAction('dictionary', text)"))
+        assertTrue(html.contains("sendSelectionAction('translate', text)"))
+        assertTrue(html.contains("""data-action="note""""))
+        assertTrue(html.contains("sendSelectionAction('note', text)"))
+        assertFalse(html.contains("""data-action="find""""))
+    }
+
+    @Test
+    fun `selection menu omits all external lookup actions when offline`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = "alpha beta",
+                startOffset = 0,
+                endOffset = 10
+            ),
+            settings = ReaderSettings(),
+            externalLookupEnabled = false
+        )
+
+        assertFalse(html.contains("""data-action="dictionary""""))
+        assertFalse(html.contains("""data-action="web-search""""))
+        assertFalse(html.contains("""data-action="translate""""))
+        assertFalse(html.contains("""data-action="find""""))
+        assertTrue(html.contains("""data-action="palette""""))
+        assertTrue(html.contains("""data-action="copy""""))
+        assertTrue(html.contains("""data-action="clear""""))
+    }
+
+    @Test
+    fun `selection menu opens from regular selection and right click`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = "alpha beta",
+                startOffset = 0,
+                endOffset = 10
+            ),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("function scheduleMenuFromSelection()"))
+        assertTrue(html.contains("selectionAnchorRect(selection)"))
+        assertTrue(html.contains("selectionMenuCandidate"))
+        assertTrue(html.contains("overlapAreaWithSelection"))
+        assertTrue(html.contains("if (selectionPointerDown || activeSelectionHandle) return;"))
+        assertTrue(html.contains("rangeBoundaryRect(range.startContainer"))
+        assertTrue(html.contains("document.addEventListener('selectionchange'"))
+        assertTrue(html.contains("document.addEventListener('pointerdown'"))
+        assertTrue(html.contains("document.addEventListener('mouseup'"))
+        assertTrue(html.contains("document.addEventListener('touchend'"))
+        assertTrue(html.contains("document.addEventListener('contextmenu'"))
+    }
+
+    @Test
+    fun `vertical selection script derives offsets from raw html chapters`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = SharedEpubBook(
+                id = "book",
+                fileName = "book.epub",
+                title = "Book",
+                chapters = listOf(
+                    SharedEpubChapter(
+                        id = "one",
+                        title = "One",
+                        plainText = "Alpha beta Gamma delta",
+                        htmlContent = "<p><span>Alpha beta</span></p><p><span>Gamma delta</span></p>"
+                    )
+                )
+            ),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL)
+        )
+
+        assertTrue(html.contains("function normalizedOffsetForBoundary(root, container, offset)"))
+        assertTrue(html.contains("var explicitOffset = absoluteOffsetForBoundary(content, container, offset);"))
+        assertTrue(html.contains("var normalizedOffset = normalizedOffsetForBoundary(content, container, offset);"))
+        assertTrue(html.contains("return normalizedOffset === null ? null : contentStartOffset(content) + normalizedOffset;"))
+        assertTrue(html.contains("var boundaryInside = nodeInside(content, range.startContainer) || nodeInside(content, range.endContainer);"))
+        assertTrue(html.contains("range.intersectsNode(content)"))
+        assertTrue(html.contains("selection_segments_rejected contents="))
+        assertTrue(html.contains("function readerHighlightFlowLog(message)"))
+        assertTrue(html.contains("selection_begin mode="))
+        assertTrue(html.contains("var actionSegments = selectionSegmentsForRange(actionRange);"))
+        assertTrue(html.contains("payload.locator = {"))
+        assertTrue(html.contains("window.kmpJsBridge.callNative('readerSelectionAction', JSON.stringify(payload));"))
+        assertTrue(html.contains("sendSelectionAction('palette', text)"))
+        assertTrue(html.contains("bridge_send_success attempt="))
+        assertTrue(html.contains("<p><span>Alpha beta</span></p><p><span>Gamma delta</span></p>"))
+    }
+
+    @Test
+    fun `vertical document prefers semantic blocks when available for cross mode locators`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = SharedEpubBook(
+                id = "book",
+                fileName = "book.epub",
+                title = "Book",
+                chapters = listOf(
+                    SharedEpubChapter(
+                        id = "one",
+                        title = "One",
+                        plainText = "Semantic text",
+                        htmlContent = "<p>Raw text</p>",
+                        semanticBlocks = listOf(
+                            SemanticParagraph(
+                                text = "Semantic text",
+                                spans = emptyList(),
+                                style = CssStyle(),
+                                elementId = null,
+                                cfi = "/4/2/4",
+                                startCharOffsetInSource = 40,
+                                blockIndex = 12
+                            )
+                        )
+                    )
+                )
+            ),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL)
+        )
+
+        assertTrue(html.contains("Semantic text"))
+        assertTrue(html.contains("""data-reader-cfi="/4/2/4""""))
+        assertTrue(html.contains("""data-reader-block-index="12""""))
+        assertFalse(html.contains("Raw text"))
+    }
+
+    @Test
+    fun `vertical selection menu renders every configured highlight palette slot`() {
+        val customArgb = 0xFF123456.toInt()
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            highlightPalette = ReaderHighlightPalette(
+                listOf(
+                    HighlightColor.CYAN.color.toArgb(),
+                    HighlightColor.MAGENTA.color.toArgb(),
+                    customArgb,
+                    HighlightColor.PINK.color.toArgb()
+                )
+            )
+        )
+
+        assertEquals(4, Regex("""class="reader-selection-color"""").findAll(html).count())
+        assertTrue(html.contains("""data-color-id="cyan""""))
+        assertTrue(html.contains("""data-color-id="pink""""))
+        // A slot the named enum cannot express keeps its own token and its own hex, which is the
+        // point of the palette being ARGB slots.
+        assertTrue(html.contains("""data-color-id="custom_ff123456""""))
+        assertTrue(html.contains("--selection-color:#123456"))
+        assertTrue(html.contains("""class="reader-selection-spectrum""""))
+        assertTrue(html.contains("""data-action="palette""""))
+    }
+
+    @Test
+    fun `highlight palette update script replaces selection menu colors without document reload`() {
+        val script = ReaderHtmlDocumentBuilder.highlightPaletteUpdateScript(
+            ReaderHighlightPalette(
+                listOf(
+                    HighlightColor.CYAN.color.toArgb(),
+                    HighlightColor.MAGENTA.color.toArgb(),
+                    HighlightColor.LIME.color.toArgb(),
+                    HighlightColor.PINK.color.toArgb()
+                )
+            )
+        )
+
+        assertTrue(script.contains("reader-selection-colors"))
+        assertTrue(script.contains("""data-color-id=\"cyan\""""))
+        assertTrue(script.contains("""data-color-id=\"pink\""""))
+        assertTrue(script.contains("""reader-selection-spectrum"""))
+        assertTrue(script.contains("""data-action=\"palette\""""))
+        assertFalse(script.contains("location.reload"))
+    }
+
+    @Test
+    fun `selection menu renders icons and draggable handles`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = "alpha beta",
+                startOffset = 0,
+                endOffset = 10
+            ),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("""class="reader-selection-icon""""))
+        assertTrue(html.contains("""id="reader-selection-start-handle""""))
+        assertTrue(html.contains("""id="reader-selection-end-handle""""))
+        assertTrue(html.contains("beginSelectionHandleDrag('start'"))
+        // iOS WKWebView draws native handles; the shared script must leave
+        // handle display/drag to WebKit there while keeping custom handles
+        // for Android/desktop WebViews.
+        assertTrue(html.contains("readerUsesNativeSelectionHandles"))
+        assertTrue(html.contains("window.readerIosNativeSelectionHandles === true"))
+        assertTrue(html.contains("requestSelectionHandleUpdate(event)"))
+        assertTrue(html.contains("document.addEventListener('selectstart'"))
+        assertTrue(html.contains("EPUB_SELECTION_DEBUG"))
+        assertTrue(Regex("readerSelectionDebugLog\\(\\s*'drag_line").containsMatchIn(html))
+        assertTrue(html.contains("rangeTouchesSelectionChrome"))
+        assertTrue(html.contains("element.closest('#reader-selection-menu, .reader-selection-handle')"))
+        assertFalse(html.contains("next.toString().trim().length"))
+        assertTrue(html.contains("document.caretRangeFromPoint"))
+        assertTrue(html.contains("wrapRangeTextSegments(range"))
+        assertFalse(html.contains("surroundContents"))
+    }
+
+    @Test
+    fun `selection menu renders highlight style row matching android benchmark`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL)
+        )
+
+        assertEquals(4, Regex("""class="reader-selection-style[" ]""").findAll(html).count())
+        HighlightStyle.entries.forEach { style ->
+            assertTrue(html.contains("""data-style-id="${style.id}""""))
+        }
+        assertTrue(html.contains("""data-action="select-style""""))
+        assertTrue(html.contains("""class="reader-selection-style selected""""))
+    }
+
+    @Test
+    fun `selection script trims whitespace boundaries and applies chosen style`() {
+        val script = readerHtmlSelectionScript()
+
+        assertTrue(script.contains("function trimRangeWhitespace(range)"))
+        assertTrue(script.contains("""/^\s$/.test(startValue.charAt(startOffset))"""))
+        assertTrue(script.contains("readerSelectedHighlightStyleId = 'background'"))
+        assertTrue(script.contains("data-reader-highlight-style"))
+        assertTrue(script.contains("function readerHighlightStyleDeclarations(styleId, colorCss)"))
+        assertTrue(script.contains("text-decoration-line: underline !important"))
+        assertTrue(script.contains("text-decoration-line: line-through !important"))
+        assertTrue(script.contains("text-decoration-style: ' + (style === 'wavy_underline' ? 'wavy' : 'solid') + ' !important"))
+    }
+
+    @Test
+    fun `annotation script selects style and sends styleId payloads and uses trimmed range`() {
+        val script = readerHtmlAnnotationScript()
+
+        assertTrue(script.contains("if (action === 'select-style')"))
+        assertTrue(script.contains("readerSelectedHighlightStyleId = target.getAttribute('data-style-id') || 'background';"))
+        assertTrue(script.contains("syncReaderStyleSelection()"))
+        assertTrue(script.contains("var range = trimRangeWhitespace(selection.getRangeAt(0)) || selection.getRangeAt(0);"))
+        assertTrue(script.contains("var styleId = readerSelectedHighlightStyle();"))
+        assertTrue(script.contains("styleId: styleId,"))
+        assertTrue(script.contains("highlight.colorArgb, highlight.style || 'background'"))
+    }
+
+    @Test
+    fun `apply highlights keeps already painted markers instead of re-deriving them`() {
+        val script = readerHtmlAnnotationScript()
+
+        assertTrue(script.contains("function markerMatchesHighlight(marker, highlight)"))
+        assertTrue(script.contains("incomingIds[highlight.id] = highlight;"))
+        assertTrue(script.contains("marker.setAttribute('data-reader-highlight-id', highlight.id)"))
+        assertTrue(script.contains("web_apply_skip_painted"))
+        assertTrue(script.contains("while (marker.firstChild) parent.insertBefore(marker.firstChild, marker);"))
+    }
+
+    @Test
+    fun `paginated spread script targets the actual page host for locator highlights`() {
+        val left = ReaderPage(
+            pageIndex = 2,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = "left page",
+            startOffset = 0,
+            endOffset = 9
+        )
+        val right = ReaderPage(
+            pageIndex = 3,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = "right page",
+            startOffset = 10,
+            endOffset = 20
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("left page\n\nright page"),
+            page = left,
+            visiblePages = listOf(left, right),
+            settings = ReaderSettings(pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE)
+        )
+
+        assertTrue(html.contains("function readerHostsForLocator(chapterIndex, startOffset, endOffset)"))
+        assertTrue(html.contains("function readerHostForLocator(chapterIndex, startOffset, endOffset)"))
+        assertTrue(html.contains("function readerHostElementForCfiPoint(chapterIndex, cfiPoint)"))
+        assertTrue(html.contains("var hosts = Array.prototype.slice.call(document.querySelectorAll(chapterSelector));"))
+        assertTrue(html.contains("var targetChapters = readerHostsForLocator(chapterIndex, startOffset, endOffset);"))
+        assertTrue(html.contains("var chapter = readerHostForLocator(chapterIndex, startOffset, endOffset);"))
+        assertTrue(html.contains("data-reader-active-page-index"))
+        assertTrue(html.contains("positionFromReaderHost(activePage, activeStart, readerProbeY(), 'active_page')"))
+    }
+
+    @Test
+    fun `paginated spread script can create one highlight from a selection crossing visible pages`() {
+        val left = ReaderPage(
+            pageIndex = 2,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = "left page",
+            startOffset = 0,
+            endOffset = 9
+        )
+        val right = ReaderPage(
+            pageIndex = 3,
+            chapterIndex = 0,
+            chapterTitle = "One",
+            text = "right page",
+            startOffset = 10,
+            endOffset = 20
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("left page\n\nright page"),
+            page = left,
+            visiblePages = listOf(left, right),
+            settings = ReaderSettings(pageSpreadMode = ReaderPageSpreadMode.TWO_PAGE)
+        )
+
+        assertTrue(html.contains("function selectionSegmentsForRange(range)"))
+        assertTrue(html.contains("var sameChapter = segments.every(function (segment)"))
+        assertTrue(html.contains("var cfi = readerHighlightCfiForRange(firstSegment, lastSegment, chapterIndex, startOffset, endOffset);"))
+        assertTrue(html.contains("return startPoint + '|' + endPoint;"))
+        assertTrue(html.contains("payloads.forEach(function (payload)"))
+        assertTrue(html.contains("paintRangeWithUserHighlightRegistry(segment.range"))
+    }
+
+    @Test
+    fun `page document uses supplied texture data uri`() {
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = repeatedWordBook("alpha beta"),
+            page = ReaderPage(
+                pageIndex = 0,
+                chapterIndex = 0,
+                chapterTitle = "One",
+                text = "alpha beta",
+                startOffset = 0,
+                endOffset = 10
+            ),
+            settings = ReaderSettings(
+                textureId = ReaderTexture.PAPER.id,
+                textureAlpha = 0.5f
+            ),
+            textureDataUri = "data:image/png;base64,readertexture"
+        )
+
+        assertTrue(html.contains("url('data:image/png;base64,readertexture')"))
+        assertTrue(html.contains("mix-blend-mode: multiply"))
+        assertTrue(html.contains("opacity: 0.5"))
+    }
+
+    @Test
+    fun `page document keeps semantic images anchored to surrounding text page`() {
+        val book = SharedEpubBook(
+            id = "book",
+            fileName = "book.epub",
+            title = "Book",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "one",
+                    title = "One",
+                    plainText = "Before image after image.",
+                    semanticBlocks = listOf(
+                        SemanticParagraph("Before image", emptyList(), CssStyle(), null, null, startCharOffsetInSource = 0, blockIndex = 7),
+                        SemanticImage("data:image/png;base64,abc", "Cover", null, null, CssStyle(), "cover-image", "/4/2"),
+                        SemanticParagraph("after image", emptyList(), CssStyle(), null, null, startCharOffsetInSource = 13)
+                    )
+                )
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = book,
+            page = ReaderPage(0, 0, "One", "Before image after image.", 0, 24),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("""<img src="data:image/png;base64,abc" alt="Cover""""))
+        assertTrue(html.contains("""loading="lazy" decoding="async""""))
+        assertTrue(html.contains("""data-reader-block-index="7""""))
+        assertTrue(html.contains("""data-reader-cfi="/4/2""""))
+        assertTrue(html.contains("""data-reader-block-index="0""""))
+    }
+
+    @Test
+    fun `page document renders semantic link spans as anchors`() {
+        val text = "Open the reference"
+        val book = SharedEpubBook(
+            id = "book",
+            fileName = "book.epub",
+            title = "Book",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "one",
+                    title = "One",
+                    plainText = text,
+                    semanticBlocks = listOf(
+                        SemanticParagraph(
+                            text = text,
+                            spans = listOf(
+                                SemanticSpan(
+                                    start = 9,
+                                    end = text.length,
+                                    style = CssStyle(),
+                                    linkHref = "notes.xhtml#ref",
+                                    tag = "a"
+                                )
+                            ),
+                            style = CssStyle(),
+                            elementId = null,
+                            cfi = null,
+                            startCharOffsetInSource = 0
+                        )
+                    )
+                )
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = book,
+            page = ReaderPage(0, 0, "One", text, 0, text.length),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("""<a href="notes.xhtml#ref" data-reader-link="true">reference</a>"""))
+        assertTrue(html.contains("--reader-link:"))
+        assertTrue(html.contains("a[href],"))
+        assertTrue(html.contains("color: var(--reader-link) !important"))
+        assertTrue(html.contains("a[href] *"))
+        assertTrue(html.contains("readerLinkClicked"))
+        assertTrue(html.contains("bridge_missing"))
+        assertTrue(html.contains("readerlink://click?payload="))
+        assertTrue(html.contains("fallback_navigation_error"))
+        assertTrue(html.contains("event.preventDefault();"))
+    }
+
+    @Test
+    fun `page document carries semantic table and inline css without forced table grid`() {
+        val text = "Styled cell"
+        val book = SharedEpubBook(
+            id = "book",
+            fileName = "book.epub",
+            title = "Book",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "one",
+                    title = "One",
+                    plainText = text,
+                    semanticBlocks = listOf(
+                        SemanticTable(
+                            rows = listOf(
+                                listOf(
+                                    SemanticTableCell(
+                                        content = listOf(
+                                            SemanticParagraph(
+                                                text = text,
+                                                spans = listOf(
+                                                    SemanticSpan(
+                                                        start = 0,
+                                                        end = 6,
+                                                        style = CssStyle(
+                                                            spanStyle = SpanStyle(fontWeight = FontWeight.Bold),
+                                                            textTransform = "uppercase"
+                                                        ),
+                                                        tag = "span"
+                                                    )
+                                                ),
+                                                style = CssStyle(),
+                                                elementId = null,
+                                                cfi = null,
+                                                startCharOffsetInSource = 0
+                                            )
+                                        ),
+                                        isHeader = false,
+                                        colspan = 1,
+                                        style = CssStyle(
+                                            blockStyle = BlockStyle(
+                                                padding = BoxBorders(left = 4.dp),
+                                                borderBottom = BorderStyle(width = 2.dp, color = Color.Red, style = "solid")
+                                            )
+                                        )
+                                    )
+                                )
+                            ),
+                            style = CssStyle(),
+                            elementId = null,
+                            cfi = null
+                        )
+                    )
+                )
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = book,
+            page = ReaderPage(0, 0, "One", text, 0, text.length),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(html.contains("border-bottom:2.0px solid #ff0000"))
+        assertTrue(html.contains("padding-left:4.0px"))
+        assertTrue(html.contains("font-weight:700"))
+        assertTrue(html.contains("text-transform:uppercase"))
+        assertTrue(!Regex("""td,\s*th\s*\{\s*border:""").containsMatchIn(html))
+    }
+
+    @Test
+    fun `page document clips semantic lists to visible items and keeps marker styles`() {
+        val first = "Chapter one"
+        val second = "Chapter two"
+        val book = SharedEpubBook(
+            id = "book",
+            fileName = "book.epub",
+            title = "Book",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "toc",
+                    title = "Contents",
+                    plainText = "$first\n$second",
+                    semanticBlocks = listOf(
+                        SemanticList(
+                            items = listOf(
+                                SemanticListItem(
+                                    text = first,
+                                    spans = emptyList(),
+                                    style = CssStyle(),
+                                    elementId = null,
+                                    cfi = null,
+                                    startCharOffsetInSource = 0,
+                                    itemMarkerImage = null
+                                ),
+                                SemanticListItem(
+                                    text = second,
+                                    spans = listOf(
+                                        SemanticSpan(
+                                            start = 0,
+                                            end = second.length,
+                                            style = CssStyle(),
+                                            linkHref = "chap02.xhtml",
+                                            tag = "a"
+                                        )
+                                    ),
+                                    style = CssStyle(
+                                        blockStyle = BlockStyle(
+                                            padding = BoxBorders(left = 2.dp),
+                                            listStyleImage = "icons/toc-dot.png"
+                                        )
+                                    ),
+                                    elementId = null,
+                                    cfi = null,
+                                    startCharOffsetInSource = first.length + 1,
+                                    itemMarkerImage = "icons/toc-dot.png"
+                                )
+                            ),
+                            isOrdered = false,
+                            style = CssStyle(
+                                fontSize = 0.85.em,
+                                blockStyle = BlockStyle(listStyleType = "none")
+                            ),
+                            elementId = null,
+                            cfi = null
+                        )
+                    )
+                )
+            )
+        )
+
+        val html = ReaderHtmlDocumentBuilder.pageDocument(
+            book = book,
+            page = ReaderPage(0, 0, "Contents", second, first.length + 1, first.length + 1 + second.length),
+            settings = ReaderSettings()
+        )
+
+        assertTrue(!html.contains(first))
+        assertTrue(html.contains(second))
+        assertTrue(html.contains("list-style-type:none"))
+        assertTrue(html.contains("font-size:0.85em"))
+        assertTrue(html.contains("list-style-image:url(&#39;icons/toc-dot.png&#39;)"))
+        assertTrue(html.contains("""<a href="chap02.xhtml" data-reader-link="true">Chapter two</a>"""))
+    }
+
+    @Test
+    fun `vertical document includes theme aware link styling`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = SharedEpubBook(
+                id = "book",
+                fileName = "book.epub",
+                title = "Book",
+                chapters = listOf(
+                    SharedEpubChapter(
+                        id = "one",
+                        title = "One",
+                        plainText = "Read more",
+                        htmlContent = """<p><a href="notes.xhtml"><span>Read more</span></a></p>"""
+                    )
+                )
+            ),
+            settings = ReaderSettings(
+                readingMode = ReaderReadingMode.VERTICAL,
+                darkMode = true
+            )
+        )
+
+        assertTrue(html.contains("--reader-link:"))
+        assertTrue(html.contains("--reader-link-bg: rgba("))
+        assertTrue(html.contains("a[href] *,"))
+        assertTrue(html.contains("""<a href="notes.xhtml"><span>Read more</span></a>"""))
+    }
+
+    @Test
+    fun `vertical document restores persisted highlights and selection bridge`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("Alpha target omega"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            highlights = listOf(
+                UserHighlight(
+                    id = "vertical-highlight",
+                    cfi = "desktop:0:6:12",
+                    text = "target",
+                    color = HighlightColor.YELLOW,
+                    chapterIndex = 0,
+                    locator = ReaderLocator(
+                        chapterIndex = 0,
+                        startOffset = 6,
+                        endOffset = 12,
+                        textQuote = "target",
+                        cfi = "desktop:0:6:12"
+                    )
+                )
+            ),
+            highlightActionsEnabled = true
+        )
+
+        assertTrue(html.contains("data-reader-highlight-id=\"vertical-highlight\""))
+        assertTrue(html.contains("readerHighlightCreated"))
+        assertTrue(html.contains("reader-selection-menu"))
+    }
+
+    @Test
+    fun `vertical chapter chunks preserve top level nodes in android sized groups`() {
+        val body = (0 until 45).joinToString("") { index -> "<p id=\"p$index\">Paragraph $index</p>" }
+        val book = SharedEpubBook(
+            id = "virtual-book",
+            fileName = "virtual.epub",
+            title = "Virtual",
+            chapters = listOf(SharedEpubChapter("chapter", "Chapter", "Paragraph", htmlContent = body))
+        )
+
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+
+        assertEquals(3, chunks.size)
+        assertTrue(chunks[0].contains("id=\"p0\""))
+        assertTrue(chunks[0].contains("id=\"p19\""))
+        assertFalse(chunks[0].contains("id=\"p20\""))
+        assertTrue(chunks[2].contains("id=\"p44\""))
+    }
+
+    @Test
+    fun `virtualized vertical document keeps distant chunks out of initial dom`() {
+        val body = (0 until 181).joinToString("") { index -> "<p id=\"p$index\">Paragraph $index</p>" }
+        val book = SharedEpubBook(
+            id = "virtual-book",
+            fileName = "virtual.epub",
+            title = "Virtual",
+            chapters = listOf(SharedEpubChapter("chapter", "Chapter", "Paragraph", htmlContent = body))
+        )
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = book,
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            renderedChapterRange = 0..0,
+            virtualizedChapterChunks = mapOf(0 to chunks),
+            virtualizedInitialChunkIndex = 7
+        )
+
+        assertEquals(10, chunks.size)
+        assertTrue(html.contains("data-reader-chunk-index=\"7\">"))
+        assertTrue(html.contains("id=\"p159\""))
+        assertTrue(html.contains("data-reader-chunk-index=\"8\" style=\"height: 1440px\"></div>"))
+        assertFalse(html.contains("id=\"p160\""))
+        assertTrue(html.contains("readerChunkRequested"))
+        assertTrue(html.contains("rootMargin: '2500px 0px'"))
+        assertTrue(
+            html.indexOf("window.readerVirtualization") < html.indexOf("<section class=\"chapter\""),
+            "Reader bootstrap must precede potentially malformed publication markup",
+        )
+    }
+
+    @Test
+    fun `web document constrains legacy publication content to reader width`() {
+        val book = SharedEpubBook(
+            id = "legacy-width",
+            fileName = "legacy.mobi",
+            title = "Legacy",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "chapter",
+                    title = "Chapter",
+                    plainText = "Long text",
+                    htmlContent = """<nobr>averylongtoken</nobr><pre>fixed text</pre><table width="1200"><tr><td>cell</td></tr></table>""",
+                ),
+            ),
+        )
+
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = book,
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+        )
+
+        assertTrue(html.contains(".reader-content nobr"))
+        assertTrue(html.contains("white-space: normal !important"))
+        assertTrue(html.contains("white-space: pre-wrap !important"))
+        assertTrue(html.contains(".reader-content table"))
+        assertTrue(html.contains("overflow-x: auto"))
+        assertTrue(html.contains("max-width: 100% !important"))
+        assertTrue(html.contains("html.reader-vertical-root"))
+        assertTrue(html.contains("overflow-x: hidden"))
+        assertTrue(html.contains(".reader-virtual-chunk"))
+        assertTrue(html.contains("contain: inline-size"))
+        assertTrue(html.contains(".reader-content :where(*)"))
+    }
+
+    @Test
+    fun `contrast fixup mirrors pagination thresholds and restores author styles`() {
+        val script = readerHtmlThemeFixupScript()
+
+        assertTrue(script.contains("window.readerAdjustAuthorColorsForContrast"))
+        // Pagination parity: neutral low-contrast text -> theme text, light bgs cleared on dark.
+        assertTrue(script.contains("4.5"))
+        assertTrue(script.contains("0.2"))
+        assertTrue(script.contains("0.5"))
+        // Restore-on-theme-switch so author inline styles survive toggling.
+        assertTrue(script.contains("data-reader-orig-color"))
+        assertTrue(script.contains("data-reader-orig-bg"))
+        // Reader-owned and saturated content must be left alone.
+        assertTrue(script.contains("a[href]"))
+        assertTrue(script.contains("user-highlight"))
+        // Virtualized chunks arriving after theme application are re-fixed.
+        assertTrue(script.contains("__readerLastContrastArgs"))
+        assertTrue(script.contains("MutationObserver"))
+    }
+
+    @Test
+    fun `appearance update script reapplies author contrast fixup`() {
+        val darkScript = ReaderHtmlDocumentBuilder.appearanceUpdateScript(
+            settings = ReaderSettings(darkMode = true)
+        )
+        assertTrue(darkScript.contains("window.readerAdjustAuthorColorsForContrast"))
+        assertTrue(darkScript.contains("true"))
+        assertTrue(darkScript.contains("#171a17"))
+        assertTrue(darkScript.contains("#e7e3d8"))
+
+        val lightScript = ReaderHtmlDocumentBuilder.appearanceUpdateScript(
+            settings = ReaderSettings(darkMode = false)
+        )
+        assertTrue(lightScript.contains("window.readerAdjustAuthorColorsForContrast"))
+        assertTrue(lightScript.contains("false"))
+    }
+
+    @Test
+    fun `vertical document includes contrast fixup for verbatim book css`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+        )
+
+        assertTrue(html.contains("window.readerAdjustAuthorColorsForContrast"))
+        assertTrue(html.contains("data-reader-orig-color"))
+    }
+
+    @Test
+    fun `section wrapped chapter chunks by inner nodes instead of one giant chunk`() {
+        val inner = (0 until 45).joinToString("") { index -> "<p id=\"p$index\">Paragraph $index</p>" }
+        val book = SharedEpubBook(
+            id = "wrapped-book",
+            fileName = "wrapped.epub",
+            title = "Wrapped",
+            chapters = listOf(
+                SharedEpubChapter(
+                    "chapter",
+                    "Chapter",
+                    "Paragraph",
+                    htmlContent = "<section id=\"the-path-to-rome\">$inner</section>"
+                )
+            )
+        )
+
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+
+        assertEquals(3, chunks.size)
+        assertTrue(chunks[0].contains("id=\"p0\""))
+        assertTrue(chunks[2].contains("id=\"p44\""))
+        assertFalse(chunks[0].contains("<section"))
+    }
+
+    @Test
+    fun `small single container stays intact`() {
+        val inner = (0 until 3).joinToString("") { index -> "<p id=\"q$index\">Q $index</p>" }
+        val book = SharedEpubBook(
+            id = "small-book",
+            fileName = "small.epub",
+            title = "Small",
+            chapters = listOf(
+                SharedEpubChapter(
+                    "chapter",
+                    "Chapter",
+                    "Q",
+                    htmlContent = "<div class=\"wrapper\">$inner</div>"
+                )
+            )
+        )
+
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+
+        assertEquals(1, chunks.size)
+        assertTrue(chunks[0].contains("<div"))
+    }
+
+    @Test
+    fun `huge single node chapter splits into bounded chunks`() {
+        val bigText = buildString {
+            repeat(30_000) { append("word ") }
+        }
+        val body = "<pre>$bigText</pre>"
+        val book = SharedEpubBook(
+            id = "big-book",
+            fileName = "big.epub",
+            title = "Big",
+            chapters = listOf(SharedEpubChapter("chapter", "Chapter", bigText, htmlContent = body))
+        )
+
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+
+        assertTrue(chunks.size > 1, "Single huge <pre> must split, got ${chunks.size}")
+        assertTrue(
+            chunks.all { it.length <= ReaderHtmlDocumentBuilder.MaxVirtualReaderChunkChars },
+            "All chunks bounded, sizes=${chunks.map { it.length }}"
+        )
+        assertTrue(chunks.all { it.contains("<pre") && it.contains("</pre>") })
+    }
+
+    @Test
+    fun `distant illustration chunks reserve image space in placeholders`() {
+        val textChunks = (0 until 4).map { index -> "<p>Paragraph $index</p>" }
+        val figureChunk = """<figure><img src="../images/a.png" alt="A"></figure>"""
+        val chunks = textChunks + figureChunk
+        val book = SharedEpubBook(
+            id = "illustrated-book",
+            fileName = "illustrated.epub",
+            title = "Illustrated",
+            chapters = listOf(SharedEpubChapter("chapter", "Chapter", "Paragraph", htmlContent = "<p>x</p>"))
+        )
+
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = book,
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            renderedChapterRange = 0..0,
+            virtualizedChapterChunks = mapOf(0 to chunks),
+            virtualizedInitialChunkIndex = 0
+        )
+
+        // One figure node (72px) plus one illustration allowance (280px).
+        assertTrue(html.contains("data-reader-chunk-index=\"4\" style=\"height: 352px\""))
+        assertTrue(html.contains("data-reader-chunk-index=\"2\" style=\"height: 72px\""))
+    }
+
+    @Test
+    fun `virtualization bridge retries when native bridge arrives late`() {
+        val body = (0 until 45).joinToString("") { index -> "<p id=\"p$index\">Paragraph $index</p>" }
+        val book = SharedEpubBook(
+            id = "virtual-book",
+            fileName = "virtual.epub",
+            title = "Virtual",
+            chapters = listOf(SharedEpubChapter("chapter", "Chapter", "Paragraph", htmlContent = body))
+        )
+        val chunks = ReaderHtmlDocumentBuilder.verticalChapterChunks(book, chapterIndex = 0)
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = book,
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+            renderedChapterRange = 0..0,
+            virtualizedChapterChunks = mapOf(0 to chunks),
+        )
+
+        assertTrue(html.contains("requestChunk"))
+        assertTrue(html.contains("bridgeRetries"))
+        assertTrue(html.contains("request(index);"))
+    }
+
+    @Test
+    fun `highlight markers are layout neutral so creating one cannot shift content`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+        )
+
+        // Publication CSS is injected verbatim; highlight spans must pin every
+        // box/layout property or a `span { padding: ... }` rule newly matches
+        // the inserted marker (iOS "padding gets added and content shifts").
+        assertTrue(html.contains("span[class*=\"user-highlight-\"]"))
+        assertTrue(html.contains("display: inline !important;"))
+        assertTrue(html.contains("padding: 0 !important;"))
+        assertTrue(html.contains("margin: 0 !important;"))
+        assertTrue(html.contains("border: 0 !important;"))
+        assertTrue(html.contains("vertical-align: baseline !important;"))
+        assertTrue(html.contains("line-height: inherit !important;"))
+        assertTrue(html.contains("float: none !important;"))
+        assertTrue(html.contains("position: static !important;"))
+        // Paint-only properties must remain: background per palette, radius kept.
+        assertTrue(html.contains("border-radius: 2px;"))
+        assertTrue(html.contains(".user-highlight-yellow"))
+    }
+
+    @Test
+    fun `documents pin text size adjust so ios does not reflow on highlight dom mutation`() {
+        val html = ReaderHtmlDocumentBuilder.verticalDocument(
+            book = repeatedWordBook("alpha beta"),
+            settings = ReaderSettings(readingMode = ReaderReadingMode.VERTICAL),
+        )
+
+        // Android epub_reader.js pins this; WKWebView otherwise auto-inflates
+        // text and reflows when highlight spans are inserted.
+        assertTrue(html.contains("-webkit-text-size-adjust: 100%;"))
+        assertTrue(html.contains("text-size-adjust: 100%;"))
+    }
+
+    @Test
+    fun `highlight shift diagnostics share one tag and bridge method`() {
+        val navigation = readerHtmlNavigationScript("[]")
+        assertTrue(navigation.contains("HIGHLIGHT_SHIFT"))
+        assertTrue(navigation.contains("readerHighlightShiftLog"))
+        assertTrue(navigation.contains("readerHighlightShiftDocSnapshot"))
+        assertTrue(navigation.contains("readerHighlightShiftBlockSnapshot"))
+        assertTrue(navigation.contains("readerHighlightShiftMarkerSnapshot"))
+        assertTrue(navigation.contains("readerHighlightShiftRangeRects"))
+        assertTrue(navigation.contains("parts="))
+        assertTrue(navigation.contains("text-align-last"))
+    }
+
+    @Test
+    fun `selection shift diagnostics share one tag and bridge method`() {
+        val navigation = readerHtmlNavigationScript("[]")
+        assertTrue(navigation.contains("SEL_SHIFT"))
+        assertTrue(navigation.contains("readerSelectionShiftLog"))
+        assertTrue(navigation.contains("readerSelectionShiftSummary"))
+        assertTrue(navigation.contains("vvScale"))
+        assertTrue(navigation.contains("readerSelectionShiftDuplicates"))
+        assertTrue(navigation.contains("readerSelectionShiftHitTest"))
+        assertTrue(navigation.contains("readerSelectionShiftComputed"))
+        assertTrue(navigation.contains("letter-spacing"))
+        val selection = readerHtmlSelectionScript()
+        assertTrue(selection.contains("readerSelectionShiftLog('menu'"))
+        assertTrue(selection.contains("readerSelectionShiftLog('restore'"))
+        assertTrue(selection.contains("readerSelectionShiftLog('handledrag'"))
+        assertTrue(selection.contains("readerSelectionShiftLog('handles'"))
+        assertTrue(selection.contains("nativeHandles="))
+    }
+
+    @Test
+    fun `user highlights paint without dom mutation when registry supported`() {
+        val annotation = readerHtmlAnnotationScript()
+        assertTrue(annotation.contains("window.CSS.highlights"))
+        assertTrue(annotation.contains("readerUserHighlightPaintName"))
+        assertTrue(annotation.contains("paintRangeWithUserHighlightRegistry"))
+        assertTrue(annotation.contains("reconcileUserHighlightRegistry"))
+        assertTrue(annotation.contains("adoptServerRenderedHighlightMarkers"))
+        assertTrue(annotation.contains("new Highlight()"))
+        assertTrue(annotation.contains("::highlight("))
+        // DOM-span path stays as fallback for engines without the API.
+        assertTrue(annotation.contains("function wrapRangeTextSegments"))
+    }
+
+    @Test
+    fun `registry highlight taps resolve through hit testing`() {
+        val selection = readerHtmlSelectionScript()
+        assertTrue(selection.contains("userHighlightIdFromPoint"))
+        assertTrue(selection.contains("caretRangeFromPoint"))
+    }
+
+    @Test
+    fun `highlight wrap and reconcile paths emit before after shift logs`() {
+        val annotation = readerHtmlAnnotationScript()
+        assertTrue(annotation.contains("wrap_before"))
+        assertTrue(annotation.contains("wrap_after"))
+        assertTrue(annotation.contains("create_before"))
+        assertTrue(annotation.contains("apply_create"))
+        assertTrue(annotation.contains("reconcile_before"))
+        assertTrue(annotation.contains("reconcile_after"))
+    }
+
+    @Test
+    fun `selection clears on resume only when the platform opts in`() {
+        val annotation = readerHtmlAnnotationScript()
+        assertTrue(annotation.contains("readerIosClearsSelectionOnResume"))
+        assertTrue(annotation.contains("visibilitychange"))
+        // The clear runs unconditionally on becoming visible so stale WebKit
+        // selection paint (model already empty after resume) is dismissed too.
+        assertTrue(annotation.contains("if (selection) selection.removeAllRanges();"))
+        assertTrue(annotation.contains("savedRange = null;"))
+        assertTrue(annotation.contains("hideMenu();"))
+    }
+
+    @Test
+    fun `highlight inline style declarations never carry box padding`() {
+        val argb = 0xFF123456.toInt()
+        assertFalse(highlightStyleDeclarations(HighlightStyle.BACKGROUND, argb).contains("padding"))
+        assertFalse(highlightStyleDeclarations(HighlightStyle.UNDERLINE, argb).contains("padding"))
+        assertFalse(highlightStyleDeclarations(HighlightStyle.WAVY_UNDERLINE, argb).contains("padding"))
+        assertFalse(highlightStyleDeclarations(HighlightStyle.STRIKETHROUGH, argb).contains("padding"))
+        // Background highlights are paint-only: background color, no box metrics.
+        assertTrue(highlightStyleDeclarations(HighlightStyle.BACKGROUND, argb).contains("background-color"))
+    }
+
+    private fun repeatedWordBook(text: String): SharedEpubBook {
+        return SharedEpubBook(
+            id = "book",
+            fileName = "book.epub",
+            title = "Book",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "one",
+                    title = "One",
+                    plainText = text
+                )
+            )
+        )
+    }
+
+    private fun semanticHighlightBook(leftText: String, rightText: String): SharedEpubBook {
+        return SharedEpubBook(
+            id = "book",
+            fileName = "book.epub",
+            title = "Book",
+            chapters = listOf(
+                SharedEpubChapter(
+                    id = "one",
+                    title = "One",
+                    plainText = "$leftText\n\n$rightText",
+                    semanticBlocks = listOf(
+                        SemanticParagraph(leftText, emptyList(), CssStyle(), null, "/4/2", startCharOffsetInSource = 100, blockIndex = 42),
+                        SemanticParagraph(rightText, emptyList(), CssStyle(), null, "/4/4", startCharOffsetInSource = 200, blockIndex = 43)
+                    )
+                )
+            )
+        )
+    }
+}
