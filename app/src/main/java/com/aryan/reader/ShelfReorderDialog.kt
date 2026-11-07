@@ -1,3 +1,4 @@
+
 package com.aryan.reader
 
 import androidx.compose.foundation.background
@@ -21,7 +22,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Icon
@@ -80,7 +80,11 @@ internal fun ShelfReorderDialog(
         val info = listState.layoutInfo.visibleItemsInfo
         val currentInfo = info.firstOrNull { it.index == current } ?: return
         val center = currentInfo.offset + currentInfo.size / 2f + dragOffset
-        val target = info.firstOrNull { it.index != current && center >= it.offset && center <= it.offset + it.size }
+        val target = info.firstOrNull {
+            it.index != current &&
+                center >= it.offset &&
+                center <= it.offset + it.size
+        }
         if (target != null) {
             move(current, target.index)
             // Keep the dragged row under the finger after it changed place.
@@ -90,30 +94,49 @@ internal fun ShelfReorderDialog(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Surface(
+            Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                Modifier.fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = stringResource(R.string.web_import_close)) }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.web_import_close),
+                        )
+                    }
+
                     Text(
                         stringResource(R.string.reorder_shelf_title),
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     )
+
                     TextButton(onClick = { onSave(items.map { it.bookId }) }) {
                         Text(stringResource(R.string.reorder_shelf_save))
                     }
                 }
+
                 Text(
                     stringResource(R.string.reorder_shelf_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
                 )
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -123,16 +146,22 @@ internal fun ShelfReorderDialog(
                     itemsIndexed(items, key = { _, item -> item.bookId }) { index, item ->
                         val dragging = draggingId == item.bookId
                         val shape = RoundedCornerShape(14.dp)
+
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .zIndex(if (dragging) 1f else 0f)
-                                .graphicsLayer { translationY = if (dragging) dragOffset else 0f }
+                                .graphicsLayer {
+                                    translationY = if (dragging) dragOffset else 0f
+                                }
                                 .shadow(if (dragging) 8.dp else 0.dp, shape)
                                 .clip(shape)
                                 .background(
-                                    if (dragging) MaterialTheme.colorScheme.surfaceContainerHighest
-                                    else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    if (dragging) {
+                                        MaterialTheme.colorScheme.surfaceContainerHighest
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHigh
+                                    },
                                 )
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -143,7 +172,12 @@ internal fun ShelfReorderDialog(
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.width(32.dp),
                             )
-                            Box(Modifier.size(width = 44.dp, height = 64.dp).clip(RoundedCornerShape(6.dp))) {
+
+                            Box(
+                                Modifier
+                                    .size(width = 44.dp, height = 64.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                            ) {
                                 ThemedBookCover(
                                     item = item,
                                     contentDescription = null,
@@ -151,7 +185,9 @@ internal fun ShelfReorderDialog(
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
+
                             Spacer(Modifier.width(12.dp))
+
                             Text(
                                 item.title?.takeIf { it.isNotBlank() } ?: item.displayName,
                                 style = MaterialTheme.typography.bodyMedium,
@@ -159,22 +195,36 @@ internal fun ShelfReorderDialog(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
+
                             Column {
                                 IconButton(
                                     onClick = { move(index, index - 1) },
                                     enabled = index > 0,
                                     modifier = Modifier.size(32.dp),
-                                ) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = null) }
+                                ) {
+                                    Icon(
+                                        Icons.Default.KeyboardArrowUp,
+                                        contentDescription = null,
+                                    )
+                                }
+
                                 IconButton(
                                     onClick = { move(index, index + 1) },
                                     enabled = index < items.lastIndex,
                                     modifier = Modifier.size(32.dp),
-                                ) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) }
+                                ) {
+                                    Icon(
+                                        Icons.Default.KeyboardArrowDown,
+                                        contentDescription = null,
+                                    )
+                                }
                             }
-                            Icon(
-                                Icons.Default.DragHandle,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+
+                            // Unicode drag handle: no additional icon dependency required.
+                            Text(
+                                text = "⠿",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.headlineSmall,
                                 modifier = Modifier
                                     .padding(start = 4.dp)
                                     .size(36.dp)
