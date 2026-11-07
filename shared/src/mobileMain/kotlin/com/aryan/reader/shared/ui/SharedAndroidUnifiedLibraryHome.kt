@@ -1,3 +1,4 @@
+
 package com.aryan.reader.shared.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -8,18 +9,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -43,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 data class SharedAndroidUnifiedHomeStrings(
@@ -81,9 +82,14 @@ fun <T> SharedAndroidUnifiedLibraryHome(
     modifier: Modifier = Modifier,
 ) {
     val gridCells = widthClass.libraryGridCells()
+
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         openTabsContent()
-        continueReading?.let { continueCard(it, Modifier.padding(top = 16.dp)) }
+
+        continueReading?.let {
+            continueCard(it, Modifier.padding(top = 16.dp))
+        }
+
         LazyRow(
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -91,26 +97,83 @@ fun <T> SharedAndroidUnifiedLibraryHome(
             contentPadding = PaddingValues(horizontal = 2.dp),
         ) {
             items(MobileUnifiedLibraryFilter.entries) { option ->
-                FilterChip(selected = filter == option, onClick = { onFilterChange(option) }, label = { Text(strings.filterLabels.getValue(option)) })
+                FilterChip(
+                    selected = filter == option,
+                    onClick = { onFilterChange(option) },
+                    label = {
+                        Text(strings.filterLabels.getValue(option))
+                    },
+                )
             }
-            item { AssistChip(onClick = onControls, label = { Text(sortLabel) }) }
+
             item {
-                BadgedBox(badge = { if (advancedFilterCount > 0) Badge { Text(advancedFilterCount.toString()) } }) {
-                    IconButton(onClick = onAdvancedFilters) { Icon(Icons.Default.FilterList, contentDescription = strings.filterBooks) }
+                AssistChip(
+                    onClick = onControls,
+                    label = { Text(sortLabel) },
+                )
+            }
+
+            item {
+                BadgedBox(
+                    badge = {
+                        if (advancedFilterCount > 0) {
+                            Badge {
+                                Text(advancedFilterCount.toString())
+                            }
+                        }
+                    },
+                ) {
+                    IconButton(onClick = onAdvancedFilters) {
+                        Icon(
+                            Icons.Default.FilterList,
+                            contentDescription = strings.filterBooks,
+                        )
+                    }
                 }
             }
+
             item {
-                var viewMenuOpen by remember { mutableStateOf(false) }
+                var viewMenuOpen by remember {
+                    mutableStateOf(false)
+                }
+
                 Box {
-                    IconButton(onClick = { viewMenuOpen = true }) {
-                        Icon(Icons.Default.GridView, contentDescription = strings.viewOptions.ifEmpty { strings.gridView })
+                    IconButton(
+                        onClick = {
+                            viewMenuOpen = true
+                        },
+                    ) {
+                        // Unicode grid symbol instead of the unavailable GridView icon.
+                        Text(
+                            text = "▦",
+                            modifier = Modifier.semantics {
+                                contentDescription =
+                                    strings.viewOptions.ifEmpty {
+                                        strings.gridView
+                                    }
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                        )
                     }
-                    DropdownMenu(expanded = viewMenuOpen, onDismissRequest = { viewMenuOpen = false }) {
+
+                    DropdownMenu(
+                        expanded = viewMenuOpen,
+                        onDismissRequest = {
+                            viewMenuOpen = false
+                        },
+                    ) {
                         for (count in LibraryColumnsMin..LibraryColumnsMax) {
                             DropdownMenuItem(
-                                text = { Text(strings.booksPerRow(count)) },
+                                text = {
+                                    Text(strings.booksPerRow(count))
+                                },
                                 leadingIcon = {
-                                    if (count == columns) Icon(Icons.Default.Check, contentDescription = null)
+                                    if (count == columns) {
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = null,
+                                        )
+                                    }
                                 },
                                 onClick = {
                                     viewMenuOpen = false
@@ -123,12 +186,24 @@ fun <T> SharedAndroidUnifiedLibraryHome(
                 }
             }
         }
+
         if (books.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(strings.noBooks, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    strings.noBooks,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         } else {
             Surface(
                 Modifier.weight(1f).padding(top = 16.dp),
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                shape = RoundedCornerShape(
+                    topStart = 24.dp,
+                    topEnd = 24.dp,
+                ),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 tonalElevation = 1.dp,
             ) {
@@ -136,10 +211,19 @@ fun <T> SharedAndroidUnifiedLibraryHome(
                 LazyVerticalGrid(
                     columns = gridCells,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp, 16.dp, 12.dp, 96.dp),
+                    contentPadding = PaddingValues(
+                        12.dp,
+                        16.dp,
+                        12.dp,
+                        96.dp,
+                    ),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) { items(books, key = itemKey) { bookCard(it) } }
+                ) {
+                    items(books, key = itemKey) {
+                        bookCard(it)
+                    }
+                }
             }
         }
     }
@@ -162,30 +246,78 @@ fun <T> SharedAndroidUnifiedLibrarySearch(
     widthClass: SharedAndroidHomeWidthClass = SharedAndroidHomeWidthClass.COMPACT,
     modifier: Modifier = Modifier,
 ) {
-    val focusRequester = androidx.compose.runtime.remember { FocusRequester() }
-    if (showSearchField) {
-        LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    val focusRequester = remember {
+        FocusRequester()
     }
+
+    if (showSearchField) {
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+        }
+    }
+
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         if (showSearchField) {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = onQueryChange,
-                    modifier = Modifier.weight(1f).focusRequester(focusRequester).testTag("UnifiedLibrarySearch"),
-                    placeholder = { Text(searchPlaceholder) },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester)
+                        .testTag("UnifiedLibrarySearch"),
+                    placeholder = {
+                        Text(searchPlaceholder)
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, null)
+                    },
                     trailingIcon = {
-                        if (query.isNotEmpty()) IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Default.Close, clearDescription) }
+                        if (query.isNotEmpty()) {
+                            IconButton(
+                                onClick = {
+                                    onQueryChange("")
+                                },
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    clearDescription,
+                                )
+                            }
+                        }
                     },
                     singleLine = true,
                 )
-                IconButton(onClick = onClose) { Icon(Icons.Default.Close, closeDescription) }
+
+                IconButton(onClick = onClose) {
+                    Icon(
+                        Icons.Default.Close,
+                        closeDescription,
+                    )
+                }
             }
         }
-        Text(resultLabel, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
+
+        Text(
+            resultLabel,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp, bottom = 8.dp),
+        )
+
         if (books.isEmpty() && query.isNotBlank()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(noResultsLabel, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    noResultsLabel,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         } else {
             LazyVerticalGrid(
                 columns = widthClass.libraryGridCells(),
@@ -193,7 +325,11 @@ fun <T> SharedAndroidUnifiedLibrarySearch(
                 contentPadding = PaddingValues(bottom = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) { items(books, key = itemKey) { bookCard(it) } }
+            ) {
+                items(books, key = itemKey) {
+                    bookCard(it)
+                }
+            }
         }
     }
 }
