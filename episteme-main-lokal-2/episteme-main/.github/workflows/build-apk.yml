@@ -1,0 +1,231 @@
+
+name: Build APK (oss offline)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: oss-apk-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build OSS Release APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    env:
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+    steps:
+      # 1. Repository herunterladen
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Java 21 installieren
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # 3. Gradle Wrapper absichern
+      - name: Fix Gradle wrapper permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          test -f ./gradlew
+          test -f gradle/wrapper/gradle-wrapper.jar
+
+          echo "===== GRADLE WRAPPER ====="
+          ls -l ./gradlew
+
+          ./gradlew --version
+
+      # 4. Android SDK einrichten
+      - name: Setup Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::Android SDK nicht gefunden."
+            exit 1
+          fi
+
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager nicht gefunden."
+            exit 1
+          fi
+
+          echo "Android SDK: $SDK_ROOT"
+
+          "$SDKMANAGER" \
+            --sdk_root="$SDK_ROOT" \
+            --install \
+            "platform-tools" \
+            "build-tools;36.0.0"
+
+          echo "===== VORHANDENE SDK-PLATTFORMEN ====="
+          ls -lah "$SDK_ROOT/platforms/"
+
+          echo "===== ANDROID JAR DATEIEN ====="
+          find "$SDK_ROOT/platforms" \
+            -maxdepth 2 \
+            -name android.jar \
+            -print
+
+          echo "===== SDK SETUP ABGESCHLOSSEN ====="
+
+      # 5. Gradle einrichten
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-cleanup: always
+
+      # 6. Signierung vorbereiten
+      - name: Prepare release signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          PASS="${KEYSTORE_PASSWORD:-episteme-local}"
+          KEYSTORE="$RUNNER_TEMP/release.jks"
+
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+            echo "Vorhandener Release-Key geladen."
+          else
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE" \
+              -alias episteme \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$PASS" \
+              -keypass "$PASS" \
+              -dname "CN=Episteme Local"
+
+            echo "::warning::Neuer Signierschlüssel erstellt. Für spätere Updates denselben Keystore dauerhaft speichern."
+          fi
+
+          {
+            echo "MYAPP_RELEASE_STORE_FILE=$KEYSTORE"
+            echo "MYAPP_RELEASE_STORE_PASSWORD=$PASS"
+            echo "MYAPP_RELEASE_KEY_ALIAS=episteme"
+            echo "MYAPP_RELEASE_KEY_PASSWORD=$PASS"
+          } >> local.properties
+
+      # 7. Speicherdiagnose
+      - name: Check available memory
+        shell: bash
+        run: |
+          echo "===== SYSTEM MEMORY ====="
+          free -h
+
+          echo "===== JAVA ====="
+          java -version
+
+          echo "===== MEMORY CONFIGURATION ====="
+          echo "Gradle heap: 3 GB"
+          echo "Kotlin daemon heap: 2 GB"
+          echo "Workers: 1"
+
+      # 8. OSS Offline Release APK bauen
+      - name: Build OSS Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            :app:assembleOssReleaseOffline \
+            --no-daemon \
+            --no-watch-fs \
+            --max-workers=1 \
+            --stacktrace \
+            --build-cache \
+            -Dorg.gradle.jvmargs="-Xms512m -Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" \
+            -Pkotlin.daemon.jvmargs=-Xmx2g
+
+      # 9. APK-Dateien einsammeln
+      - name: Collect APK files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          find app/build/outputs \
+            -type f \
+            -name '*.apk' \
+            -print \
+            -exec cp {} dist/ \;
+
+          if ! compgen -G "dist/*.apk" > /dev/null; then
+            echo "::error::Es wurde keine APK erzeugt."
+            exit 1
+          fi
+
+          echo "===== GENERATED APK FILES ====="
+          ls -lh dist/
+
+          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+
+      # 10. APK als Artifact hochladen
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: episteme-oss-release-apk
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      # 11. GitHub Release erstellen
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          TAG="build-${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" dist/*.apk \
+            --title "OSS APK Build ${GITHUB_RUN_NUMBER}" \
+            --notes "Automatischer OSS Release Build.
+          Commit: ${GITHUB_SHA}
+          Build: ${GITHUB_RUN_NUMBER}" \
+            --prerelease
+
+      # 12. Fehlerdiagnose
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: episteme-build-diagnostics
+          path: |
+            app/build/reports/
+            app/build/outputs/logs/
+            build/reports/
+          if-no-files-found: ignore
+          retention-days: 7
