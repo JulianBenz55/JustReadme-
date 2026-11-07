@@ -1,3 +1,4 @@
+
 package com.aryan.reader.webimport
 
 import androidx.compose.foundation.clickable
@@ -8,10 +9,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.LocalLibrary
-import androidx.compose.material.icons.filled.AutoStories
-import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,10 +64,10 @@ internal fun AddBookSheet(
             )
             AddMenuRow(Icons.Outlined.FileOpen, R.string.add_from_file, R.string.add_from_file_hint, onLocalFile)
             AddMenuRow(Icons.Default.Folder, R.string.add_from_directory, R.string.add_from_directory_hint, onDirectory)
-            AddMenuRow(Icons.Default.Language, R.string.add_from_browser, R.string.add_from_browser_hint, onBrowser)
-            AddMenuRow(Icons.Default.AutoStories, R.string.add_from_novel, R.string.add_from_novel_hint, onNovel)
-            AddMenuRow(Icons.Default.RssFeed, R.string.add_from_feed, R.string.add_from_feed_hint, onFeed)
-            AddMenuRow(Icons.Default.LocalLibrary, R.string.add_online_library, R.string.add_online_library_hint, onOnlineLibrary)
+            AddMenuRow(Icons.Default.Folder, R.string.add_from_browser, R.string.add_from_browser_hint, onBrowser)
+            AddMenuRow(Icons.Outlined.FileOpen, R.string.add_from_novel, R.string.add_from_novel_hint, onNovel)
+            AddMenuRow(Icons.Default.Folder, R.string.add_from_feed, R.string.add_from_feed_hint, onFeed)
+            AddMenuRow(Icons.Outlined.FileOpen, R.string.add_online_library, R.string.add_online_library_hint, onOnlineLibrary)
         }
     }
 }
@@ -80,7 +77,13 @@ private fun AddMenuRow(icon: ImageVector, title: Int, hint: Int, onClick: () -> 
     ListItem(
         headlineContent = { Text(stringResource(title)) },
         supportingContent = { Text(stringResource(hint)) },
-        leadingContent = { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        leadingContent = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
         modifier = Modifier.clickable(onClick = onClick),
     )
 }
@@ -161,7 +164,10 @@ internal fun WebImportDialog(
                     label = { Text(stringResource(R.string.web_import_url_label)) },
                     singleLine = true,
                     enabled = !busy,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Go,
+                    ),
                     keyboardActions = KeyboardActions(onGo = { start() }),
                     modifier = Modifier.padding(top = 12.dp),
                 )
@@ -177,7 +183,9 @@ internal fun WebImportDialog(
                             modifier = Modifier.padding(top = 4.dp),
                         )
                     } else {
-                        LinearProgressIndicator(modifier = Modifier.padding(top = 16.dp))
+                        LinearProgressIndicator(
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
                     }
                 }
                 error?.let {
@@ -191,16 +199,26 @@ internal fun WebImportDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { start() }, enabled = !busy && input.isNotBlank()) {
+            TextButton(
+                onClick = { start() },
+                enabled = !busy && input.isNotBlank(),
+            ) {
                 Text(stringResource(R.string.web_import_start))
             }
         },
         dismissButton = {
-            TextButton(onClick = {
-                job?.cancel()
-                onDismiss()
-            }) {
-                Text(stringResource(if (busy) R.string.web_import_cancel else R.string.web_import_close))
+            TextButton(
+                onClick = {
+                    job?.cancel()
+                    onDismiss()
+                },
+            ) {
+                Text(
+                    stringResource(
+                        if (busy) R.string.web_import_cancel
+                        else R.string.web_import_close
+                    )
+                )
             }
         },
     )
