@@ -200,8 +200,9 @@ object SharedLibraryEditor {
         val trimmed = cleanShelfName(name) ?: return null
         val selectedBooks = cleanBookIds(bookIds)
         val shelfId = "shelf_$nowMillis"
-        val newRefs = selectedBooks.map { bookId ->
-            BookShelfRef(bookId = bookId, shelfId = shelfId, addedAt = nowMillis)
+        // One millisecond apart so the shelf keeps the order the books were selected in.
+        val newRefs = selectedBooks.mapIndexed { index, bookId ->
+            BookShelfRef(bookId = bookId, shelfId = shelfId, addedAt = nowMillis + index)
         }
         return SharedLibraryMutationResult(
             state = state.copy(
@@ -724,8 +725,8 @@ object SharedLibraryEditor {
             ),
             shelfRecords = shelfRecords,
             shelfRefs = shelfRefs.filterNot { it.shelfId == cleanShelfId } +
-                selectedBooks.map { bookId ->
-                    BookShelfRef(bookId = bookId, shelfId = cleanShelfId, addedAt = nowMillis)
+                selectedBooks.mapIndexed { index, bookId ->
+                    BookShelfRef(bookId = bookId, shelfId = cleanShelfId, addedAt = nowMillis + index)
                 }
         )
     }
@@ -816,11 +817,11 @@ object SharedLibraryEditor {
 
         val existing = shelfRefs.mapTo(mutableSetOf()) { it.bookId to it.shelfId }
         val additions = targetShelfIds.flatMap { shelfId ->
-            selectedBooks.mapNotNull { bookId ->
+            selectedBooks.mapIndexedNotNull { index, bookId ->
                 if (!existing.add(bookId to shelfId)) {
                     null
                 } else {
-                    BookShelfRef(bookId = bookId, shelfId = shelfId, addedAt = nowMillis)
+                    BookShelfRef(bookId = bookId, shelfId = shelfId, addedAt = nowMillis + index)
                 }
             }
         }

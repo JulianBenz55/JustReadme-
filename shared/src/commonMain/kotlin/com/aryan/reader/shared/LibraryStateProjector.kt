@@ -130,6 +130,8 @@ class SharedLibraryStateProjector(
         val shelves = mutableListOf<Shelf>()
         val shelvedBookIds = mutableSetOf<String>()
         val booksById = allLibraryBooks.associateBy { it.id }
+        // Only user shelves can follow the user's own order; every other list falls back to recent.
+        val autoOrder = sortOrder.orRecent()
 
         shelfRecords
             // "unshelved" is a synthetic shelf added below. Older persisted
@@ -145,7 +147,7 @@ class SharedLibraryStateProjector(
                             id = shelf.id,
                             name = shelf.name,
                             type = ShelfType.SMART,
-                            books = sortBooks(matchingBooks, sortOrder),
+                            books = sortBooks(matchingBooks, autoOrder),
                             smartRulesJson = shelf.smartRulesJson,
                             modifiedAt = shelf.modifiedAt,
                         )
@@ -184,7 +186,7 @@ class SharedLibraryStateProjector(
             if (taggedBooks.isEmpty()) {
                 null
             } else {
-                Shelf("tag_${tag.id}", tag.name, ShelfType.TAG, sortBooks(taggedBooks, sortOrder))
+                Shelf("tag_${tag.id}", tag.name, ShelfType.TAG, sortBooks(taggedBooks, autoOrder))
             }
         }
         shelves.addAll(tagShelves)
@@ -200,12 +202,12 @@ class SharedLibraryStateProjector(
             }
         shelves.addAll(seriesShelves)
 
-        val folderShelves = buildFolderShelves(allLibraryBooks, syncedFolders, sortOrder)
+        val folderShelves = buildFolderShelves(allLibraryBooks, syncedFolders, autoOrder)
         folderShelves.forEach { shelf -> shelvedBookIds.addAll(shelf.books.map { it.id }) }
         shelves.addAll(folderShelves)
 
         val unshelvedBooks = allLibraryBooks.filter { it.id !in shelvedBookIds }
-        shelves.add(Shelf("unshelved", "Unshelved", ShelfType.MANUAL, sortBooks(unshelvedBooks, sortOrder)))
+        shelves.add(Shelf("unshelved", "Unshelved", ShelfType.MANUAL, sortBooks(unshelvedBooks, autoOrder)))
 
         shelves.sortWith(compareBy({ it.type.ordinal }, { it.sortKey }))
         return ShelfProjection(shelves = shelves, unshelvedBooks = unshelvedBooks)
@@ -407,6 +409,7 @@ fun sortBooks(books: List<BookItem>, sortOrder: SortOrder): List<BookItem> {
         SortOrder.PERCENT_DESC -> books.sortedByDescending { it.progressPercentage ?: 0f }
         SortOrder.SIZE_ASC -> books.sortedBy { it.fileSize }
         SortOrder.SIZE_DESC -> books.sortedByDescending { it.fileSize }
+        SortOrder.MANUAL -> books
     }
 }
 

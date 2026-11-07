@@ -9087,6 +9087,10 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         persistLibraryLandingState()
     }
 
+    fun reorderShelf(shelfId: String, orderedBookIds: List<String>) {
+        viewModelScope.launch { libraryMutationController.reorderShelf(shelfId, orderedBookIds) }
+    }
+
     fun addBooksToShelf(shelfId: String) {
         val bookIdsToAdd = SharedLibraryEditor.cleanBookIds(_internalState.value.booksSelectedForAdding)
         if (!SharedLibraryEditor.canMutateShelf(shelfId) || bookIdsToAdd.isEmpty()) {

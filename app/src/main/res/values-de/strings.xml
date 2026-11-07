@@ -1545,6 +1545,9 @@
     <string name="unified_library_list_view">Listenansicht</string>
     <string name="unified_library_sort_filter">Sortieren und filtern</string>
     <string name="library_columns_per_row">Bücher pro Reihe</string>
+    <string name="library_books_per_row">%d pro Reihe</string>
+    <string name="library_view_options">Ansicht</string>
+    <string name="sort_manual">Eigene Reihenfolge</string>
     <string name="unified_library_account">Konto</string>
     <string name="unified_library_signed_out">Nicht angemeldet</string>
     <string name="unified_library_manage_account">Konto &amp; Synchronisierung</string>
@@ -1916,7 +1919,7 @@
     <string name="add_from_directory">Aus Verzeichnis</string>
     <string name="add_from_directory_hint">Einen ganzen Ordner hinzufügen und synchron halten</string>
     <string name="add_from_browser">Aus Webbrowser</string>
-    <string name="add_from_browser_hint">PDF-/EPUB-Link laden oder eine Webseite in ein Buch umwandeln</string>
+    <string name="add_from_browser_hint">Seiten in der App durchsuchen, anmelden und als Buch clippen</string>
     <string name="add_from_novel">Von Webnovel</string>
     <string name="add_from_novel_hint">Alle Kapitel einer Webnovel in einer EPUB sammeln</string>
     <string name="add_from_feed">Von Feed-URL</string>
@@ -1930,4 +1933,17 @@
     <string name="web_import_start">Importieren</string>
     <string name="web_import_cancel">Abbrechen</string>
     <string name="web_import_close">Schließen</string>
+    <string name="reorder_shelf_title">Reihenfolge ändern</string>
+    <string name="reorder_shelf_save">Speichern</string>
+    <string name="reorder_shelf_hint">Griff gedrückt halten und ziehen oder die Pfeile nutzen. Unter „Sortieren und filtern“ „Eigene Reihenfolge“ wählen, um sie zu sehen.</string>
+    <string name="web_sources_hint">Öffne eine Webseite, melde dich bei Bedarf an und wähle im Menü „Seite clippen“, um die Seite in deiner Bibliothek zu speichern. Im Browser heruntergeladene Bücher werden ebenfalls importiert.</string>
+    <string name="web_sources_name_hint">Name (optional)</string>
+    <string name="web_sources_add">Quelle hinzufügen</string>
+    <string name="web_sources_browse">Durchsuchen</string>
+    <string name="web_browser_clip">Seite clippen</string>
+    <string name="web_browser_reload">Neu laden</string>
+    <string name="web_browser_open_external">In anderem Browser öffnen</string>
+    <string name="web_browser_clipped">Seite in der Bibliothek gespeichert</string>
+    <string name="web_browser_downloaded">Importiert: %s</string>
+    <string name="web_browser_unsupported_download">Dieser Download-Typ wird nicht unterstützt</string>
 </resources>

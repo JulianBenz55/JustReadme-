@@ -17,12 +17,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.FormatListNumbered
-import androidx.compose.material.icons.automirrored.filled.LibraryBooks
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,6 +34,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -45,6 +51,9 @@ data class SharedAndroidUnifiedHomeStrings(
     val gridView: String,
     val listView: String,
     val filterLabels: Map<MobileUnifiedLibraryFilter, String>,
+    /** Menu label for "N books per row". */
+    val booksPerRow: (Int) -> String = { "$it" },
+    val viewOptions: String = "",
 )
 
 @Composable
@@ -61,6 +70,8 @@ fun <T> SharedAndroidUnifiedLibraryHome(
     onControls: () -> Unit,
     onAdvancedFilters: () -> Unit,
     onListViewChange: (Boolean) -> Unit,
+    columns: Int = LibraryColumnsDefault,
+    onColumnsChange: ((Int) -> Unit)? = null,
     continueCard: @Composable (T, Modifier) -> Unit,
     bookCard: @Composable (T) -> Unit,
     bookListItem: @Composable (T) -> Unit,
@@ -89,11 +100,26 @@ fun <T> SharedAndroidUnifiedLibraryHome(
                 }
             }
             item {
-                IconButton(onClick = { onListViewChange(!useListView) }) {
-                    Icon(
-                        if (useListView) Icons.AutoMirrored.Filled.LibraryBooks else Icons.Default.FormatListNumbered,
-                        contentDescription = if (useListView) strings.gridView else strings.listView,
-                    )
+                var viewMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { viewMenuOpen = true }) {
+                        Icon(Icons.Default.GridView, contentDescription = strings.viewOptions.ifEmpty { strings.gridView })
+                    }
+                    DropdownMenu(expanded = viewMenuOpen, onDismissRequest = { viewMenuOpen = false }) {
+                        for (count in LibraryColumnsMin..LibraryColumnsMax) {
+                            DropdownMenuItem(
+                                text = { Text(strings.booksPerRow(count)) },
+                                leadingIcon = {
+                                    if (count == columns) Icon(Icons.Default.Check, contentDescription = null)
+                                },
+                                onClick = {
+                                    viewMenuOpen = false
+                                    onColumnsChange?.invoke(count)
+                                    onListViewChange(false)
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -106,21 +132,14 @@ fun <T> SharedAndroidUnifiedLibraryHome(
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 tonalElevation = 1.dp,
             ) {
-                if (useListView) {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(12.dp, 12.dp, 12.dp, 96.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) { items(books, key = itemKey) { bookListItem(it) } }
-                } else {
-                    LazyVerticalGrid(
-                        columns = gridCells,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(12.dp, 16.dp, 12.dp, 96.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                    ) { items(books, key = itemKey) { bookCard(it) } }
-                }
+                // The old list view is replaced by the "1 per row" card of the grid.
+                LazyVerticalGrid(
+                    columns = gridCells,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp, 16.dp, 12.dp, 96.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) { items(books, key = itemKey) { bookCard(it) } }
             }
         }
     }

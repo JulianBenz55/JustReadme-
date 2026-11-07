@@ -104,7 +104,6 @@ internal fun UnifiedFoldersSection(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun UnifiedLibraryControlsSheet(currentFilter: UnifiedLibraryFilter, currentSortOrder: SortOrder, onFilterChanged: (UnifiedLibraryFilter) -> Unit, onSortChanged: (SortOrder) -> Unit, onAdvancedFiltersClick: () -> Unit, onDismiss: () -> Unit) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     com.aryan.reader.shared.ui.SharedAndroidUnifiedLibraryControlsSheet(
         currentFilter = currentFilter,
         currentSortOrder = currentSortOrder,
@@ -115,10 +114,7 @@ internal fun UnifiedLibraryControlsSheet(currentFilter: UnifiedLibraryFilter, cu
             advancedFilters = stringResource(R.string.filter_library),
             filterLabels = UnifiedLibraryFilter.entries.associateWith { stringResource(it.labelRes) },
             sortLabels = SortOrder.entries.associateWith { stringResource(it.labelRes) },
-            columnsLabel = stringResource(R.string.library_columns_per_row),
         ),
-        columns = LibraryColumnsStore.columns,
-        onColumnsChanged = { LibraryColumnsStore.set(context, it) },
         onFilterChanged = onFilterChanged,
         onSortChanged = onSortChanged,
         onAdvancedFilters = onAdvancedFiltersClick,
@@ -263,6 +259,7 @@ internal fun UnifiedLibraryHome(
     onCloseAllTabs: () -> Unit,
     widthSizeClass: WindowWidthSizeClass,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     com.aryan.reader.shared.ui.SharedAndroidUnifiedLibraryHome(
         books = books,
         continueReading = continueReading.takeIf { filter == UnifiedLibraryFilter.ALL && query.isBlank() },
@@ -276,7 +273,11 @@ internal fun UnifiedLibraryHome(
             gridView = stringResource(R.string.unified_library_grid_view),
             listView = stringResource(R.string.unified_library_list_view),
             filterLabels = UnifiedLibraryFilter.entries.associateWith { stringResource(it.labelRes) },
+            booksPerRow = { count -> context.getString(R.string.library_books_per_row, count) },
+            viewOptions = stringResource(R.string.library_view_options),
         ),
+        columns = LibraryColumnsStore.columns,
+        onColumnsChange = { LibraryColumnsStore.set(context, it) },
         itemKey = { it.bookId },
         onFilterChange = onFilterChange,
         onControls = onControlsClick,
@@ -344,11 +345,38 @@ internal fun UnifiedShelvesSection(
     onAddBooks: (String) -> Unit,
     onBookClick: (RecentFileItem) -> Unit,
     onBookLongClick: (RecentFileItem) -> Unit,
+    sortOrder: SortOrder = SortOrder.RECENT,
+    onReorderShelf: (shelfId: String, orderedBookIds: List<String>) -> Unit = { _, _ -> },
 ) {
     val selectedShelf = shelves.find { it.id == selectedShelfId }
-    val visibleShelves = remember(shelves) { shelves.filter { it.type != ShelfType.TAG && it.parentShelfId == null } }
-    val childShelves = remember(shelves, selectedShelf) {
-        selectedShelf?.childShelfIds?.mapNotNull { childId -> shelves.find { it.id == childId } } ?: emptyList()
+    // The sort chosen in the library menu also orders shelves, folders and the books inside them.
+    val visibleShelves = remember(shelves, sortOrder) {
+        shelves.filter { it.type != ShelfType.TAG && it.parentShelfId == null }.sortedForLibrary(sortOrder)
+    }
+    val childShelves = remember(shelves, selectedShelf, sortOrder) {
+        (selectedShelf?.childShelfIds?.mapNotNull { childId -> shelves.find { it.id == childId } } ?: emptyList())
+            .sortedForLibrary(sortOrder)
+    }
+    val orderedBooks = remember(selectedShelf, sortOrder) {
+        val direct = selectedShelf?.directBooks.orEmpty()
+        // "My order" keeps the stored shelf order; every other choice sorts the shelf's books.
+        if (sortOrder == SortOrder.MANUAL) direct else sortFiles(direct, sortOrder)
+    }
+    var reorderShelfId by remember { mutableStateOf<String?>(null) }
+    reorderShelfId?.let { shelfId ->
+        val shelfToReorder = shelves.find { it.id == shelfId }
+        if (shelfToReorder != null) {
+            ShelfReorderDialog(
+                books = shelfToReorder.directBooks,
+                onSave = { ordered ->
+                    onReorderShelf(shelfId, ordered)
+                    reorderShelfId = null
+                },
+                onDismiss = { reorderShelfId = null },
+            )
+        } else {
+            reorderShelfId = null
+        }
     }
     val breadcrumbEntries = remember(shelves, selectedShelfId) {
         com.aryan.reader.shared.ui.genericShelfBreadcrumbPath(
@@ -362,7 +390,7 @@ internal fun UnifiedShelvesSection(
     com.aryan.reader.shared.ui.SharedAndroidUnifiedShelves(
         visibleShelves = visibleShelves,
         selectedShelf = selectedShelf,
-        selectedBooks = selectedShelf?.directBooks.orEmpty(),
+        selectedBooks = orderedBooks,
         noShelvesLabel = stringResource(R.string.unified_library_no_shelves),
         shelfKey = { it.id },
         shelfName = { it.name },
@@ -382,6 +410,7 @@ internal fun UnifiedShelvesSection(
                 canMutate = shelf.type == ShelfType.MANUAL &&
                     com.aryan.reader.shared.SharedLibraryEditor.canMutateShelf(shelf.id),
                 onAddBooks = { onAddBooks(shelf.id) },
+                onReorder = if (shelf.type == ShelfType.MANUAL && shelf.directBooks.size > 1) ({ reorderShelfId = shelf.id }) else null,
                 onRename = { onRenameShelf(shelf.id) },
                 onDelete = { onDeleteShelf(shelf.id) },
             )
@@ -426,6 +455,7 @@ internal fun UnifiedShelfActionsMenu(
     onAddBooks: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    onReorder: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -438,6 +468,12 @@ internal fun UnifiedShelfActionsMenu(
                 text = { Text(stringResource(R.string.fab_add_books)) },
                 onClick = { expanded = false; onAddBooks() },
             )
+            if (canMutate && onReorder != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.reorder_shelf_title)) },
+                    onClick = { expanded = false; onReorder() },
+                )
+            }
             if (canMutate) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.menu_rename_shelf)) },

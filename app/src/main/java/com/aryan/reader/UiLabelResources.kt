@@ -93,6 +93,7 @@ val SortOrder.labelRes: Int
         SortOrder.PERCENT_DESC -> R.string.sort_percent_desc
         SortOrder.SIZE_ASC -> R.string.sort_size_smallest
         SortOrder.SIZE_DESC -> R.string.sort_size_biggest
+        SortOrder.MANUAL -> R.string.sort_manual
     }
 
 val ReadStatusFilter.labelRes: Int

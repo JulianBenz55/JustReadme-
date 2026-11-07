@@ -81,24 +81,54 @@ internal object WebImporters {
             type == "application/epub+zip" || path.endsWith(".epub") -> {
                 File(dir, nameFromUrl(result.finalUrl, "epub")).also { it.writeBytes(result.bytes) }
             }
-            else -> {
-                val doc = parseHtml(result)
-                val page = ContentExtractor.extract(doc)
-                if (page.textLength < 200) {
-                    throw IOException("No readable text found (the page may load its content with JavaScript)")
-                }
-                val target = File(dir, safeFileName(page.title) + ".epub")
-                EpubWriter.write(
-                    target = target,
-                    title = page.title,
-                    author = URL(result.finalUrl).host,
-                    language = doc.selectFirst("html")?.attr("lang")?.takeIf { it.isNotBlank() } ?: "en",
-                    identifier = "urn:uuid:" + UUID.nameUUIDFromBytes(result.finalUrl.toByteArray()),
-                    chapters = listOf(EpubChapter(page.title, page.bodyXhtml)),
-                )
-                target
-            }
+            else -> buildPageEpub(dir, parseHtml(result), result.finalUrl)
         }
+    }
+
+    private fun buildPageEpub(dir: File, doc: Document, pageUrl: String): File {
+        val page = ContentExtractor.extract(doc)
+        if (page.textLength < 200) {
+            throw IOException("No readable text found (the page may load its content with JavaScript)")
+        }
+        val target = File(dir, safeFileName(page.title) + ".epub")
+        EpubWriter.write(
+            target = target,
+            title = page.title,
+            author = URL(pageUrl).host,
+            language = doc.selectFirst("html")?.attr("lang")?.takeIf { it.isNotBlank() } ?: "en",
+            identifier = "urn:uuid:" + UUID.nameUUIDFromBytes(pageUrl.toByteArray()),
+            chapters = listOf(EpubChapter(page.title, page.bodyXhtml)),
+        )
+        return target
+    }
+
+    /** "Clip page": turns the HTML currently shown in the in-app browser (login and scripts included) into an EPUB. */
+    suspend fun clipHtml(context: Context, html: String, pageUrl: String): File = withContext(Dispatchers.Default) {
+        buildPageEpub(outputDir(context), Jsoup.parse(html, pageUrl), pageUrl)
+    }
+
+    /** Downloads a file the in-app browser was asked to save, using the browser's cookies so logins keep working. */
+    suspend fun downloadFile(
+        context: Context,
+        url: String,
+        fileName: String,
+        cookies: String?,
+        userAgent: String?,
+    ): File = withContext(Dispatchers.IO) {
+        val target = File(outputDir(context), safeFileName(fileName.substringBeforeLast('.')) + "." +
+            fileName.substringAfterLast('.', "bin").take(8))
+        val connection = URL(url).openConnection() as java.net.HttpURLConnection
+        try {
+            connection.connectTimeout = 20_000
+            connection.readTimeout = 30_000
+            if (!userAgent.isNullOrBlank()) connection.setRequestProperty("User-Agent", userAgent)
+            if (!cookies.isNullOrBlank()) connection.setRequestProperty("Cookie", cookies)
+            if (connection.responseCode !in 200..299) throw IOException("HTTP ${connection.responseCode}")
+            connection.inputStream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+        } finally {
+            connection.disconnect()
+        }
+        target
     }
 
     // ---------------------------------------------------------------- web novel

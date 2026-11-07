@@ -35,7 +35,10 @@ internal class AndroidLibraryMutationStore(
     override suspend fun addBooksToShelf(shelfId: String, bookIds: Set<String>) {
         withContext(Dispatchers.IO) {
             val timestamp = System.currentTimeMillis()
-            shelfDao.insertBookShelfCrossRefs(bookIds.map { BookShelfCrossRef(it, shelfId, timestamp) })
+            // One millisecond apart: the shelf keeps the order the books were selected in.
+            shelfDao.insertBookShelfCrossRefs(
+                bookIds.mapIndexed { index, bookId -> BookShelfCrossRef(bookId, shelfId, timestamp + index) },
+            )
             shelfDao.touchShelf(shelfId, timestamp)
         }
     }
@@ -46,6 +49,19 @@ internal class AndroidLibraryMutationStore(
 
     override suspend fun deleteShelf(shelfId: String) {
         withContext(Dispatchers.IO) { shelfDao.markShelfAsDeleted(shelfId, System.currentTimeMillis()) }
+    }
+
+    override suspend fun reorderShelfBooks(shelfId: String, orderedBookIds: List<String>) {
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val base = System.currentTimeMillis()
+                orderedBookIds.chunked(400).forEach { chunk -> shelfDao.removeBooksFromShelf(shelfId, chunk) }
+                shelfDao.insertBookShelfCrossRefs(
+                    orderedBookIds.mapIndexed { index, bookId -> BookShelfCrossRef(bookId, shelfId, base + index) },
+                )
+                shelfDao.touchShelf(shelfId, base)
+            }
+        }
     }
 
     override suspend fun removeBooksFromShelf(shelfId: String, bookIds: Set<String>) {

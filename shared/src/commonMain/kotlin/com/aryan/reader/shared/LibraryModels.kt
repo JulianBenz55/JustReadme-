@@ -39,8 +39,13 @@ enum class SortOrder {
     PERCENT_ASC,
     PERCENT_DESC,
     SIZE_ASC,
-    SIZE_DESC
+    SIZE_DESC,
+    /** Order chosen by the user inside a shelf (drag to reorder); elsewhere it behaves like RECENT. */
+    MANUAL
 }
+
+/** Lists that have no custom order of their own fall back to "recent" when the user picked MANUAL. */
+fun SortOrder.orRecent(): SortOrder = if (this == SortOrder.MANUAL) SortOrder.RECENT else this
 
 enum class ReadStatusFilter {
     ALL,

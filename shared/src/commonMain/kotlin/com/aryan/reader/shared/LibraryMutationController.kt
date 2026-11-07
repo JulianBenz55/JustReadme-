@@ -9,6 +9,8 @@ interface LibraryMutationStore {
     suspend fun renameShelf(shelfId: String, name: String)
     suspend fun deleteShelf(shelfId: String)
     suspend fun removeBooksFromShelf(shelfId: String, bookIds: Set<String>)
+    /** Stores [orderedBookIds] as the new order of the shelf. Optional for platforms without custom order. */
+    suspend fun reorderShelfBooks(shelfId: String, orderedBookIds: List<String>) {}
     suspend fun createTag(tag: Tag, createdAt: Long)
     suspend fun assignTagToBooks(tagId: String, bookIds: Set<String>)
     suspend fun removeTagFromBooks(tagId: String, bookIds: Set<String>)
@@ -69,6 +71,15 @@ class LibraryMutationController(
             onShelfChanged(shelfId)
         }
         return shelves
+    }
+
+    suspend fun reorderShelf(shelfId: String, orderedBookIds: List<String>): Boolean {
+        val cleanId = shelfId.trim()
+        val ordered = orderedBookIds.distinct()
+        if (!SharedLibraryEditor.canMutateShelf(cleanId) || ordered.isEmpty()) return false
+        store.reorderShelfBooks(cleanId, ordered)
+        onShelfChanged(cleanId)
+        return true
     }
 
     suspend fun removeBooksFromShelf(shelfId: String, bookIds: Iterable<String>): Boolean {

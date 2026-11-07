@@ -7,11 +7,14 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -33,8 +36,6 @@ data class SharedAndroidUnifiedControlsStrings(
     val advancedFilters: String,
     val filterLabels: Map<MobileUnifiedLibraryFilter, String>,
     val sortLabels: Map<SortOrder, String>,
-    /** Label of the "books per row" chooser; the chooser is hidden when empty. */
-    val columnsLabel: String = "",
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -47,11 +48,18 @@ fun SharedAndroidUnifiedLibraryControlsSheet(
     onSortChanged: (SortOrder) -> Unit,
     onAdvancedFilters: () -> Unit,
     onDismiss: () -> Unit,
-    columns: Int = LibraryColumnsDefault,
-    onColumnsChanged: ((Int) -> Unit)? = null,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding()) {
+    // Always fully expanded and scrollable: a half-height sheet with non-scrolling content
+    // fought the drag gesture and jittered, and cut off the last options.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 24.dp)
+                .navigationBarsPadding(),
+        ) {
             Text(strings.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(strings.readStatus, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -63,14 +71,6 @@ fun SharedAndroidUnifiedLibraryControlsSheet(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SortOrder.entries.forEach { order ->
                     FilterChip(selected = currentSortOrder == order, onClick = { onSortChanged(order) }, label = { Text(strings.sortLabels.getValue(order)) })
-                }
-            }
-            if (onColumnsChanged != null && strings.columnsLabel.isNotEmpty()) {
-                Text(strings.columnsLabel, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 20.dp, bottom = 8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (count in LibraryColumnsMin..LibraryColumnsMax) {
-                        FilterChip(selected = columns == count, onClick = { onColumnsChanged(count) }, label = { Text(count.toString()) })
-                    }
                 }
             }
             OutlinedButton(onClick = onAdvancedFilters, modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) { Text(strings.advancedFilters) }

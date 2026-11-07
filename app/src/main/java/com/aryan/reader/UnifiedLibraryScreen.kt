@@ -212,6 +212,7 @@ fun UnifiedLibraryScreen(
     var showAudiobookAddSheet by rememberSaveable { mutableStateOf(false) }
     var showAddBookMenu by rememberSaveable { mutableStateOf(false) }
     var webImportMode by remember { mutableStateOf<com.aryan.reader.webimport.WebImportMode?>(null) }
+    var showWebSources by rememberSaveable { mutableStateOf(false) }
     var showTtsBookPicker by rememberSaveable {
         mutableStateOf(false)
     }
@@ -375,7 +376,8 @@ fun UnifiedLibraryScreen(
                 filter,
                 debouncedQuery
             ),
-            uiState.sortOrder
+            // "My order" only exists inside shelves; the main list falls back to recent.
+            if (uiState.sortOrder == SortOrder.MANUAL) SortOrder.RECENT else uiState.sortOrder
         )
     }
     val section = UnifiedLibrarySection.fromPersisted(uiState.unifiedLibrarySection)
@@ -730,6 +732,11 @@ fun UnifiedLibraryScreen(
                             onAddBooks = { shelfId -> shelfIdAddingBooks = shelfId },
                             onBookClick = viewModel::onRecentFileClicked,
                             onBookLongClick = viewModel::onRecentItemLongPress,
+                            sortOrder = uiState.sortOrder,
+                            onReorderShelf = { shelfId, orderedIds ->
+                                viewModel.reorderShelf(shelfId, orderedIds)
+                                viewModel.setSortOrder(SortOrder.MANUAL)
+                            },
                             )
                     }
                 }
@@ -808,7 +815,7 @@ fun UnifiedLibraryScreen(
             },
             onBrowser = {
                 showAddBookMenu = false
-                webImportMode = com.aryan.reader.webimport.WebImportMode.BROWSER
+                showWebSources = true
             },
             onNovel = {
                 showAddBookMenu = false
@@ -823,6 +830,12 @@ fun UnifiedLibraryScreen(
                 selectedShelfId = null
                 viewModel.setUnifiedLibrarySection(UnifiedLibrarySection.CATALOGS.persistedValue)
             },
+        )
+    }
+    if (showWebSources) {
+        com.aryan.reader.webimport.WebSourcesDialog(
+            onDismiss = { showWebSources = false },
+            onImported = { file -> viewModel.onFilesSelected(listOf(android.net.Uri.fromFile(file))) },
         )
     }
     webImportMode?.let { mode ->

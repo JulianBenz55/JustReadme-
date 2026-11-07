@@ -119,6 +119,9 @@
     <string name="unified_library_list_view">List view</string>
     <string name="unified_library_sort_filter">Sort and filter</string>
     <string name="library_columns_per_row">Books per row</string>
+    <string name="library_books_per_row">%d per row</string>
+    <string name="library_view_options">View</string>
+    <string name="sort_manual">My order</string>
     <string name="unified_library_account">Account</string>
     <string name="unified_library_signed_out">You are not signed in</string>
     <string name="unified_library_manage_account">Account and sync</string>
@@ -2695,7 +2698,7 @@
     <string name="add_from_directory">From directory</string>
     <string name="add_from_directory_hint">Add a whole folder and keep it in sync</string>
     <string name="add_from_browser">From web browser</string>
-    <string name="add_from_browser_hint">Download a PDF/EPUB link or turn a web page into a book</string>
+    <string name="add_from_browser_hint">Browse sites in the app, log in and clip pages as books</string>
     <string name="add_from_novel">From web novel</string>
     <string name="add_from_novel_hint">Collect all chapters of a web novel into one EPUB</string>
     <string name="add_from_feed">From feed URL</string>
@@ -2709,4 +2712,17 @@
     <string name="web_import_start">Import</string>
     <string name="web_import_cancel">Cancel</string>
     <string name="web_import_close">Close</string>
+    <string name="reorder_shelf_title">Change order</string>
+    <string name="reorder_shelf_save">Save</string>
+    <string name="reorder_shelf_hint">Hold the handle and drag, or use the arrows. Choose "My order" in Sort and filter to see it.</string>
+    <string name="web_sources_hint">Open a website, log in if needed, then choose "Clip page" in the menu to save the page in your library. Books you download in the browser are imported too.</string>
+    <string name="web_sources_name_hint">Name (optional)</string>
+    <string name="web_sources_add">Add source</string>
+    <string name="web_sources_browse">Browse</string>
+    <string name="web_browser_clip">Clip page</string>
+    <string name="web_browser_reload">Reload</string>
+    <string name="web_browser_open_external">Open in other browser</string>
+    <string name="web_browser_clipped">Page saved to your library</string>
+    <string name="web_browser_downloaded">Imported: %s</string>
+    <string name="web_browser_unsupported_download">This download type is not supported</string>
 </resources>

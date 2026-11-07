@@ -70,6 +70,7 @@ class LibraryProjector {
             SortOrder.PERCENT_DESC -> books.sortedByDescending { it.progressPercentage ?: 0f }
             SortOrder.SIZE_ASC -> books.sortedBy { it.fileSize }
             SortOrder.SIZE_DESC -> books.sortedByDescending { it.fileSize }
+            SortOrder.MANUAL -> books.sortedByDescending { it.timestamp }
         }
     }
 
