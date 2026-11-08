@@ -1,3 +1,4 @@
+
 package com.aryan.reader.webimport
 
 import android.annotation.SuppressLint
@@ -31,10 +32,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.ContentCut
-import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -118,11 +118,6 @@ private fun defaultSourceName(url: String): String {
     return lastSegment.ifBlank { parsed.host.removePrefix("www.") }
 }
 
-/**
- * "From web browser": saved sources plus an in-app browser. Open a site (log in if needed),
- * navigate to a chapter or page and choose "Clip page" in the menu to save it as a book.
- * Files the browser downloads are imported as well.
- */
 @Composable
 internal fun WebSourcesDialog(
     onDismiss: () -> Unit,
@@ -198,7 +193,7 @@ internal fun WebSourcesDialog(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { browsingUrl = source.url },
                         ) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Icon(Icons.Default.OpenInNew, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                                     Text(source.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(
@@ -364,7 +359,7 @@ internal fun WebBrowserScreen(
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.web_browser_clip)) },
-                                leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                                 enabled = !busy,
                                 onClick = {
                                     menuOpen = false
@@ -381,7 +376,7 @@ internal fun WebBrowserScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.web_browser_open_external)) },
-                                leadingIcon = { Icon(Icons.Default.OpenInBrowser, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.Default.OpenInNew, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     try {
