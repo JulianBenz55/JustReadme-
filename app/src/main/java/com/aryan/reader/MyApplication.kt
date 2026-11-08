@@ -46,6 +46,8 @@ class MyApplication : Application(), ImageLoaderFactory, Configuration.Provider 
             .build()
 
     override fun onCreate() {
+        // A backup that was unpacked before the restart is swapped in before anything opens a database.
+        BackupManager.applyPendingRestore(this)
         super.onCreate()
         registerSharedAndroidMobileApplicationContext(this)
         // Pro installs Play Integrity (debug: debug provider); OSS is a no-op.

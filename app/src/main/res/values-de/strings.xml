@@ -1946,4 +1946,15 @@
     <string name="web_browser_clipped">Seite in der Bibliothek gespeichert</string>
     <string name="web_browser_downloaded">Importiert: %s</string>
     <string name="web_browser_unsupported_download">Dieser Download-Typ wird nicht unterstützt</string>
+    <string name="web_sources_toggle_hint">Erklärung ein- oder ausblenden</string>
+    <string name="reorder_folders_title">Ordner anordnen</string>
+    <string name="backup_title">Backup</string>
+    <string name="backup_description">Speichert alles in einer Datei: Einstellungen, Regale samt Inhalt, Lesestand, Lesezeichen und Annotationen. Beim Wiederherstellen werden die aktuellen Daten ersetzt und die App startet neu.</string>
+    <string name="backup_include_books">Buchdateien einschließen (größere Datei)</string>
+    <string name="backup_create">Backup erstellen</string>
+    <string name="backup_restore">Aus Backup wiederherstellen</string>
+    <string name="backup_created">Backup gespeichert.</string>
+    <string name="backup_restore_ready_title">Backup bereit</string>
+    <string name="backup_restore_ready_text">Die App startet jetzt neu und lädt das Backup.</string>
+    <string name="backup_restart_now">Jetzt neu starten</string>
 </resources>

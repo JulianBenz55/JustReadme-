@@ -349,33 +349,76 @@ internal fun UnifiedShelvesSection(
     onReorderShelf: (shelfId: String, orderedBookIds: List<String>) -> Unit = { _, _ -> },
 ) {
     val selectedShelf = shelves.find { it.id == selectedShelfId }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val storedOrders = ShelfOrderStore.orders
     // The sort chosen in the library menu also orders shelves, folders and the books inside them.
     val visibleShelves = remember(shelves, sortOrder) {
         shelves.filter { it.type != ShelfType.TAG && it.parentShelfId == null }.sortedForLibrary(sortOrder)
     }
-    val childShelves = remember(shelves, selectedShelf, sortOrder) {
-        (selectedShelf?.childShelfIds?.mapNotNull { childId -> shelves.find { it.id == childId } } ?: emptyList())
+    val childShelves = remember(shelves, selectedShelf, sortOrder, storedOrders) {
+        val children = (selectedShelf?.childShelfIds?.mapNotNull { childId -> shelves.find { it.id == childId } } ?: emptyList())
             .sortedForLibrary(sortOrder)
+        if (sortOrder == SortOrder.MANUAL && selectedShelf != null) {
+            children.applyStoredOrder(storedOrders[ShelfOrderStore.foldersKey(selectedShelf.id)]) { it.id }
+        } else {
+            children
+        }
     }
-    val orderedBooks = remember(selectedShelf, sortOrder) {
+    val orderedBooks = remember(selectedShelf, sortOrder, storedOrders) {
         val direct = selectedShelf?.directBooks.orEmpty()
-        // "My order" keeps the stored shelf order; every other choice sorts the shelf's books.
-        if (sortOrder == SortOrder.MANUAL) direct else sortFiles(direct, sortOrder)
+        when {
+            // Own shelves keep their stored database order; shelves built from files use the saved order.
+            sortOrder != SortOrder.MANUAL -> sortFiles(direct, sortOrder)
+            selectedShelf == null || selectedShelf.type == ShelfType.MANUAL -> direct
+            else -> direct.applyStoredOrder(storedOrders[ShelfOrderStore.booksKey(selectedShelf.id)]) { it.bookId }
+        }
     }
-    var reorderShelfId by remember { mutableStateOf<String?>(null) }
-    reorderShelfId?.let { shelfId ->
+    // Which list is being reordered: the books of a shelf, or its sub-folders.
+    var reorderBooksShelfId by remember { mutableStateOf<String?>(null) }
+    var reorderFoldersShelfId by remember { mutableStateOf<String?>(null) }
+    reorderBooksShelfId?.let { shelfId ->
         val shelfToReorder = shelves.find { it.id == shelfId }
         if (shelfToReorder != null) {
+            val shown = if (shelfToReorder.type == ShelfType.MANUAL) {
+                shelfToReorder.directBooks
+            } else {
+                shelfToReorder.directBooks.applyStoredOrder(storedOrders[ShelfOrderStore.booksKey(shelfId)]) { it.bookId }
+            }
             ShelfReorderDialog(
-                books = shelfToReorder.directBooks,
+                title = stringResource(R.string.reorder_shelf_title),
+                entries = shown.map { ReorderEntry(it.bookId, it.title?.takeIf { t -> t.isNotBlank() } ?: it.displayName, it) },
                 onSave = { ordered ->
-                    onReorderShelf(shelfId, ordered)
-                    reorderShelfId = null
+                    if (shelfToReorder.type == ShelfType.MANUAL) {
+                        onReorderShelf(shelfId, ordered)
+                    } else {
+                        ShelfOrderStore.set(context, ShelfOrderStore.booksKey(shelfId), ordered)
+                        onReorderShelf("", emptyList())
+                    }
+                    reorderBooksShelfId = null
                 },
-                onDismiss = { reorderShelfId = null },
+                onDismiss = { reorderBooksShelfId = null },
             )
         } else {
-            reorderShelfId = null
+            reorderBooksShelfId = null
+        }
+    }
+    reorderFoldersShelfId?.let { shelfId ->
+        val parent = shelves.find { it.id == shelfId }
+        if (parent != null) {
+            val shown = parent.childShelfIds.mapNotNull { id -> shelves.find { it.id == id } }
+                .applyStoredOrder(storedOrders[ShelfOrderStore.foldersKey(shelfId)]) { it.id }
+            ShelfReorderDialog(
+                title = stringResource(R.string.reorder_folders_title),
+                entries = shown.map { ReorderEntry(it.id, it.name, null) },
+                onSave = { ordered ->
+                    ShelfOrderStore.set(context, ShelfOrderStore.foldersKey(shelfId), ordered)
+                    onReorderShelf("", emptyList())
+                    reorderFoldersShelfId = null
+                },
+                onDismiss = { reorderFoldersShelfId = null },
+            )
+        } else {
+            reorderFoldersShelfId = null
         }
     }
     val breadcrumbEntries = remember(shelves, selectedShelfId) {
@@ -410,7 +453,8 @@ internal fun UnifiedShelvesSection(
                 canMutate = shelf.type == ShelfType.MANUAL &&
                     com.aryan.reader.shared.SharedLibraryEditor.canMutateShelf(shelf.id),
                 onAddBooks = { onAddBooks(shelf.id) },
-                onReorder = if (shelf.type == ShelfType.MANUAL && shelf.directBooks.size > 1) ({ reorderShelfId = shelf.id }) else null,
+                onReorder = if (shelf.type != ShelfType.TAG && shelf.type != ShelfType.SMART && shelf.directBooks.size > 1) ({ reorderBooksShelfId = shelf.id }) else null,
+                onReorderFolders = if (shelf.childShelfIds.size > 1) ({ reorderFoldersShelfId = shelf.id }) else null,
                 onRename = { onRenameShelf(shelf.id) },
                 onDelete = { onDeleteShelf(shelf.id) },
             )
@@ -456,6 +500,7 @@ internal fun UnifiedShelfActionsMenu(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onReorder: (() -> Unit)? = null,
+    onReorderFolders: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -468,10 +513,16 @@ internal fun UnifiedShelfActionsMenu(
                 text = { Text(stringResource(R.string.fab_add_books)) },
                 onClick = { expanded = false; onAddBooks() },
             )
-            if (canMutate && onReorder != null) {
+            if (onReorder != null) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.reorder_shelf_title)) },
                     onClick = { expanded = false; onReorder() },
+                )
+            }
+            if (onReorderFolders != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.reorder_folders_title)) },
+                    onClick = { expanded = false; onReorderFolders() },
                 )
             }
             if (canMutate) {

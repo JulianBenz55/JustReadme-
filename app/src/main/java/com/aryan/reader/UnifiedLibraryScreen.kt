@@ -211,6 +211,7 @@ fun UnifiedLibraryScreen(
     var showAnnotationExportFormatDialogFor by remember { mutableStateOf<RecentFileItem?>(null) }
     var showAudiobookAddSheet by rememberSaveable { mutableStateOf(false) }
     var showAddBookMenu by rememberSaveable { mutableStateOf(false) }
+    var showBackupDialog by rememberSaveable { mutableStateOf(false) }
     var webImportMode by remember { mutableStateOf<com.aryan.reader.webimport.WebImportMode?>(null) }
     var showWebSources by rememberSaveable { mutableStateOf(false) }
     var showTtsBookPicker by rememberSaveable {
@@ -438,6 +439,10 @@ fun UnifiedLibraryScreen(
                         onSettingsClick = {
                             scope.launch { accountDrawerState.close() }
                             navController.navigateIfReady(com.aryan.reader.shared.ui.SharedMobileAppDestination.SETTINGS)
+                        },
+                        onBackupClick = {
+                            scope.launch { accountDrawerState.close() }
+                            showBackupDialog = true
                         },
                         navController = navController,
                         onFolderSyncSettingsClick = {
@@ -734,7 +739,7 @@ fun UnifiedLibraryScreen(
                             onBookLongClick = viewModel::onRecentItemLongPress,
                             sortOrder = uiState.sortOrder,
                             onReorderShelf = { shelfId, orderedIds ->
-                                viewModel.reorderShelf(shelfId, orderedIds)
+                                if (shelfId.isNotEmpty()) viewModel.reorderShelf(shelfId, orderedIds)
                                 viewModel.setSortOrder(SortOrder.MANUAL)
                             },
                             )
@@ -801,6 +806,9 @@ fun UnifiedLibraryScreen(
             },
             onDismiss = { showLibraryControls = false }
         )
+    }
+    if (showBackupDialog) {
+        BackupDialog(onDismiss = { showBackupDialog = false })
     }
     if (showAddBookMenu) {
         com.aryan.reader.webimport.AddBookSheet(

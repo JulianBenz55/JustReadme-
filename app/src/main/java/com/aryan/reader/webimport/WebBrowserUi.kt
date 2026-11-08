@@ -1,4 +1,3 @@
-
 package com.aryan.reader.webimport
 
 import android.annotation.SuppressLint
@@ -12,7 +11,10 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,13 +25,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -53,6 +58,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -82,16 +88,13 @@ internal object WebSourcesStore {
     private const val KEY = "sources"
 
     fun load(context: Context): List<WebSource> {
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY, null) ?: return emptyList()
-
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null) ?: return emptyList()
         return try {
             val array = JSONArray(raw)
             (0 until array.length()).mapNotNull { index ->
                 val item = array.optJSONObject(index) ?: return@mapNotNull null
                 val url = item.optString("url")
-                if (url.isBlank()) null
-                else WebSource(item.optString("name").ifBlank { url }, url)
+                if (url.isBlank()) null else WebSource(item.optString("name").ifBlank { url }, url)
             }
         } catch (e: Exception) {
             emptyList()
@@ -100,17 +103,8 @@ internal object WebSourcesStore {
 
     fun save(context: Context, sources: List<WebSource>) {
         val array = JSONArray()
-        sources.forEach {
-            array.put(
-                JSONObject()
-                    .put("name", it.name)
-                    .put("url", it.url)
-            )
-        }
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY, array.toString())
-            .apply()
+        sources.forEach { array.put(JSONObject().put("name", it.name).put("url", it.url)) }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, array.toString()).apply()
     }
 }
 
@@ -120,7 +114,6 @@ private fun defaultSourceName(url: String): String {
     } catch (e: Exception) {
         return url
     }
-
     val lastSegment = parsed.path.trim('/').substringAfterLast('/')
     return lastSegment.ifBlank { parsed.host.removePrefix("www.") }
 }
@@ -136,12 +129,7 @@ internal fun WebSourcesDialog(
     onImported: (File) -> Unit,
 ) {
     val context = LocalContext.current
-    val sources = remember {
-        mutableStateListOf<WebSource>().apply {
-            addAll(WebSourcesStore.load(context))
-        }
-    }
-
+    val sources = remember { mutableStateListOf<WebSource>().apply { addAll(WebSourcesStore.load(context)) } }
     var urlInput by rememberSaveable { mutableStateOf("") }
     var nameInput by rememberSaveable { mutableStateOf("") }
     var inputError by remember { mutableStateOf<String?>(null) }
@@ -158,174 +146,121 @@ internal fun WebSourcesDialog(
 
     val openUrl = browsingUrl
     if (openUrl != null) {
-        WebBrowserScreen(
-            startUrl = openUrl,
-            onClose = { browsingUrl = null },
-            onImported = onImported,
-        )
+        WebBrowserScreen(startUrl = openUrl, onClose = { browsingUrl = null }, onImported = onImported)
         return
     }
-
     val errorMessage = inputError
+
+    var hintExpanded by rememberSaveable { mutableStateOf(true) }
+    val maxDialogHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            Modifier.fillMaxWidth().padding(16.dp).heightIn(max = 640.dp),
+            Modifier.fillMaxWidth().padding(16.dp).heightIn(max = maxDialogHeight),
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             Column(Modifier.padding(20.dp)) {
-                Text(
-                    stringResource(R.string.add_from_browser),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-
-                Text(
-                    stringResource(R.string.web_sources_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
-                )
-
-                if (sources.isNotEmpty()) {
-                    LazyColumn(
-                        Modifier.weight(1f, fill = false).heightIn(max = 220.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(sources.toList(), key = { it.url }) { source ->
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    browsingUrl = source.url
-                                },
-                            ) {
-                                Row(
-                                    Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
+                // Title and the fold-away explanation stay visible; everything else scrolls.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.add_from_browser),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = { hintExpanded = !hintExpanded }) {
+                        Icon(
+                            if (hintExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = stringResource(R.string.web_sources_toggle_hint),
+                        )
+                    }
+                }
+                AnimatedVisibility(visible = hintExpanded) {
+                    Text(
+                        stringResource(R.string.web_sources_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                }
+                Column(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    sources.toList().forEach { source ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { browsingUrl = source.url },
+                        ) {
+                            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                                    Text(source.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(
-                                        "🌐",
-                                        color = MaterialTheme.colorScheme.primary,
-                                        style = MaterialTheme.typography.titleMedium,
+                                        source.url,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
-
-                                    Column(
-                                        Modifier.weight(1f).padding(horizontal = 12.dp)
-                                    ) {
-                                        Text(
-                                            source.name,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Text(
-                                            source.url,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-
-                                    IconButton(
-                                        onClick = {
-                                            sources.remove(source)
-                                            WebSourcesStore.save(context, sources.toList())
-                                        }
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = stringResource(
-                                                R.string.web_import_close
-                                            ),
-                                        )
-                                    }
                                 }
+                                IconButton(onClick = {
+                                    sources.remove(source)
+                                    WebSourcesStore.save(context, sources.toList())
+                                }) { Icon(Icons.Default.Close, contentDescription = stringResource(R.string.web_import_close)) }
                             }
                         }
                     }
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = { urlInput = it; inputError = null },
+                        placeholder = { Text("https://example.com") },
+                        singleLine = true,
+                        isError = errorMessage != null,
+                        supportingText = if (errorMessage != null) ({ Text(errorMessage) }) else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { normalized()?.let { browsingUrl = it } }),
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it },
+                        placeholder = { Text(stringResource(R.string.web_sources_name_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
                 }
-
-                OutlinedTextField(
-                    value = urlInput,
-                    onValueChange = {
-                        urlInput = it
-                        inputError = null
-                    },
-                    placeholder = { Text("https://example.com") },
-                    singleLine = true,
-                    isError = errorMessage != null,
-                    supportingText = if (errorMessage != null) {
-                        { Text(errorMessage) }
-                    } else {
-                        null
-                    },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Go,
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onGo = {
-                            normalized()?.let { browsingUrl = it }
-                        }
-                    ),
+                // Buttons stay pinned below the scrolling area; "Browse" gets its own full-width row
+                // so its label never wraps letter by letter.
+                Button(
+                    enabled = urlInput.isNotBlank(),
+                    onClick = { normalized()?.let { browsingUrl = it } },
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                )
-
-                OutlinedTextField(
-                    value = nameInput,
-                    onValueChange = { nameInput = it },
-                    placeholder = {
-                        Text(stringResource(R.string.web_sources_name_hint))
-                    },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-
+                ) { Text(stringResource(R.string.web_sources_browse), maxLines = 1, softWrap = false) }
                 Row(
-                    Modifier.fillMaxWidth().padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.End,
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.web_import_close))
-                    }
-
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.web_import_close), maxLines = 1, softWrap = false) }
                     TextButton(
                         enabled = urlInput.isNotBlank(),
                         onClick = {
                             normalized()?.let { url ->
                                 if (sources.none { it.url == url }) {
-                                    sources.add(
-                                        WebSource(
-                                            nameInput.trim().ifBlank {
-                                                defaultSourceName(url)
-                                            },
-                                            url,
-                                        )
-                                    )
+                                    sources.add(WebSource(nameInput.trim().ifBlank { defaultSourceName(url) }, url))
                                     WebSourcesStore.save(context, sources.toList())
                                 }
                                 urlInput = ""
                                 nameInput = ""
                             }
                         },
-                    ) {
-                        Text(stringResource(R.string.web_sources_add))
-                    }
-
-                    Button(
-                        enabled = urlInput.isNotBlank(),
-                        onClick = {
-                            normalized()?.let { browsingUrl = it }
-                        },
-                    ) {
-                        Text(stringResource(R.string.web_sources_browse))
-                    }
+                    ) { Text(stringResource(R.string.web_sources_add), maxLines = 1, softWrap = false) }
                 }
             }
         }
@@ -341,7 +276,6 @@ internal fun WebBrowserScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageTitle by remember { mutableStateOf("") }
     var currentUrl by remember { mutableStateOf(startUrl) }
@@ -350,29 +284,17 @@ internal fun WebBrowserScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
-    fun toast(message: String) {
-        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-    }
+    fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 
     fun clipPage() {
         val view = webView ?: return
         if (busy) return
-
         busy = true
-        view.evaluateJavascript(
-            "(function(){return document.documentElement.outerHTML;})()"
-        ) { raw ->
+        view.evaluateJavascript("(function(){return document.documentElement.outerHTML;})()") { raw ->
             scope.launch {
                 try {
-                    val html = JSONTokener(raw).nextValue() as? String
-                        ?: throw IOException("The page could not be read")
-
-                    val file = WebImporters.clipHtml(
-                        context.applicationContext,
-                        html,
-                        view.url ?: currentUrl,
-                    )
-
+                    val html = JSONTokener(raw).nextValue() as? String ?: throw IOException("The page could not be read")
+                    val file = WebImporters.clipHtml(context.applicationContext, html, view.url ?: currentUrl)
                     onImported(file)
                     toast(context.getString(R.string.web_browser_clipped))
                 } catch (e: CancellationException) {
@@ -386,44 +308,20 @@ internal fun WebBrowserScreen(
         }
     }
 
-    fun downloadAndImport(
-        url: String,
-        userAgent: String?,
-        disposition: String?,
-        mimeType: String?,
-    ) {
+    fun downloadAndImport(url: String, userAgent: String?, disposition: String?, mimeType: String?) {
         if (!url.startsWith("http")) {
             toast(context.getString(R.string.web_browser_unsupported_download))
             return
         }
-
         if (busy) return
         busy = true
-
         scope.launch {
             try {
-                val fileName = URLUtil.guessFileName(
-                    url,
-                    disposition,
-                    mimeType,
-                )
+                val fileName = URLUtil.guessFileName(url, disposition, mimeType)
                 val cookies = CookieManager.getInstance().getCookie(url)
-
-                val file = WebImporters.downloadFile(
-                    context.applicationContext,
-                    url,
-                    fileName,
-                    cookies,
-                    userAgent,
-                )
-
+                val file = WebImporters.downloadFile(context.applicationContext, url, fileName, cookies, userAgent)
                 onImported(file)
-                toast(
-                    context.getString(
-                        R.string.web_browser_downloaded,
-                        file.name,
-                    )
-                )
+                toast(context.getString(R.string.web_browser_downloaded, file.name))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -435,39 +333,16 @@ internal fun WebBrowserScreen(
     }
 
     Dialog(
-        onDismissRequest = {
-            if (canGoBack) webView?.goBack() else onClose()
-        },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-        ),
+        onDismissRequest = { if (canGoBack) webView?.goBack() else onClose() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
-        Surface(
-            Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surface,
-        ) {
-            Column(
-                Modifier.fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onClose) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(
-                                R.string.web_import_close
-                            ),
-                        )
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.web_import_close))
                     }
-
-                    Column(
-                        Modifier.weight(1f).padding(horizontal = 4.dp)
-                    ) {
+                    Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                         Text(
                             pageTitle.ifBlank { currentUrl },
                             style = MaterialTheme.typography.titleSmall,
@@ -482,65 +357,35 @@ internal fun WebBrowserScreen(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-
                     Box {
                         IconButton(onClick = { menuOpen = true }) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = null,
-                            )
+                            Icon(Icons.Default.MoreVert, contentDescription = null)
                         }
-
-                        DropdownMenu(
-                            expanded = menuOpen,
-                            onDismissRequest = { menuOpen = false },
-                        ) {
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
-                                text = {
-                                    Text(stringResource(R.string.web_browser_clip))
-                                },
-                                leadingIcon = {
-                                    Text("✂")
-                                },
+                                text = { Text(stringResource(R.string.web_browser_clip)) },
+                                leadingIcon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
                                 enabled = !busy,
                                 onClick = {
                                     menuOpen = false
                                     clipPage()
                                 },
                             )
-
                             DropdownMenuItem(
-                                text = {
-                                    Text(stringResource(R.string.web_browser_reload))
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = null,
-                                    )
-                                },
+                                text = { Text(stringResource(R.string.web_browser_reload)) },
+                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     webView?.reload()
                                 },
                             )
-
                             DropdownMenuItem(
-                                text = {
-                                    Text(stringResource(R.string.web_browser_open_external))
-                                },
-                                leadingIcon = {
-                                    Text("↗")
-                                },
+                                text = { Text(stringResource(R.string.web_browser_open_external)) },
+                                leadingIcon = { Icon(Icons.Default.OpenInBrowser, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     try {
-                                        context.startActivity(
-                                            Intent(
-                                                Intent.ACTION_VIEW,
-                                                Uri.parse(webView?.url ?: currentUrl),
-                                            )
-                                        )
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webView?.url ?: currentUrl)))
                                     } catch (e: Exception) {
                                         toast(e.message ?: e.javaClass.simpleName)
                                     }
@@ -549,16 +394,11 @@ internal fun WebBrowserScreen(
                         }
                     }
                 }
-
                 if (busy) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 } else if (progress in 1..99) {
-                    LinearProgressIndicator(
-                        progress = { progress / 100f },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
                 }
-
                 AndroidView(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     factory = { ctx ->
@@ -569,64 +409,32 @@ internal fun WebBrowserScreen(
                             settings.loadWithOverviewMode = true
                             settings.builtInZoomControls = true
                             settings.displayZoomControls = false
-
                             CookieManager.getInstance().setAcceptCookie(true)
-                            CookieManager.getInstance()
-                                .setAcceptThirdPartyCookies(this, true)
-
+                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                             webViewClient = object : WebViewClient() {
-                                override fun onPageStarted(
-                                    view: WebView?,
-                                    url: String?,
-                                    favicon: Bitmap?,
-                                ) {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                     if (url != null) currentUrl = url
                                     canGoBack = view?.canGoBack() == true
                                 }
 
-                                override fun onPageFinished(
-                                    view: WebView?,
-                                    url: String?,
-                                ) {
+                                override fun onPageFinished(view: WebView?, url: String?) {
                                     if (url != null) currentUrl = url
                                     pageTitle = view?.title.orEmpty()
                                     canGoBack = view?.canGoBack() == true
                                 }
                             }
-
                             webChromeClient = object : WebChromeClient() {
-                                override fun onProgressChanged(
-                                    view: WebView?,
-                                    newProgress: Int,
-                                ) {
+                                override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                     progress = newProgress
                                 }
 
-                                override fun onReceivedTitle(
-                                    view: WebView?,
-                                    title: String?,
-                                ) {
-                                    if (!title.isNullOrBlank()) {
-                                        pageTitle = title
-                                    }
+                                override fun onReceivedTitle(view: WebView?, title: String?) {
+                                    if (!title.isNullOrBlank()) pageTitle = title
                                 }
                             }
-
-                            setDownloadListener {
-                                    url,
-                                    userAgent,
-                                    contentDisposition,
-                                    mimeType,
-                                    _,
-                                ->
-                                downloadAndImport(
-                                    url,
-                                    userAgent,
-                                    contentDisposition,
-                                    mimeType,
-                                )
+                            setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                                downloadAndImport(url, userAgent, contentDisposition, mimeType)
                             }
-
                             loadUrl(startUrl)
                             webView = this
                         }

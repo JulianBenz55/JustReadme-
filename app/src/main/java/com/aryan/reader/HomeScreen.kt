@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.FormatListNumbered
@@ -172,6 +173,7 @@ internal fun AppDrawerContent(
     showFonts: Boolean = true,
     showAiSettings: Boolean = true,
     showSupportProject: Boolean = false,
+    onBackupClick: (() -> Unit)? = null,
 ) {
     val isOss = BuildConfig.FLAVOR == "oss"
 
@@ -326,6 +328,16 @@ internal fun AppDrawerContent(
                 onClick = onSettingsClick,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
+
+            onBackupClick?.let { onClick ->
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Backup, contentDescription = null) },
+                    label = { Text(stringResource(R.string.backup_title)) },
+                    selected = false,
+                    onClick = onClick,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
 
             onAboutClick?.let { onClick ->
                 NavigationDrawerItem(

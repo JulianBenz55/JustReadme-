@@ -2725,4 +2725,15 @@
     <string name="web_browser_clipped">Page saved to your library</string>
     <string name="web_browser_downloaded">Imported: %s</string>
     <string name="web_browser_unsupported_download">This download type is not supported</string>
+    <string name="web_sources_toggle_hint">Show or hide the explanation</string>
+    <string name="reorder_folders_title">Arrange folders</string>
+    <string name="backup_title">Backup</string>
+    <string name="backup_description">Saves everything in one file: settings, shelves with their contents, reading progress, bookmarks and annotations. Restoring replaces the current data and restarts the app.</string>
+    <string name="backup_include_books">Include book files (larger file)</string>
+    <string name="backup_create">Create backup</string>
+    <string name="backup_restore">Restore from backup</string>
+    <string name="backup_created">Backup saved.</string>
+    <string name="backup_restore_ready_title">Backup ready</string>
+    <string name="backup_restore_ready_text">The app restarts now and loads the backup.</string>
+    <string name="backup_restart_now">Restart now</string>
 </resources>

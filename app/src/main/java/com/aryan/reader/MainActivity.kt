@@ -128,6 +128,7 @@ open class MainActivity : AppCompatActivity() {
         }
 
         LibraryColumnsStore.load(this)
+        ShelfOrderStore.load(this)
 
         setContent {
             // Window metrics, nav controller, and the link handler live in
