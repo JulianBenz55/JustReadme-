@@ -1,4 +1,3 @@
-
 package com.aryan.reader.webimport
 
 import androidx.compose.foundation.clickable
@@ -9,9 +8,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.AutoStories
-import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material3.AlertDialog
@@ -68,10 +67,10 @@ internal fun AddBookSheet(
             )
             AddMenuRow(Icons.Outlined.FileOpen, R.string.add_from_file, R.string.add_from_file_hint, onLocalFile)
             AddMenuRow(Icons.Default.Folder, R.string.add_from_directory, R.string.add_from_directory_hint, onDirectory)
-            AddMenuRow(Icons.Default.Language, R.string.add_from_browser, R.string.add_from_browser_hint, onBrowser)
-            AddMenuRow(Icons.Default.AutoStories, R.string.add_from_novel, R.string.add_from_novel_hint, onNovel)
+            AddMenuRow(Icons.Default.Translate, R.string.add_from_browser, R.string.add_from_browser_hint, onBrowser)
+            AddMenuRow(Icons.Default.Book, R.string.add_from_novel, R.string.add_from_novel_hint, onNovel)
             AddMenuRow(Icons.Default.Sync, R.string.add_from_feed, R.string.add_from_feed_hint, onFeed)
-            AddMenuRow(Icons.Default.LibraryBooks, R.string.add_online_library, R.string.add_online_library_hint, onOnlineLibrary)
+            AddMenuRow(Icons.Default.FolderSpecial, R.string.add_online_library, R.string.add_online_library_hint, onOnlineLibrary)
         }
     }
 }

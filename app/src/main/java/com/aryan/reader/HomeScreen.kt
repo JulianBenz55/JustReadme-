@@ -42,7 +42,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.FormatListNumbered
@@ -331,7 +331,7 @@ internal fun AppDrawerContent(
 
             onBackupClick?.let { onClick ->
                 NavigationDrawerItem(
-                    icon = { Icon(Icons.Default.Backup, contentDescription = null) },
+                    icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
                     label = { Text(stringResource(R.string.backup_title)) },
                     selected = false,
                     onClick = onClick,
@@ -711,6 +711,7 @@ fun AppThemeBottomSheet(
         onDismiss = onDismiss
     )
 }
+
 @Composable
 fun LanguageSelectionDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
