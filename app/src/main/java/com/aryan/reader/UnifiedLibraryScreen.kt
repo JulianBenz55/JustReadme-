@@ -212,6 +212,7 @@ fun UnifiedLibraryScreen(
     var showAudiobookAddSheet by rememberSaveable { mutableStateOf(false) }
     var showAddBookMenu by rememberSaveable { mutableStateOf(false) }
     var showBackupDialog by rememberSaveable { mutableStateOf(false) }
+    var overviewBookId by rememberSaveable { mutableStateOf<String?>(null) }
     var webImportMode by remember { mutableStateOf<com.aryan.reader.webimport.WebImportMode?>(null) }
     var showWebSources by rememberSaveable { mutableStateOf(false) }
     var showTtsBookPicker by rememberSaveable {
@@ -571,8 +572,10 @@ fun UnifiedLibraryScreen(
                         onNavIconClick = viewModel::clearContextualAction,
                         onInfoClick = selectedItems.singleOrNull()?.let { item ->
                             {
-                                selectedBookForInfo = item
-                                showSelectedBookInfo = true
+                                // The info action now opens the full "About this book" page; the
+                                // old metadata editor stays reachable from its edit button.
+                                overviewBookId = item.bookId
+                                viewModel.clearContextualAction()
                             }
                         },
                         onTagClick = { viewModel.openTagSelection(selectedItems.map { it.bookId }.toSet()) },
@@ -1051,6 +1054,58 @@ fun UnifiedLibraryScreen(
                 exportAnnotations(item, format)
             }
         )
+    }
+    overviewBookId?.let { bookId ->
+        val liveBook = uiState.rawLibraryFiles.firstOrNull { it.bookId == bookId }
+        if (liveBook == null) {
+            overviewBookId = null
+        } else {
+            BookOverviewScreen(
+                book = liveBook,
+                shelfNames = uiState.shelves
+                    .filter { it.type == ShelfType.MANUAL && it.books.any { shelfBook -> shelfBook.bookId == bookId } }
+                    .map { it.name },
+                usePdfFileNameAsDisplayName = uiState.usePdfFileNameAsDisplayName,
+                onClose = { overviewBookId = null },
+                onRead = {
+                    overviewBookId = null
+                    viewModel.onRecentFileClicked(liveBook)
+                },
+                onToggleQuickTag = { name ->
+                    val tag = uiState.allTags.firstOrNull { it.name.equals(name, ignoreCase = true) }
+                    if (tag != null) {
+                        val assigned = liveBook.tags.any { it.id == tag.id }
+                        viewModel.toggleTagForBooks(tag.id, setOf(bookId), !assigned)
+                    } else {
+                        viewModel.createAndAssignTag(name, setOf(bookId))
+                    }
+                },
+                // Pickers and confirmations open in the library, so the page closes first.
+                onAddToShelf = {
+                    overviewBookId = null
+                    viewModel.openAddSelectedToShelf(setOf(bookId))
+                },
+                onShare = if (liveBook.canExportOriginalFile()) ({ shareOriginal(liveBook) }) else null,
+                onDelete = {
+                    overviewBookId = null
+                    viewModel.clearContextualAction()
+                    viewModel.onRecentItemLongPress(liveBook)
+                    showPermanentDeleteConfirmation = true
+                },
+                onEditDetails = {
+                    selectedBookForInfo = liveBook
+                    showSelectedBookInfo = true
+                },
+                onManageTags = {
+                    overviewBookId = null
+                    viewModel.openTagSelection(setOf(bookId))
+                },
+                onExportAnnotations = {
+                    overviewBookId = null
+                    showAnnotationExportFormatDialogFor = liveBook
+                },
+            )
+        }
     }
     HydratedFileInfoDialog(
         item = selectedBookForInfo,
