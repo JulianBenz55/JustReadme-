@@ -496,6 +496,17 @@ fun UnifiedLibraryScreen(
         }
     ) {
         com.aryan.reader.shared.ui.SharedAndroidUnifiedScaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0.0f to MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                            0.42f to MaterialTheme.colorScheme.tertiary.copy(alpha = 0.07f),
+                            1.0f to MaterialTheme.colorScheme.background,
+                        ),
+                    ),
+                ),
             section = section,
             showingShelf = selectedShelfId != null,
             importDescription = stringResource(R.string.unified_library_import),

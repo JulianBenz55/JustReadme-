@@ -191,7 +191,7 @@ fun SharedMobileLibraryBookListCardFrame(
     ElevatedCard(
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.82f),
         ),
         elevation = CardDefaults.elevatedCardElevation(
             defaultElevation = if (isSelected) 6.dp else 2.dp,
@@ -199,6 +199,11 @@ fun SharedMobileLibraryBookListCardFrame(
         modifier = modifier
             .fillMaxWidth()
             .graphicsLayer { alpha = if (isAvailable) 1f else 0.8f }
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.24f),
+                shape = MaterialTheme.shapes.large,
+            )
             .then(
                 if (isSelected) {
                     Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large)
@@ -346,8 +351,8 @@ fun SharedMobileTopAppBar(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        shadowElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f),
+        shadowElevation = 0.dp,
     ) {
         Row(
             modifier = Modifier

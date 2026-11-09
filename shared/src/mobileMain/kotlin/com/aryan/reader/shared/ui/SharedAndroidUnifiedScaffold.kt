@@ -20,6 +20,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -48,6 +49,7 @@ fun SharedAndroidUnifiedScaffold(
 ) {
     Scaffold(
         modifier = modifier,
+        containerColor = Color.Transparent,
         // The top bar draws its own status-bar padding, so only the top inset is zeroed.
         // The bottom inset must stay live: Material3 offsets the FAB by it solely when no
         // bottom bar is present, which is what keeps the FAB clear of the system navigation
