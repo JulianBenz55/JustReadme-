@@ -1,6 +1,22 @@
 package com.aryan.reader
 
+import android.content.Intent
+import android.net.Uri
 import android.text.format.Formatter
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.text.input.KeyboardType
+import coil.compose.AsyncImage
+import com.aryan.reader.data.BookMetadataEdit
+import com.aryan.reader.shared.ui.bounceClick
+import com.aryan.reader.shared.ui.luneGlassBorder
+import com.aryan.reader.shared.ui.luneGlassFill
+import com.aryan.reader.shared.ui.luneIsDark
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -9,6 +25,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -142,6 +159,7 @@ internal fun BookOverviewScreen(
     onEditDetails: () -> Unit,
     onManageTags: () -> Unit,
     onExportAnnotations: (() -> Unit)?,
+    onSaveMetadata: (BookMetadataEdit) -> Unit,
 ) {
     val context = LocalContext.current
     val reviews = BookReviewStore.reviews[book.bookId].orEmpty()
@@ -153,11 +171,46 @@ internal fun BookOverviewScreen(
 
     fun hasTag(name: String) = book.tags.any { it.name.equals(name, ignoreCase = true) }
 
+    // Springy entrance like Lune's sheets.
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+    val enterProgress by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
+        label = "overviewEnter",
+    )
+
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+          Box(
+              Modifier.fillMaxSize().graphicsLayer {
+                  alpha = enterProgress
+                  scaleX = 0.94f + 0.06f * enterProgress
+                  scaleY = 0.94f + 0.06f * enterProgress
+              },
+          ) {
+            // Lune-style backdrop: the cover, heavily blurred and dimmed, behind the glass cards.
+            val backdropDark = luneIsDark()
+            ThemedBookCover(
+                item = book,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(80.dp)
+                    .alpha(if (backdropDark) 0.35f else 0.45f),
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        if (backdropDark) Color.Black.copy(alpha = 0.50f)
+                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                    ),
+            )
             Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 // Top bar: back, title and the main "read" action.
                 Row(
@@ -181,7 +234,7 @@ internal fun BookOverviewScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Button(onClick = onRead, shape = CircleShape) {
+                    Button(onClick = onRead, shape = CircleShape, modifier = Modifier.bounceClick(0.92f)) {
                         Text(stringResource(R.string.overview_read), fontWeight = FontWeight.Bold, maxLines = 1)
                     }
                 }
@@ -201,11 +254,12 @@ internal fun BookOverviewScreen(
                                     .background(
                                         Brush.verticalGradient(
                                             listOf(
-                                                MaterialTheme.colorScheme.primaryContainer,
-                                                MaterialTheme.colorScheme.surfaceContainerHigh,
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
+                                                luneGlassFill(),
                                             ),
                                         ),
                                     )
+                                    .border(1.dp, luneGlassBorder(), RoundedCornerShape(24.dp))
                                     .padding(20.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -332,7 +386,8 @@ internal fun BookOverviewScreen(
                             val animated by animateFloatAsState(percent / 100f, tween(700), label = "overviewProgress")
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                color = luneGlassFill(),
+                                border = BorderStroke(1.dp, luneGlassBorder()),
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Column(Modifier.padding(16.dp)) {
@@ -381,8 +436,9 @@ internal fun BookOverviewScreen(
                         StaggerIn(4) {
                             Surface(
                                 shape = RoundedCornerShape(20.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                modifier = Modifier.fillMaxWidth().clickable { showFileDetails = !showFileDetails },
+                                color = luneGlassFill(),
+                                border = BorderStroke(1.dp, luneGlassBorder()),
+                                modifier = Modifier.fillMaxWidth().bounceClick(0.98f).clickable { showFileDetails = !showFileDetails },
                             ) {
                                 Column(Modifier.padding(16.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -511,8 +567,10 @@ internal fun BookOverviewScreen(
                     items(reviews.size) { index ->
                         val review = reviews[index]
                         ElevatedCard(
-                            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.elevatedCardColors(containerColor = luneGlassFill()),
+                            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.fillMaxWidth().border(1.dp, luneGlassBorder(), RoundedCornerShape(20.dp)),
                         ) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -539,8 +597,16 @@ internal fun BookOverviewScreen(
                             }
                         }
                     }
+
+                    // Metadata editor: current values, editable, saved back into the book.
+                    item {
+                        StaggerIn(8) {
+                            MetadataEditorSection(book = book, onSave = onSaveMetadata)
+                        }
+                    }
                 }
             }
+          }
         }
     }
 
@@ -560,6 +626,147 @@ internal fun BookOverviewScreen(
     }
 }
 
+/** Shows the current metadata and lets the user change title, author, series, series number and cover. */
+@Composable
+private fun MetadataEditorSection(book: RecentFileItem, onSave: (BookMetadataEdit) -> Unit) {
+    val context = LocalContext.current
+    fun formatIndex(value: Double?): String = when {
+        value == null -> ""
+        value % 1.0 == 0.0 -> value.toInt().toString()
+        else -> value.toString()
+    }
+    val currentTitle = book.title?.takeIf { it.isNotBlank() } ?: book.displayName.substringBeforeLast('.')
+    val currentAuthor = book.author.orEmpty()
+    val currentSeries = book.seriesName.orEmpty()
+    val currentIndex = formatIndex(book.seriesIndex)
+
+    // Keyed on the stored values, so the fields refresh after a save.
+    var title by rememberSaveable(book.bookId, currentTitle) { mutableStateOf(currentTitle) }
+    var author by rememberSaveable(book.bookId, currentAuthor) { mutableStateOf(currentAuthor) }
+    var series by rememberSaveable(book.bookId, currentSeries) { mutableStateOf(currentSeries) }
+    var seriesNumber by rememberSaveable(book.bookId, currentIndex) { mutableStateOf(currentIndex) }
+    var newCover by rememberSaveable(book.bookId, book.coverImagePath) { mutableStateOf<String?>(null) }
+
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            newCover = uri.toString()
+        }
+    }
+
+    val parsedIndex = seriesNumber.trim().replace(',', '.').toDoubleOrNull()
+    val indexValid = seriesNumber.isBlank() || (parsedIndex != null && parsedIndex > 0.0)
+    val changed = title.trim() != currentTitle.trim() ||
+        author.trim() != currentAuthor.trim() ||
+        series.trim() != currentSeries.trim() ||
+        seriesNumber.trim() != currentIndex ||
+        newCover != null
+    val canSave = changed && indexValid && title.isNotBlank()
+
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        HorizontalDivider(Modifier.padding(bottom = 4.dp))
+        Text(stringResource(R.string.overview_edit_metadata), style = MaterialTheme.typography.titleLarge)
+
+        OutlinedTextField(
+            value = title,
+            onValueChange = { title = it },
+            label = { Text(stringResource(R.string.overview_meta_title)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = author,
+            onValueChange = { author = it },
+            label = { Text(stringResource(R.string.overview_meta_author)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = series,
+                onValueChange = { series = it },
+                label = { Text(stringResource(R.string.overview_meta_series)) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = seriesNumber,
+                onValueChange = { seriesNumber = it.filter { c -> c.isDigit() || c == '.' || c == ',' }.take(6) },
+                label = { Text("#") },
+                supportingText = { Text(stringResource(R.string.overview_meta_series_number), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                isError = !indexValid,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.width(120.dp),
+            )
+        }
+
+        Text(stringResource(R.string.overview_meta_cover), style = MaterialTheme.typography.titleSmall)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.size(width = 72.dp, height = 104.dp).clip(RoundedCornerShape(8.dp))) {
+                ThemedBookCover(
+                    item = book,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                newCover?.let { picked ->
+                    AsyncImage(
+                        model = picked,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (newCover != null) {
+                    Text(
+                        stringResource(R.string.overview_meta_cover_selected),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(onClick = {
+                    coverPicker.launch(arrayOf("image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"))
+                }) { Text(stringResource(R.string.overview_meta_change_cover), maxLines = 1) }
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                enabled = canSave,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    onSave(
+                        BookMetadataEdit(
+                            title = title.trim(),
+                            author = author.trim().ifBlank { null },
+                            seriesName = series.trim().ifBlank { null },
+                            seriesIndex = if (series.isBlank()) null else parsedIndex,
+                            description = book.description,
+                            coverImageUri = newCover,
+                        ),
+                    )
+                    newCover = null
+                },
+            ) { Text(stringResource(R.string.overview_meta_save), maxLines = 1) }
+            TextButton(
+                enabled = changed,
+                onClick = {
+                    title = currentTitle
+                    author = currentAuthor
+                    series = currentSeries
+                    seriesNumber = currentIndex
+                    newCover = null
+                },
+            ) { Text(stringResource(R.string.overview_meta_reset), maxLines = 1) }
+        }
+    }
+}
+
 @Composable
 private fun QuickAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -572,7 +779,7 @@ private fun QuickAction(
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
         label = "quickActionScale",
     )
-    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(40.dp).bounceClick(0.85f)) {
         Icon(
             icon,
             contentDescription = stringResource(description),

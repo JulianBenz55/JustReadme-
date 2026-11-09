@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import com.aryan.reader.shared.ui.luneAmbientBlobs
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -267,6 +268,29 @@ fun UnifiedLibraryScreen(
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(viewModel::addSyncedFolder)
     }
+    // After a backup restore Android has forgotten the folder grants. One tap on the
+    // prompt below re-grants them, so books and covers return without re-adding folders.
+    var folderAccessTick by remember { mutableStateOf(0) }
+    var folderAccessPromptDismissed by rememberSaveable { mutableStateOf(false) }
+    var folderAccessTarget by remember { mutableStateOf<String?>(null) }
+    val foldersNeedingAccess = remember(uiState.syncedFolders, folderAccessTick) {
+        uiState.syncedFolders.filter {
+            !it.isAppManaged && !it.isCloudPlaceholder && it.localSyncEnabled &&
+                !viewModel.hasPersistedFolderPermission(it.uriString)
+        }
+    }
+    val folderAccessPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val target = folderAccessTarget
+        folderAccessTarget = null
+        if (uri != null) {
+            if (target != null && uri.toString() == target) {
+                viewModel.restoreFolderAccess(uri)
+            } else {
+                viewModel.addSyncedFolder(uri)
+            }
+        }
+        folderAccessTick++
+    }
     val audiobookPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             scope.launch {
@@ -506,6 +530,12 @@ fun UnifiedLibraryScreen(
                             1.0f to MaterialTheme.colorScheme.background,
                         ),
                     ),
+                )
+                // Lune-style soft colour drifting behind the glass cards.
+                .luneAmbientBlobs(
+                    primary = MaterialTheme.colorScheme.primary,
+                    secondary = MaterialTheme.colorScheme.secondary,
+                    tertiary = MaterialTheme.colorScheme.tertiary,
                 ),
             section = section,
             showingShelf = selectedShelfId != null,
@@ -1115,6 +1145,7 @@ fun UnifiedLibraryScreen(
                     overviewBookId = null
                     showAnnotationExportFormatDialogFor = liveBook
                 },
+                onSaveMetadata = { edit -> viewModel.updateBookMetadata(bookId, edit) },
             )
         }
     }
@@ -1131,6 +1162,33 @@ fun UnifiedLibraryScreen(
     )
     if (uiState.showCreateShelfDialog) {
         UnifiedCreateShelfDialog(viewModel::createShelf, viewModel::dismissCreateShelfDialog)
+    }
+    if (foldersNeedingAccess.isNotEmpty() && !folderAccessPromptDismissed) {
+        val nextFolder = foldersNeedingAccess.first()
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { folderAccessPromptDismissed = true },
+            title = { Text(stringResource(R.string.folder_access_restore_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.folder_access_restore_text,
+                        nextFolder.name,
+                        foldersNeedingAccess.size,
+                    )
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    folderAccessTarget = nextFolder.uriString
+                    folderAccessPicker.launch(runCatching { Uri.parse(nextFolder.uriString) }.getOrNull())
+                }) { Text(stringResource(R.string.folder_access_restore_action)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { folderAccessPromptDismissed = true }) {
+                    Text(stringResource(R.string.folder_access_restore_later))
+                }
+            },
+        )
     }
     CustomTopBanner(bannerMessage = uiState.bannerMessage)
 }

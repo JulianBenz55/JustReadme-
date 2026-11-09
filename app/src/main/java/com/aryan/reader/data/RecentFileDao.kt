@@ -159,6 +159,13 @@ interface RecentFileDao {
     @Query("UPDATE recent_files SET uriString = :uriString, isAvailable = 1, lastModifiedTimestamp = :timestamp WHERE bookId = :bookId")
     suspend fun updateBookUri(bookId: String, uriString: String, timestamp: Long)
 
+    /**
+     * Forgets a cover path whose cached file no longer exists so the cover is
+     * regenerated (folder books: by the metadata worker; others: on next open).
+     */
+    @Query("UPDATE recent_files SET coverImagePath = NULL, folderCoverMetadataParsed = 0 WHERE bookId = :bookId")
+    suspend fun clearCoverReference(bookId: String): Int
+
     @Query("UPDATE recent_files SET isAvailable = 0 WHERE bookId = :bookId AND isAvailable = 1")
     suspend fun markUnavailable(bookId: String): Int
 

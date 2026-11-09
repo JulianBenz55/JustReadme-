@@ -190,20 +190,15 @@ fun SharedMobileLibraryBookListCardFrame(
 ) {
     ElevatedCard(
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.82f),
-        ),
+        colors = CardDefaults.elevatedCardColors(containerColor = luneGlassFill(strength = 1.15f)),
         elevation = CardDefaults.elevatedCardElevation(
-            defaultElevation = if (isSelected) 6.dp else 2.dp,
+            defaultElevation = if (isSelected) 6.dp else 0.dp,
         ),
         modifier = modifier
             .fillMaxWidth()
+            .bounceClick(scaleDown = 0.975f)
             .graphicsLayer { alpha = if (isAvailable) 1f else 0.8f }
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.24f),
-                shape = MaterialTheme.shapes.large,
-            )
+            .luneGlassEdge(MaterialTheme.shapes.large)
             .then(
                 if (isSelected) {
                     Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large)
@@ -266,14 +261,14 @@ fun SharedMobileShelfListCardFrame(
 ) {
     ElevatedCard(
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        ),
+        colors = CardDefaults.elevatedCardColors(containerColor = luneGlassFill(strength = 1.15f)),
         elevation = CardDefaults.elevatedCardElevation(
-            defaultElevation = if (isSelected) 8.dp else 2.dp,
+            defaultElevation = if (isSelected) 8.dp else 0.dp,
         ),
         modifier = modifier
             .fillMaxWidth()
+            .bounceClick(scaleDown = 0.975f)
+            .luneGlassEdge(MaterialTheme.shapes.large)
             .then(
                 if (isSelected) {
                     Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large)
@@ -1088,13 +1083,20 @@ internal fun SharedMobileBookCard(
 ) {
     ElevatedCard(
         modifier = modifier
+            .bounceClick()
             .graphicsLayer { alpha = if (book.isAvailable) 1f else 0.8f }
-            .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large) else Modifier)
+            .then(
+                if (selected) {
+                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large)
+                } else {
+                    Modifier.luneGlassEdge(MaterialTheme.shapes.large)
+                },
+            )
             .clip(MaterialTheme.shapes.large)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 6.dp else 2.dp)
+        colors = CardDefaults.elevatedCardColors(containerColor = luneGlassFill(strength = 1.15f)),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 6.dp else 0.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Box {
@@ -1206,13 +1208,20 @@ internal fun SharedMobileLibraryListItem(
     ElevatedCard(
         modifier = Modifier
             .fillMaxWidth()
+            .bounceClick(scaleDown = 0.975f)
             .graphicsLayer { alpha = if (book.isAvailable) 1f else 0.8f }
-            .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large) else Modifier)
+            .then(
+                if (selected) {
+                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large)
+                } else {
+                    Modifier.luneGlassEdge(MaterialTheme.shapes.large)
+                },
+            )
             .clip(MaterialTheme.shapes.large)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = MaterialTheme.shapes.large,
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 6.dp else 2.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = luneGlassFill(strength = 1.15f)),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (selected) 6.dp else 0.dp),
     ) {
         Box {
             Row(

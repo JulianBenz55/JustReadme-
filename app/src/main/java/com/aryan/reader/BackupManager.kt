@@ -36,8 +36,12 @@ object BackupManager {
     /** Top-level folders inside `files/` that hold the book files themselves. */
     private val BOOK_DIRS = setOf("books", "audiobooks")
 
-    /** Caches that can be rebuilt; they would only make the backup larger. */
-    private val SKIPPED_FILE_DIRS = setOf("TTS_Cache", "cover_cache", "derived")
+    /**
+     * Caches that can be rebuilt; they would only make the backup larger. Covers are
+     * deliberately included: they are small, and restoring without them leaves the
+     * library showing blank covers until every book has been opened again.
+     */
+    private val SKIPPED_FILE_DIRS = setOf("TTS_Cache", "derived")
 
     /** Databases that belong to the system's job scheduler, not to the user's data. */
     private fun isSkippedDatabase(name: String) = name.startsWith("androidx.work")

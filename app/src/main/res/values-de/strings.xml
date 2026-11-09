@@ -1992,4 +1992,21 @@
     <string name="overview_manage_tags">Schlagwörter verwalten</string>
     <string name="overview_export_annotations">Annotationen exportieren</string>
     <string name="overview_delete_book">Buch löschen</string>
+    <string name="banner_folder_access_restored">Ordnerzugriff wiederhergestellt. Bücher und Cover werden geladen …</string>
+    <string name="folder_access_restore_title">Ordnerzugriff wiederherstellen</string>
+    <string name="folder_access_restore_text">Nach der Wiederherstellung braucht Android deine Erlaubnis für den Ordner „%1$s“ erneut (insgesamt %2$d Ordner). Wähle denselben Ordner aus, damit deine Bücher und Cover zurückkommen.</string>
+    <string name="folder_access_restore_action">Ordner auswählen</string>
+    <string name="folder_access_restore_later">Später</string>
+    <string name="banner_metadata_saved">Metadaten gespeichert.</string>
+    <string name="banner_metadata_saved_in_app">Die Datei konnte nicht geändert werden, die Metadaten wurden nur in der Bibliothek gespeichert.</string>
+    <string name="overview_edit_metadata">Metadaten bearbeiten</string>
+    <string name="overview_meta_title">Titel</string>
+    <string name="overview_meta_author">Autor</string>
+    <string name="overview_meta_series">Buchreihe</string>
+    <string name="overview_meta_series_number">Nummer in der Reihe (#)</string>
+    <string name="overview_meta_cover">Umschlag / Cover</string>
+    <string name="overview_meta_change_cover">Cover wählen</string>
+    <string name="overview_meta_cover_selected">Neues Cover gewählt</string>
+    <string name="overview_meta_save">Metadaten speichern</string>
+    <string name="overview_meta_reset">Zurücksetzen</string>
 </resources>

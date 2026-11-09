@@ -2771,4 +2771,21 @@
     <string name="overview_manage_tags">Manage tags</string>
     <string name="overview_export_annotations">Export annotations</string>
     <string name="overview_delete_book">Delete book</string>
+    <string name="banner_folder_access_restored">Folder access restored. Books and covers are loading…</string>
+    <string name="folder_access_restore_title">Restore folder access</string>
+    <string name="folder_access_restore_text">After the restore, Android needs your permission for the folder “%1$s” again (%2$d folder(s) in total). Choose the same folder to bring back your books and covers.</string>
+    <string name="folder_access_restore_action">Choose folder</string>
+    <string name="folder_access_restore_later">Later</string>
+    <string name="banner_metadata_saved">Metadata saved.</string>
+    <string name="banner_metadata_saved_in_app">The file could not be changed, so the metadata was saved in the library only.</string>
+    <string name="overview_edit_metadata">Edit metadata</string>
+    <string name="overview_meta_title">Title</string>
+    <string name="overview_meta_author">Author</string>
+    <string name="overview_meta_series">Series</string>
+    <string name="overview_meta_series_number">Number in series (#)</string>
+    <string name="overview_meta_cover">Cover</string>
+    <string name="overview_meta_change_cover">Choose cover</string>
+    <string name="overview_meta_cover_selected">New cover selected</string>
+    <string name="overview_meta_save">Save metadata</string>
+    <string name="overview_meta_reset">Reset</string>
 </resources>

@@ -179,7 +179,47 @@ internal object AndroidBackupRestoreCoordinator {
         }
     }
 
+    /**
+     * Cover images live in a cache directory that older backups did not contain, so a
+     * restored library can point at cover files that no longer exist. Forget those
+     * references: folder books get their cover re-extracted by the metadata worker and
+     * the UI falls back to a generated cover until then. Returns how many were reset.
+     */
+    suspend fun repairMissingCovers(context: Context): Int {
+        val dao = AppDatabase.getDatabase(context).recentFileDao()
+        var cleared = 0
+        dao.getAllFiles().filterNot { it.isDeleted }.forEach { entity ->
+            val path = entity.coverImagePath
+            if (!path.isNullOrBlank() && !File(path).isFile) {
+                dao.clearCoverReference(entity.bookId)
+                cleared++
+            }
+        }
+        if (cleared > 0) Timber.tag(TAG).i("Reset $cleared missing cover reference(s)")
+        return cleared
+    }
+
     private suspend fun reconcileDatabase(context: Context) {
+        val clearedCovers = runCatching { repairMissingCovers(context) }
+            .onFailure { Timber.tag(TAG).e(it, "Cover repair failed") }
+            .getOrDefault(0)
+        if (clearedCovers > 0) {
+            // Re-extract the cleared covers in the background (folders whose grant is
+            // still missing are skipped by the worker and picked up after re-granting).
+            val request = androidx.work.OneTimeWorkRequestBuilder<com.aryan.reader.MetadataExtractionWorker>()
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    com.aryan.reader.METADATA_EXTRACTION_RETRY_BACKOFF_SECONDS,
+                    java.util.concurrent.TimeUnit.SECONDS,
+                )
+                .build()
+            com.aryan.reader.SafeWorkManager.enqueueUniqueWork(
+                context,
+                com.aryan.reader.MetadataExtractionWorker.WORK_NAME,
+                androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE,
+                request,
+            )
+        }
         val database = AppDatabase.getDatabase(context)
         val entities = database.recentFileDao().getAllFiles()
             .filterNot { it.isDeleted }

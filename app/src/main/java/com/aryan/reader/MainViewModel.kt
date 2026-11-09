@@ -4617,7 +4617,13 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 return
             }
             SyncedFolderAddDecision.ALREADY_SYNCED -> {
-                showBanner(appContext.getString(R.string.error_folder_already_synced), isError = true)
+                if (!hasPersistedFolderPermission(folderUri.toString())) {
+                    // Known folder whose grant was lost (e.g. after a restore):
+                    // picking it again renews the grant instead of failing.
+                    restoreFolderAccess(folderUri)
+                } else {
+                    showBanner(appContext.getString(R.string.error_folder_already_synced), isError = true)
+                }
                 return
             }
             SyncedFolderAddDecision.INVALID_URI -> return
@@ -8621,6 +8627,62 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** True when Android still holds a persisted read grant for this SAF tree. */
+    fun hasPersistedFolderPermission(folderUriString: String): Boolean {
+        val uri = runCatching { folderUriString.toUri() }.getOrNull() ?: return true
+        if (!uri.scheme.equals("content", ignoreCase = true)) return true
+        return runCatching {
+            appContext.contentResolver.persistedUriPermissions.any {
+                it.isReadPermission && it.uri.toString() == folderUriString
+            }
+        }.getOrDefault(true)
+    }
+
+    /**
+     * Re-takes the persisted grant for an already known folder (typically after a
+     * backup restore) and re-scans it so books and covers come back without
+     * removing and re-adding the folder. Returns false if the grant failed.
+     */
+    fun restoreFolderAccess(folderUri: Uri): Boolean {
+        val granted = try {
+            appContext.contentResolver.takePersistableUriPermission(
+                folderUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            true
+        } catch (_: SecurityException) {
+            try {
+                appContext.contentResolver.takePersistableUriPermission(
+                    folderUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                true
+            } catch (e: SecurityException) {
+                Timber.e(e, "Failed to re-take permission for $folderUri")
+                false
+            }
+        }
+        if (!granted) {
+            showBanner(appContext.getString(R.string.error_access_folder_permissions), isError = true)
+            return false
+        }
+        val uriString = folderUri.toString()
+        // Clears covers whose cached file is gone and starts a full scan, which
+        // also schedules the metadata/cover extraction for this folder.
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { com.aryan.reader.data.AndroidBackupRestoreCoordinator.repairMissingCovers(appContext) }
+            withContext(Dispatchers.Main) {
+                triggerFolderSyncWorker(
+                    metadataOnly = false,
+                    showFeedback = true,
+                    targetFolderUriString = uriString
+                )
+            }
+        }
+        showBanner(appContext.getString(R.string.banner_folder_access_restored))
+        return true
+    }
+
     /**
      * Resolve a folder-backed book without asking DocumentFile to interpret a
      * `file://` URI. App-private cloud roots are account-scoped and must stay
@@ -8663,6 +8725,23 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
         val fileUri = runCatching { fileUriString.toUri() }.getOrNull()
             ?: return FolderBookLocation(null, true)
+        // After a backup restore (or a reinstall) Android no longer holds the
+        // persisted grant for the folder. Without it every file looks
+        // "missing", which is not proof of deletion: never confirm missing.
+        if (!hasPersistedFolderPermission(sourceFolderUriString)) {
+            Timber.tag("FolderSync")
+                .w("event=book_open_blocked reason=folder_permission_missing")
+            return FolderBookLocation(null, false)
+        }
+        // Even with a grant, a folder that cannot be read right now (provider still
+        // starting, storage not mounted) must not be mistaken for a deleted file.
+        val tree = runCatching { DocumentFile.fromTreeUri(appContext, sourceFolderUri) }.getOrNull()
+        val treeReadable = runCatching { tree != null && tree.exists() && tree.canRead() }.getOrDefault(false)
+        if (!treeReadable) {
+            Timber.tag("FolderSync")
+                .w("event=book_open_blocked reason=folder_unreadable")
+            return FolderBookLocation(null, false)
+        }
         val document = runCatching { DocumentFile.fromSingleUri(appContext, fileUri) }
             .getOrNull()
         return when {
@@ -9571,14 +9650,19 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val currentItem = bookStore.getFileByBookId(bookId) ?: return@launch
             if (currentItem.type != FileType.EPUB) {
-                showBanner("Only EPUB files support embedded metadata editing right now.", isError = true)
+                // PDFs and other formats have no embedded editor: keep the edit in the app.
+                saveBookMetadataInAppOnly(currentItem, metadata)
+                showBanner(appContext.getString(R.string.banner_metadata_saved))
                 return@launch
             }
 
             val editResult = epubMetadataFileEditor.writeMetadata(currentItem, metadata)
             editResult.onFailure { error ->
                 Timber.e(error, "Failed to update EPUB metadata for $bookId")
-                showBanner("Could not update EPUB metadata.", isError = true)
+                // The file may be read-only (e.g. folder grant lost after a restore). The
+                // edit is still worth keeping, so store it in the library instead.
+                saveBookMetadataInAppOnly(currentItem, metadata)
+                showBanner(appContext.getString(R.string.banner_metadata_saved_in_app))
             }.onSuccess { result ->
                 cleanupBookDataLocally(bookId)
                 val savedMetadata = BookMetadataEdit(
@@ -9607,6 +9691,36 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 showBanner("EPUB metadata updated.")
             }
         }
+    }
+
+    /** Saves edited metadata (and an optional new cover) to the library only, not into the file. */
+    private suspend fun saveBookMetadataInAppOnly(currentItem: RecentFileItem, metadata: BookMetadataEdit) {
+        val coverPath = metadata.coverImageUri?.toUri()?.let { coverUri ->
+            runCatching {
+                val resolver = appContext.contentResolver
+                val bytes = resolver.openInputStream(coverUri)?.use { it.readBytes() }
+                val extension = when (resolver.getType(coverUri)?.lowercase()) {
+                    "image/png" -> "png"
+                    "image/webp" -> "webp"
+                    "image/gif" -> "gif"
+                    "image/bmp" -> "bmp"
+                    else -> "jpg"
+                }
+                val keyUri = currentItem.uriString?.toUri()
+                if (bytes != null && bytes.size <= 16 * 1024 * 1024 && keyUri != null) {
+                    bookArtifactStore.saveEmbeddedCoverToCache(bytes, keyUri, extension)
+                } else {
+                    null
+                }
+            }.getOrNull()
+        }
+        bookStore.updateUserEditableMetadata(
+            bookId = currentItem.bookId,
+            metadata = metadata,
+            fileSize = 0L,
+            fileContentModifiedTimestamp = 0L,
+            coverImagePath = coverPath,
+        )
     }
 
     fun restoreOriginalBookMetadata(bookId: String) {
