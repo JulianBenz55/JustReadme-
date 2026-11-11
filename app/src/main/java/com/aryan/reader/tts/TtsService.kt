@@ -1668,7 +1668,7 @@ class TtsService : MediaSessionService() {
         Timber.tag(TTS_NOTIFICATION_DIAG_TAG).i(
             "onTaskRemoved. playWhenReady=${if (::player.isInitialized) player.playWhenReady else null}, isPlaying=${if (::player.isInitialized) player.isPlaying else null}"
         )
-        // Home/background keeps media playback alive. Removing Episteme from
+        // Home/background keeps media playback alive. Removing Vellum from
         // Recents is an explicit task dismissal and must end the TTS session.
         if (::playbackManager.isInitialized) {
             playbackManager.stopForAppTaskRemoval()

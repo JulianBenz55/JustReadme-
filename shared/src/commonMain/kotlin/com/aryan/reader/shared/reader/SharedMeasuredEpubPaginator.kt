@@ -2029,11 +2029,11 @@ private fun String.toPlainSemanticBlocks(): List<SemanticBlock> {
 }
 
 private inline fun logEpubPagination(message: () -> String) {
-    logSharedReaderDiagnostic("EpistemeEpubPagination", message)
+    logSharedReaderDiagnostic("VellumEpubPagination", message)
 }
 
 private inline fun logEpubPageFit(message: () -> String) {
-    logSharedReaderDiagnostic("EpistemeEpubPageFit", message)
+    logSharedReaderDiagnostic("VellumEpubPageFit", message)
 }
 
 private inline fun logEpubCutoff(message: () -> String) {
@@ -2041,7 +2041,7 @@ private inline fun logEpubCutoff(message: () -> String) {
 }
 
 private inline fun logReaderGapPagination(message: () -> String) {
-    logSharedReaderDiagnostic("EpistemeReaderGap", message)
+    logSharedReaderDiagnostic("VellumReaderGap", message)
 }
 
 private fun String.logPreview(maxLength: Int = 96): String {

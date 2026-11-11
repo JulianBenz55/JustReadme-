@@ -11,7 +11,7 @@
          target language's quotation marks.
       4. Buttons/menu items: short imperative or infinitive, sentence case
          unless the source is Title Case. Dialog bodies may be full sentences.
-      5. Do not translate app/brand names (Episteme, Gemini, Groq, OPDS, GitHub,
+      5. Do not translate app/brand names (Vellum, Gemini, Groq, OPDS, GitHub,
          Google Drive) or units the UI formats itself.
       6. Comments marked "do not translate literally" contain wordplay or
          app-specific terms — check the glossary in docs/localization-revamp-plan.md.
@@ -19,7 +19,7 @@
          exactly as in the source when editing.
     -->
     <!-- App name — brand name, must not be translated. -->
-    <string name="app_name" translatable="false">Episteme</string>
+    <string name="app_name" translatable="false">Vellum</string>
 
     <!-- General Actions & Words -->
     <string name="action_cancel">Cancel</string>
@@ -82,8 +82,8 @@
     <string name="source_opds">Source: OPDS Stream</string>
     <string name="source_in_app">In-App Storage</string>
     <string name="internal_storage">Internal storage</string>
-    <!-- "Episteme" is the app brand name and must not be translated. -->
-    <string name="about_title">About Episteme</string>
+    <!-- "Vellum" is the app brand name and must not be translated. -->
+    <string name="about_title">About Vellum</string>
     <!-- Shown in the About dialog header. %1$s = version string; %2$d = integer build number. Example: "Version: 1.0.41 (Build: 1041)". -->
     <string name="about_version">Version: %1$s (Build: %2$d)</string>
     <string name="empty_select_file">Select a File</string>
@@ -205,10 +205,10 @@
     <!-- "Google" is a brand name — keep as-is. -->
     <string name="drawer_sign_in">Sign in with Google</string>
     <string name="drawer_by_signing_in">By signing in,</string>
-    <!-- "Episteme Pro" is a product tier name — do not translate "Episteme". -->
-    <string name="drawer_pro_unlocked">Episteme Pro and Credits</string>
-    <!-- "Episteme Pro" is a product tier name — do not translate "Episteme". -->
-    <string name="drawer_upgrade_pro">Episteme Pro and Credits</string>
+    <!-- "Vellum Pro" is a product tier name — do not translate "Vellum". -->
+    <string name="drawer_pro_unlocked">Vellum Pro and Credits</string>
+    <!-- "Vellum Pro" is a product tier name — do not translate "Vellum". -->
+    <string name="drawer_upgrade_pro">Vellum Pro and Credits</string>
     <string name="drawer_sync_library">Sync Library</string>
     <string name="drawer_folder_sync">Folder sync</string>
     <string name="drawer_folder_sync_desc">Choose which folders are backed up to Drive.</string>
@@ -278,8 +278,8 @@
 
     <!-- Folder Sync -->
     <string name="sync_local_folders">Sync Local Folders</string>
-    <!-- "Episteme" is the app brand name — do not translate. -->
-    <string name="sync_folders_desc">Connect local folders to create a live library. Episteme will monitor files and sync progress.</string>
+    <!-- "Vellum" is the app brand name — do not translate. -->
+    <string name="sync_folders_desc">Connect local folders to create a live library. Vellum will monitor files and sync progress.</string>
     <string name="fab_add_folder">Add Folder</string>
     <string name="scan_all">Scan All</string>
     <string name="scanning">Scanning…</string>
@@ -305,8 +305,8 @@
     <string name="menu_enable_folder_local_sync">Enable local sync</string>
     <string name="folder_local_sync_disabled">Local sync disabled</string>
     <string name="dialog_disable_folder_local_sync_title">Disable local folder sync?</string>
-    <!-- Confirmation body for disabling local folder sync. %1$s = sync metadata folder name. Example: "Episteme will stop scanning this folder and stop writing JSON sync files. Remove the EpistemeSyncData folder from this folder too?" -->
-    <string name="dialog_disable_folder_local_sync_desc">Episteme will stop scanning this folder and stop writing JSON sync files. Remove the %1$s folder from this folder too?</string>
+    <!-- Confirmation body for disabling local folder sync. %1$s = sync metadata folder name. Example: "Vellum will stop scanning this folder and stop writing JSON sync files. Remove the EpistemeSyncData folder from this folder too?" -->
+    <string name="dialog_disable_folder_local_sync_desc">Vellum will stop scanning this folder and stop writing JSON sync files. Remove the %1$s folder from this folder too?</string>
     <string name="action_disable_keep_sync_data">Keep sync data</string>
     <string name="action_disable_remove_sync_data">Remove sync data</string>
     <string name="filter_file_types">Filter File Types</string>
@@ -410,24 +410,24 @@
     <string name="feature_smart_dict_desc">Search phrases and even paragraphs, not just single words</string>
     <string name="feature_priority">Priority Feature Requests</string>
     <string name="feature_priority_desc">Your suggestions get prioritized</string>
-    <!-- "Pro" refers to the Episteme Pro product tier. -->
+    <!-- "Pro" refers to the Vellum Pro product tier. -->
     <string name="pro_unlocked">Pro Features Unlocked!</string>
     <string name="sign_in_required">Sign in Required</string>
     <string name="verifying_purchase">Verifying purchase…</string>
     <string name="existing_purchase_found">Existing Purchase Found</string>
     <string name="get_lifetime_access">Get Lifetime Access</string>
     <string name="upgrade_unavailable">Upgrade currently unavailable. Please check your internet and try again.</string>
-    <!-- "Google" is a brand name. "Episteme Pro" is the product tier name — do not translate "Episteme". -->
-    <string name="sign_in_to_purchase">Please sign in to your Google account to purchase Episteme Pro.</string>
+    <!-- "Google" is a brand name. "Vellum Pro" is the product tier name — do not translate "Vellum". -->
+    <string name="sign_in_to_purchase">Please sign in to your Google account to purchase Vellum Pro.</string>
     <string name="sign_in_to_purchase_credits">Please sign in to your Google account to top up your wallet.</string>
     <!-- Progress note shown while Google Play verifies a purchase; reassures the user no action is needed. -->
     <string name="verifying_purchase_desc">This may take a few moments. Your Pro status will be updated automatically.</string>
-    <!-- "Pro" refers to the Episteme Pro product tier. -->
+    <!-- "Pro" refers to the Vellum Pro product tier. -->
     <string name="dialog_existing_purchase_desc">This device already has a Pro purchase, but it\'s linked to a different account. Please sign in to the account that was used for the original purchase to restore your Pro features.</string>
-    <!-- "Episteme Pro" is the product tier name — do not translate "Episteme". -->
-    <string name="dialog_early_access_desc">You\'re getting Episteme Pro at a special discounted price during our early access period! This is a limited-time offer.</string>
-    <!-- "Google" is a brand name. "Episteme Pro" is the product tier name — do not translate "Episteme". -->
-    <string name="dialog_sign_in_required_desc">Please sign in to your Google account to purchase Episteme Pro and unlock all premium features.</string>
+    <!-- "Vellum Pro" is the product tier name — do not translate "Vellum". -->
+    <string name="dialog_early_access_desc">You\'re getting Vellum Pro at a special discounted price during our early access period! This is a limited-time offer.</string>
+    <!-- "Google" is a brand name. "Vellum Pro" is the product tier name — do not translate "Vellum". -->
+    <string name="dialog_sign_in_required_desc">Please sign in to your Google account to purchase Vellum Pro and unlock all premium features.</string>
     <!-- Dismissal button label for various pro-upgrade prompt dialogs. -->
     <string name="action_not_now">Not Now</string>
     <!-- Confirmation button label for informational dialogs. -->
@@ -467,8 +467,8 @@
 
     <!-- Support Project -->
     <string name="support_project_title">Support the Project</string>
-    <string name="support_project_heading">Help keep Episteme moving</string>
-    <string name="support_project_desc">Your support helps me keep maintaining and Improving Episteme for everyone!!!</string>
+    <string name="support_project_heading">Help keep Vellum moving</string>
+    <string name="support_project_desc">Your support helps me keep maintaining and Improving Vellum for everyone!!!</string>
     <string name="support_github_sponsor">Sponsor on GitHub</string>
     <!-- GitHub Sponsors support-card description; 'README shoutout' means name credited in the project's README file. -->
     <string name="support_github_sponsor_desc">Support development directly through GitHub Sponsors. As a thank you, you get a README shoutout in the project repo.</string>
@@ -477,16 +477,16 @@
     <string name="support_patreon_desc">As a thank you for backing the app, Patreon supporters get extra content and benefits: sneak peeks at what I am working on, early screenshots and updates, votes that help shape how new features should look and work, and a README shoutout in the project repo.</string>
 
     <!-- Dialogs -->
-    <!-- "Episteme Pro" is the product tier name — do not translate "Episteme". -->
-    <string name="dialog_unlock_pro">Unlock Episteme Pro</string>
-    <!-- "Pro" refers to the Episteme Pro product tier. -->
+    <!-- "Vellum Pro" is the product tier name — do not translate "Vellum". -->
+    <string name="dialog_unlock_pro">Unlock Vellum Pro</string>
+    <!-- "Pro" refers to the Vellum Pro product tier. -->
     <string name="dialog_unlock_pro_desc">Sync across devices is a Pro feature. Unlock all pro features with a single, one-time purchase.</string>
     <string name="action_upgrade">Upgrade</string>
     <string name="dialog_confirm_sign_out">Confirm Sign Out</string>
     <string name="dialog_confirm_sign_out_desc">Are you sure you want to sign out?</string>
     <string name="device_limit_reached">Device Limit Reached</string>
-    <!-- "Episteme Pro" is the product tier name — do not translate "Episteme". -->
-    <string name="device_limit_reached_desc">To use Episteme Pro on this device, please remove one of your existing registered devices.</string>
+    <!-- "Vellum Pro" is the product tier name — do not translate "Vellum". -->
+    <string name="device_limit_reached_desc">To use Vellum Pro on this device, please remove one of your existing registered devices.</string>
     <!-- Shown in the device management list. %1$s = a formatted relative date/time string. Example: "Last seen: 2 days ago". -->
     <string name="last_seen">Last seen: %1$s</string>
     <string name="dialog_destructive_action">Confirm Destructive Action</string>
@@ -570,8 +570,8 @@
     <string name="action_select">Select</string>
     <!-- Footer combining Privacy Policy, Terms of Service, and Licenses links separated by bullet points. "•" is punctuation — keep as-is or adapt spacing to your language. -->
     <string name="legal_footer_combined">Privacy Policy  •  Terms of Service  •  Licenses</string>
-    <!-- OSS = Open Source Software. "Episteme" is the app brand name — do not translate. -->
-    <string name="app_name_oss" translatable="false">Episteme OSS</string>
+    <!-- OSS = Open Source Software. "Vellum" is the app brand name — do not translate. -->
+    <string name="app_name_oss" translatable="false">Vellum OSS</string>
     <!-- Debug-only menu item, not shown to regular users. -->
     <string name="debug_show_device_management" translatable="false">[Debug] Show Device Management</string>
     <!-- Debug-only menu item, not shown to regular users. -->
@@ -582,8 +582,8 @@
     <string name="debug_fps" translatable="false">FPS: %1$d</string>
     <string name="error_folder_selection_unsupported">Your device doesn\'t support folder selection. You can still import files individually.</string>
     <string name="error_no_file_manager">No file manager found. Please install a file manager app.</string>
-    <!-- Email subject line for user feedback. "Episteme Reader" is the app name — do not translate. -->
-    <string name="feedback_email_subject" translatable="false">Feedback: Episteme Reader</string>
+    <!-- Email subject line for user feedback. "Vellum Reader" is the app name — do not translate. -->
+    <string name="feedback_email_subject" translatable="false">Feedback: Vellum Reader</string>
     <!-- Banner shown after a file is downloaded from an OPDS catalog. %1$s = the downloaded filename. Example: "Downloaded Dracula.epub". -->
     <string name="banner_downloaded">Downloaded %1$s</string>
     <!-- Banner shown after an OPDS file is downloaded into a local folder. %1$s = the downloaded filename; %2$s = the destination folder name. Example: "Downloaded Dracula.epub to Comics". -->
@@ -605,7 +605,7 @@
     <!-- "Google Drive" is a brand name — do not translate. -->
     <string name="error_sync_drive_permission">Sync requires Google Drive permission.</string>
     <string name="error_purchase_general">An error occurred with the purchase.</string>
-    <!-- "Pro" refers to the Episteme Pro product tier. -->
+    <!-- "Pro" refers to the Vellum Pro product tier. -->
     <string name="banner_upgrade_success">Upgrade successful! Welcome to Pro.</string>
     <string name="error_purchase_verification">Purchase verification failed. Please contact support if you were charged.</string>
     <string name="banner_device_removed">This device was removed from your account.</string>
@@ -672,8 +672,8 @@
     <string name="error_sign_in_internet">An error occurred during sign in. Please check your internet connection.</string>
     <!-- Debug/developer message. -->
     <string name="error_sign_in_device_management">Please sign in to test device management.</string>
-    <!-- "Episteme Pro" is the product tier name — do not translate "Episteme". -->
-    <string name="error_sync_pro_feature">Sync is an Episteme Pro feature.</string>
+    <!-- "Vellum Pro" is the product tier name — do not translate "Vellum". -->
+    <string name="error_sync_pro_feature">Sync is an Vellum Pro feature.</string>
     <string name="error_not_signed_in_sync">Not signed in, cannot sync.</string>
     <string name="banner_cloud_sync_checking">Cloud Sync: Checking for updates…</string>
     <string name="banner_cloud_sync_complete">Cloud Sync: Complete.</string>
@@ -841,11 +841,11 @@
     <!-- "(Beta)" indicates this feature is in beta — keep the label consistent. -->
     <string name="ai_story_recap_beta">Story Recap (Beta)</string>
     <string name="ai_unlock_summarization">Unlock Chapter Summarization</string>
-    <!-- "Episteme Pro" is the product tier name. -->
-    <string name="ai_unlock_summarization_desc">Get concise summaries of any chapter with Episteme Pro. Upgrade to start using this feature.</string>
+    <!-- "Vellum Pro" is the product tier name. -->
+    <string name="ai_unlock_summarization_desc">Get concise summaries of any chapter with Vellum Pro. Upgrade to start using this feature.</string>
     <string name="action_learn_more">Learn More</string>
     <string name="ai_unlock_smart_dict">Unlock Smart Dictionary</string>
-    <!-- "Pro" refers to the Episteme Pro product tier. -->
+    <!-- "Pro" refers to the Vellum Pro product tier. -->
     <string name="ai_unlock_smart_dict_desc">Smart Dictionary gives instant AI definitions for any selected text. It is a Pro feature — upgrade to start using it.</string>
 
     <!-- EpubReaderAnnotations.kt -->
@@ -1085,8 +1085,8 @@
     <string name="error_opening_search">Error opening search app</string>
 
     <!-- About Section -->
-    <!-- "Episteme" is the app brand name — do not translate. -->
-    <string name="about_app_name" translatable="false">Episteme</string>
+    <!-- "Vellum" is the app brand name — do not translate. -->
+    <string name="about_app_name" translatable="false">Vellum</string>
     <!-- OSS = Open Source Software. -->
     <string name="about_oss_version">Open Source Version</string>
     <string name="about_play_version">Playstore Version</string>
@@ -1700,7 +1700,7 @@
     <string name="legal_by_purchasing">By purchasing,</string>
     <string name="dialog_out_of_credits_title">Out of Balance</string>
     <!-- Paywall dialog when out of credits: names what credits unlock (Summaries, Cloud TTS, Story Recap) and the free daily allowance with Pro. -->
-    <string name="dialog_out_of_credits_desc">You don\'t have enough balance. Get Episteme Pro for 10 free Summaries per day, or top up your wallet to use Summaries, Cloud TTS and Story Recap.</string>
+    <string name="dialog_out_of_credits_desc">You don\'t have enough balance. Get Vellum Pro for 10 free Summaries per day, or top up your wallet to use Summaries, Cloud TTS and Story Recap.</string>
     <string name="snackbar_rate_limited_retry">Slowing down to protect the service — retrying in %1$s…</string>
     <string name="dialog_daily_spend_limit_title">Daily spending cap reached</string>
     <string name="dialog_daily_spend_limit_desc">This safety cap protects your wallet from runaway or fraudulent spend. Balance: %1$s. Resets in %2$s.</string>
@@ -1710,7 +1710,7 @@
     <string name="action_get_pro_or_add_credits">Get Pro / Top Up</string>
     <string name="dialog_unlock_page_summarization">Unlock Page Summarization</string>
     <!-- Paywall dialog for page summarization: short benefit statement plus upgrade call to action. -->
-    <string name="dialog_unlock_page_summarization_desc">Get concise summaries of any page with Episteme Pro. Upgrade to start using this feature.</string>
+    <string name="dialog_unlock_page_summarization_desc">Get concise summaries of any page with Vellum Pro. Upgrade to start using this feature.</string>
     <string name="dialog_download_bubble_zoom_model">Download Bubble Zoom Model</string>
     <!-- Confirmation before downloading the ~134 MB on-device AI model for Bubble Zoom; mention the size exactly. -->
     <string name="dialog_download_bubble_zoom_model_desc">To use the Bubble Zoom feature, an AI model needs to be downloaded (~134 MB). Do you want to download it now?</string>
@@ -2060,7 +2060,7 @@
     <string name="desktop_account_overview">Account overview</string>
     <string name="desktop_ai_hub">AI hub</string>
     <string name="desktop_ai_settings_summaries_desc">Used for EPUB summaries and PDF page summaries.</string>
-    <string name="desktop_app_name_oss">Episteme oss</string>
+    <string name="desktop_app_name_oss">Vellum oss</string>
     <string name="desktop_author_text">Author text</string>
     <!-- Desktop cache label. %1$s = voice/cache label. Example: "Cache: Kore". -->
     <string name="desktop_cache_format">Cache: %1$s</string>
@@ -2176,9 +2176,9 @@
     <string name="desktop_source_code_desc">Browse the project source on GitHub.</string>
     <string name="desktop_stop_reading_change_voices">Stop reading to change voices.</string>
     <string name="desktop_support">Support</string>
-    <string name="desktop_support_episteme">Support Episteme</string>
-    <string name="desktop_support_episteme_desc">Contributions help me improve Episteme across all platforms.</string>
-    <string name="desktop_support_project_desc">Ways to support Episteme development</string>
+    <string name="desktop_support_vellum">Support Vellum</string>
+    <string name="desktop_support_vellum_desc">Contributions help me improve Vellum across all platforms.</string>
+    <string name="desktop_support_project_desc">Ways to support Vellum development</string>
     <string name="desktop_sync_folders">Sync folders</string>
     <string name="desktop_sync_metadata">Sync metadata</string>
     <string name="desktop_tag_name">Tag name</string>
@@ -2192,7 +2192,7 @@
     <string name="desktop_webview_preparing">Preparing embedded webview…</string>
     <!-- Desktop embedded webview setup progress. %1$d = progress percentage. %% is a literal percent sign. Example: "Preparing bundled embedded webview 40%". -->
     <string name="desktop_webview_preparing_progress">Preparing bundled embedded webview %1$d%%</string>
-    <string name="desktop_webview_restart_required">Embedded webview installed. Restart Episteme to finish setup.</string>
+    <string name="desktop_webview_restart_required">Embedded webview installed. Restart Vellum to finish setup.</string>
     <!-- Desktop embedded webview startup error. %1$s = startup error detail. Example: "Embedded webview could not start: Missing runtime". -->
     <string name="desktop_webview_start_error">Embedded webview could not start: %1$s</string>
     <string name="desktop_working">Working…</string>
@@ -2548,8 +2548,8 @@
     <string name="account_link_apple">Link Apple sign-in</string>
     <string name="account_link_google">Link Google sign-in</string>
     <!-- Account screen note: linking adds another sign-in method to the SAME account; it does not create or purchase a separate one. -->
-    <string name="account_linking_desc">Linking adds another way to sign in to this Episteme account. It does not create or purchase a separate account.</string>
-    <string name="account_title">Episteme Account</string>
+    <string name="account_linking_desc">Linking adds another way to sign in to this Vellum account. It does not create or purchase a separate account.</string>
+    <string name="account_title">Vellum Account</string>
     <string name="settings_clear_cloud_local_authorization_required">Sign in and authorize Google Drive before clearing cloud and local data.</string>
     <string name="settings_clear_cloud_local_cleanup_missing">Cloud data cleared, but local cleanup was not available.</string>
     <string name="settings_clear_cloud_local_confirmation_required">Confirmation is required before clearing cloud and local data.</string>

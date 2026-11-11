@@ -1,8 +1,8 @@
 <div align="center">
 
   <h1>
-    <img src="branding/app-icon/png/branding/icon-128.png" height="48" width="48" align="absmiddle" alt="Episteme Reader Icon"/>
-    <span>&nbsp;Episteme Reader</span>
+    <img src="branding/app-icon/png/branding/icon-128.png" height="48" width="48" align="absmiddle" alt="Vellum Reader Icon"/>
+    <span>&nbsp;Vellum Reader</span>
   </h1>
 
   <p>A modern, offline-first, privacy-focused document and e-book reader for mobile and desktop, built with Kotlin Multiplatform and Compose.</p>
@@ -16,12 +16,12 @@
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/EPISTEME.png" alt="Episteme Reader on mobile"/>
+      <img src="docs/EPISTEME.png" alt="Vellum Reader on mobile"/>
       <br/>
       <sub>Mobile</sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/EPISTEME_desktop.png" alt="Episteme Reader on desktop"/>
+      <img src="docs/EPISTEME_desktop.png" alt="Vellum Reader on desktop"/>
       <br/>
       <sub>Desktop</sub>
     </td>
@@ -30,7 +30,7 @@
 
 ## Overview
 
-Episteme Reader is a customizable reader for documents, e-books, comics, and text-heavy files. The app is designed around local-first reading, deep typography controls, flexible layouts, and a consistent Kotlin Multiplatform core across mobile and desktop.
+Vellum Reader is a customizable reader for documents, e-books, comics, and text-heavy files. The app is designed around local-first reading, deep typography controls, flexible layouts, and a consistent Kotlin Multiplatform core across mobile and desktop.
 
 The same core reading experience is available across editions. The main differences are distribution channel, network access, and whether proprietary online services are included.
 
@@ -59,11 +59,11 @@ Future desktop platforms can use the same Standard and Offline model as support 
 
 ## Translations
 
-Episteme Reader translations are managed through our [self-hosted Weblate instance](https://translate.epistemereader.com/). Sign in with GitHub to contribute.
+Vellum Reader translations are managed through our [self-hosted Weblate instance](https://translate.epistemereader.com/). Sign in with GitHub to contribute.
 
 <a href="https://translate.epistemereader.com/engage/episteme/"><img src="https://translate.epistemereader.com/widget/episteme/matrix-auto.svg" alt="Translation status"></a>
 
-Translation contributors are required to accept the Episteme Contributor License Agreement before submitting changes.
+Translation contributors are required to accept the Vellum Contributor License Agreement before submitting changes.
 
 ## Building from Source
 
@@ -80,7 +80,7 @@ Translation contributors are required to accept the Episteme Contributor License
      ./gradlew assembleOssDebug
      ```
    The APK will be generated at:
-   `app/build/outputs/apk/oss/debug/Episteme-oss-v{version}-oss-debug.apk`
+   `app/build/outputs/apk/oss/debug/Vellum-oss-v{version}-oss-debug.apk`
 
 3. Build desktop:
    ```bash
@@ -114,7 +114,7 @@ Powered by the Kotlin, Android, and desktop OSS ecosystem:
 
 ## Supporters
 
-Thank you to the people helping keep Episteme Reader moving:
+Thank you to the people helping keep Vellum Reader moving:
 
 | Supporter | Platform |
 |---|---|
@@ -123,13 +123,13 @@ Thank you to the people helping keep Episteme Reader moving:
 
 ## Support the Project
 
-Help make Episteme Reader better:
+Help make Vellum Reader better:
 
 * [Sponsor on GitHub](https://github.com/sponsors/Aryan-Raj3112)
 * [Support on Patreon](https://www.patreon.com/c/epistemereader)
 * Star the repository to help visibility
 * Report bugs or request features via [GitHub Issues](https://github.com/Aryan-Raj3112/episteme/issues/new/choose)
-* Help translate [Episteme Reader](https://translate.epistemereader.com/engage/episteme/)
+* Help translate [Vellum Reader](https://translate.epistemereader.com/engage/episteme/)
 * Share feedback in [Discussions](https://github.com/Aryan-Raj3112/episteme/discussions)
 * Leave a review on the [Google Play Store](https://play.google.com/store/apps/details?id=com.aryan.reader)
 * Tell a friend

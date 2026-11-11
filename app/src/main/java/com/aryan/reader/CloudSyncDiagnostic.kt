@@ -6,11 +6,11 @@ import java.util.Locale
 import timber.log.Timber
 
 /**
- * One tag for every cloud-sync surface, so a single `logcat -s EpistemeCloudSync`
+ * One tag for every cloud-sync surface, so a single `logcat -s VellumCloudSync`
  * shows both sides of sync across both subsystems.
  *
- * Previously the library path used `EpistemeCloudSync` and the folder path used
- * `EpistemeCloudFolderSync`, which meant correlating "device 1 pushed a position"
+ * Previously the library path used `VellumCloudSync` and the folder path used
+ * `VellumCloudFolderSync`, which meant correlating "device 1 pushed a position"
  * with "device 2 pulled a folder" required watching two interleaved streams and
  * mentally joining them. This file emits every sync event under the single
  * [CloudSyncTraceTag] with explicit `plane` and `dir` fields.

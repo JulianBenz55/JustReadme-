@@ -21,11 +21,11 @@ data class LocalTtsUtterance(
 )
 
 internal fun localTtsUtteranceId(generation: Int, chunkIndex: Int, spokenStartOffset: Int): String =
-    "episteme-local:$generation:$chunkIndex:$spokenStartOffset"
+    "vellum-local:$generation:$chunkIndex:$spokenStartOffset"
 
 internal fun parseLocalTtsUtteranceId(value: String?): LocalTtsUtterance? {
     val parts = value?.split(':') ?: return null
-    if (parts.size != 4 || parts[0] != "episteme-local") return null
+    if (parts.size != 4 || parts[0] != "vellum-local") return null
     return LocalTtsUtterance(
         generation = parts[1].toIntOrNull() ?: return null,
         chunkIndex = parts[2].toIntOrNull() ?: return null,

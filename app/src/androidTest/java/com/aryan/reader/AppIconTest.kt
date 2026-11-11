@@ -27,10 +27,10 @@ import kotlin.math.min
 /**
  * The in-app app icon has to belong to the app's theme, not to the launcher.
  *
- * It used to be `R.mipmap.ic_launcher`: a blue-on-white raster baked at five
+ * It used to be `R.mipmap.ic_launcher`: a raster baked at five
  * densities, which ignores light/dark and every dynamic or custom seed colour
- * the user has picked. It is now the launcher icon's own fan artwork with
- * every gradient stop repainted in the theme, so the two things that can
+ * the user has picked. It is now the launcher icon's own logo artwork with
+ * its accent colours repainted in the theme, so the two things that can
  * silently go wrong are that the shipped colours come back (the repaint is
  * dropped), and that the fan stops filling the plate it is drawn on (the
  * cropped viewport is lost and it collapses to a speck).
@@ -132,8 +132,8 @@ class AppIconTest {
         assertThat(fanBounds.width).isGreaterThan(plateBounds.width / 2)
         // ...and all of it, with a margin, so it does not crowd or overflow the plate
         assertThat(fanBounds.width).isLessThan(plateBounds.width)
-        // 54 : 32.8 -- the fan is wider than tall, and its own proportions decide the height
-        assertThat(fanBounds.height.toFloat() / fanBounds.width).isWithin(0.02f).of(0.607f)
+        // 0.84 : 1 -- the logo is taller than wide, and its own proportions decide the height
+        assertThat(fanBounds.height.toFloat() / fanBounds.width).isWithin(0.02f).of(1.185f)
     }
 
     @Test
@@ -189,7 +189,7 @@ class AppIconTest {
         assertThat((left + right) / 2f).isWithin(canvas.width * 0.02f)
             .of((canvas.left + canvas.right) / 2f)
         // ...at the artwork's own proportions
-        assertThat((bottom - top).toFloat() / (right - left)).isWithin(0.03f).of(0.607f)
+        assertThat((bottom - top).toFloat() / (right - left)).isWithin(0.03f).of(1.185f)
     }
 
     /** Every colour actually painted, so anti-aliased edges do not make this brittle. */

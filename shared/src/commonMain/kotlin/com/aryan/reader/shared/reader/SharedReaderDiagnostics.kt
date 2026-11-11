@@ -1,8 +1,8 @@
 package com.aryan.reader.shared.reader
 
-internal const val SharedReaderDiagnosticsProperty = "episteme.desktop.diagnostics"
-internal const val SharedReaderDiagnosticsTagsProperty = "episteme.desktop.diagnostics.tags"
-internal const val SharedEpubCutoffDiagnosticsTag = "EpistemeEpubCutoff"
+internal const val SharedReaderDiagnosticsProperty = "vellum.desktop.diagnostics"
+internal const val SharedReaderDiagnosticsTagsProperty = "vellum.desktop.diagnostics.tags"
+internal const val SharedEpubCutoffDiagnosticsTag = "VellumEpubCutoff"
 internal const val TxtFormatTraceTag = "TxtFormatTrace"
 
 /**

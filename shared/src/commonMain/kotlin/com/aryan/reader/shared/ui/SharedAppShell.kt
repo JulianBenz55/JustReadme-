@@ -405,7 +405,7 @@ private fun SharedSidebarHeader(
                 SharedInitialAvatar(initial = "E", modifier = Modifier.size(42.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        readerString("desktop_app_name_oss", "Episteme oss"),
+                        readerString("desktop_app_name_oss", "Vellum oss"),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -498,7 +498,7 @@ private fun SharedSidebarHeader(
         }
         else -> {
             Column(Modifier.padding(horizontal = 10.dp, vertical = 12.dp)) {
-                Text(readerString("app_name", "Episteme"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(readerString("app_name", "Vellum"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(readerString("desktop_library_and_reader", "Library and reader"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -797,7 +797,7 @@ private fun SharedAppToolAction.labelForMoreMenu(isTabsEnabled: Boolean): String
         SharedAppToolAction.CUSTOM_FONTS -> readerString("custom_fonts", "Custom fonts")
         SharedAppToolAction.HELP_FEEDBACK -> readerString("drawer_help_feedback", "Help & feedback")
         SharedAppToolAction.SUPPORT -> readerString("drawer_support_project", "Support project")
-        SharedAppToolAction.ABOUT -> readerString("about_title", "About Episteme")
+        SharedAppToolAction.ABOUT -> readerString("about_title", "About Vellum")
         SharedAppToolAction.TABS_TOGGLE -> if (isTabsEnabled) {
             readerString("desktop_reader_tabs_on", "Reader tabs on")
         } else {

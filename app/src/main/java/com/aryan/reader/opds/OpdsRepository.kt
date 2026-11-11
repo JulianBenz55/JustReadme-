@@ -32,7 +32,7 @@ class OpdsRepository(context: Context) : SharedOpdsRepository {
                 .addInterceptor { chain ->
                     val originalRequest = chain.request()
                     val requestWithUserAgent = originalRequest.newBuilder()
-                        .header("User-Agent", "EpistemeReader/1.0 (Android)")
+                        .header("User-Agent", "VellumReader/1.0 (Android)")
                         .build()
                     chain.proceed(requestWithUserAgent)
                 }
@@ -236,7 +236,7 @@ class OpdsRepository(context: Context) : SharedOpdsRepository {
 
             val request = Request.Builder()
                 .url(url.trim())
-                .header("User-Agent", "EpistemeReader/1.0 (Android)")
+                .header("User-Agent", "VellumReader/1.0 (Android)")
                 .build()
 
             Timber.tag("OpdsDebug").d("Executing network call...")

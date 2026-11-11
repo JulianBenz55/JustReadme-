@@ -17,7 +17,7 @@ class DirectLocalTtsPlayerTest {
     fun `malformed or foreign utterance ids are ignored`() {
         assertNull(parseLocalTtsUtteranceId(null))
         assertNull(parseLocalTtsUtteranceId("other:1:2:3"))
-        assertNull(parseLocalTtsUtteranceId("episteme-local:x:2:3"))
+        assertNull(parseLocalTtsUtteranceId("vellum-local:x:2:3"))
     }
 
     @Test

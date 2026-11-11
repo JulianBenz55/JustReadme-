@@ -618,7 +618,7 @@ private fun Float.roundCacheValue(): String {
 }
 
 private inline fun logEpubPaginationCache(message: () -> String) {
-    logSharedReaderDiagnostic("EpistemeEpubPagination", message)
+    logSharedReaderDiagnostic("VellumEpubPagination", message)
 }
 
 private fun String.logPreview(maxLength: Int = 96): String {

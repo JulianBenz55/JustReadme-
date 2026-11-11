@@ -9,10 +9,10 @@ class SharedLegalLinksTest {
         val standard = sharedLegalLinksForProfile(SharedLegalProfile.STANDARD)
         val oss = sharedLegalLinksForProfile(SharedLegalProfile.OSS)
 
-        assertEquals("$EPISTEME_POLICY_BASE_URL/privacy-policy.html", standard.privacyPolicyUrl)
-        assertEquals("$EPISTEME_POLICY_BASE_URL/terms-and-conditions.html", standard.termsUrl)
-        assertEquals("$EPISTEME_POLICY_BASE_URL/oss-privacy-policy.html", oss.privacyPolicyUrl)
-        assertEquals("$EPISTEME_POLICY_BASE_URL/oss-terms-of-service.html", oss.termsUrl)
+        assertEquals("$VELLUM_POLICY_BASE_URL/privacy-policy.html", standard.privacyPolicyUrl)
+        assertEquals("$VELLUM_POLICY_BASE_URL/terms-and-conditions.html", standard.termsUrl)
+        assertEquals("$VELLUM_POLICY_BASE_URL/oss-privacy-policy.html", oss.privacyPolicyUrl)
+        assertEquals("$VELLUM_POLICY_BASE_URL/oss-terms-of-service.html", oss.termsUrl)
         assertEquals(standard.licensesUrl, oss.licensesUrl)
     }
 }

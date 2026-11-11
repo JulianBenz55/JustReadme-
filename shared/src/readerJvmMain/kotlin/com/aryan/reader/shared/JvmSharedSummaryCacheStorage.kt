@@ -1,6 +1,6 @@
 package com.aryan.reader.shared
 
-import com.aryan.reader.shared.reader.sharedJvmEpistemeCacheRoot
+import com.aryan.reader.shared.reader.sharedJvmVellumCacheRoot
 import java.io.File
 
 actual fun defaultSharedSummaryCacheStorage(): SharedSummaryCacheStorage {
@@ -49,5 +49,5 @@ internal class JvmSharedSummaryCacheStorage(
 private fun defaultSharedSummaryCacheRoot(): File {
     val overridePath = System.getProperty("reader.summary.cache.dir")
     if (!overridePath.isNullOrBlank()) return File(overridePath).apply { mkdirs() }
-    return File(sharedJvmEpistemeCacheRoot(), "chapter_summaries").apply { mkdirs() }
+    return File(sharedJvmVellumCacheRoot(), "chapter_summaries").apply { mkdirs() }
 }

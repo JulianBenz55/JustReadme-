@@ -25,7 +25,7 @@ import platform.Foundation.writeToFile
 import platform.posix.memcpy
 import kotlin.math.roundToLong
 
-private const val IosEpubPageCacheDir = "episteme_epub_page_cache"
+private const val IosEpubPageCacheDir = "vellum_epub_page_cache"
 
 @OptIn(ExperimentalForeignApi::class)
 class IosSharedEpubPageCacheStorage(

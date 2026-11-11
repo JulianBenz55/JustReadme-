@@ -1451,7 +1451,7 @@ class ReaderIosBridge internal constructor(
         val entries = IosDiagnosticLogStore.snapshot()
         val unifiedEntries = IosDiagnosticLogStore.unifiedLogSnapshot(unifiedDiagnosticsProvider)
         val content = buildString {
-            appendLine("Episteme iOS diagnostics")
+            appendLine("Vellum iOS diagnostics")
             appendLine("Generated at: ${currentTimestamp()}")
             appendLine("Entries: ${entries.size}")
             appendLine()
@@ -1468,7 +1468,7 @@ class ReaderIosBridge internal constructor(
                 unifiedEntries.forEach(::appendLine)
             }
         }
-        val path = NSTemporaryDirectory() + "episteme-diagnostics-${currentTimestamp()}.txt"
+        val path = NSTemporaryDirectory() + "vellum-diagnostics-${currentTimestamp()}.txt"
         if (!writeIosUtf8File(path, content)) {
             recordNativeEvent("Diagnostic log export failed: could not write temporary file")
             return false
@@ -6554,7 +6554,7 @@ private fun ReaderIosApp(
                         ),
                         body = readerString(
                             "dialog_out_of_credits_desc",
-                            "You don't have enough balance. Get Episteme Pro for 10 free Summaries per day, or top up your wallet to use Summaries, Cloud TTS and Story Recap.",
+                            "You don't have enough balance. Get Vellum Pro for 10 free Summaries per day, or top up your wallet to use Summaries, Cloud TTS and Story Recap.",
                         ),
                         confirmLabel = readerString("action_get_pro_or_add_credits", "Get Pro / Top Up"),
                         dismissLabel = readerString("action_not_now", "Not now"),
@@ -7133,7 +7133,7 @@ private fun ReaderIosApp(
                                 openSharedMobileExternalUrl("https://github.com/Aryan-Raj3112/episteme/issues")
                             },
                             onEmailSupport = {
-                                openSharedMobileExternalUrl("mailto:epistemereader@gmail.com?subject=Episteme%20iOS%20feedback")
+                                openSharedMobileExternalUrl("mailto:epistemereader@gmail.com?subject=Vellum%20iOS%20feedback")
                             },
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -8226,7 +8226,7 @@ private fun ReaderIosApp(
             title = readerString("dialog_delete_account", "Delete account?"),
             message = readerString(
                 "dialog_delete_account_desc",
-                "This permanently deletes your Episteme account, cloud books, shelves, fonts, and devices. Remaining credits are lost. App Store purchases are not refunded (refunds are handled by Apple). If you sign in again with the same Apple ID you can restore Pro with Restore Purchases. This cannot be undone.",
+                "This permanently deletes your Vellum account, cloud books, shelves, fonts, and devices. Remaining credits are lost. App Store purchases are not refunded (refunds are handled by Apple). If you sign in again with the same Apple ID you can restore Pro with Restore Purchases. This cannot be undone.",
             ),
             confirmLabel = readerString("action_continue", "Continue"),
             onConfirm = {
@@ -8504,7 +8504,7 @@ private fun IosDeviceLimitReachedOverlay(
             Text(
                 text = readerString(
                     "device_limit_reached_desc",
-                    "To use Episteme Pro on this device, please remove one of your existing registered devices.",
+                    "To use Vellum Pro on this device, please remove one of your existing registered devices.",
                 ),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
@@ -8800,9 +8800,9 @@ private fun IosAccountScreen(
     onSignOut: () -> Unit,
     onDeleteAccount: () -> Unit,
 ) {
-    IosUtilityPage(title = readerString("account_title", "Episteme Account"), onBack = onBack) {
+    IosUtilityPage(title = readerString("account_title", "Vellum Account"), onBack = onBack) {
         Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-            Text(readerString("account_title", "Episteme Account"))
+            Text(readerString("account_title", "Vellum Account"))
             Text(
                 account.displayName ?: account.email ?: if (account.uid == null) {
                     readerString("unified_library_signed_out", "Not signed in")
@@ -8844,7 +8844,7 @@ private fun IosAccountScreen(
                 Text(
                     readerString(
                         "account_linking_desc",
-                        "Linking adds another way to sign in to this Episteme account. It does not create or purchase a separate account.",
+                        "Linking adds another way to sign in to this Vellum account. It does not create or purchase a separate account.",
                     ),
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
@@ -9003,7 +9003,7 @@ private fun IosLocalStoreKitScreen(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                readerString("drawer_pro_unlocked", "Episteme Pro"),
+                                readerString("drawer_pro_unlocked", "Vellum Pro"),
                                 color = if (selectedTabIndex == 0) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
@@ -9133,7 +9133,7 @@ private fun IosProTierCard(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    readerString("drawer_pro_unlocked", "Episteme Pro"),
+                    readerString("drawer_pro_unlocked", "Vellum Pro"),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
@@ -9505,7 +9505,7 @@ private fun IosWalletTierCard(
                 Text(
                     readerString(
                         "sign_in_to_purchase_credits",
-                        "Please sign in to your Episteme account to top up.",
+                        "Please sign in to your Vellum account to top up.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,

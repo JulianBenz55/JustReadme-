@@ -58,7 +58,7 @@ fun isCloudTtsModelEnabled(ttsModel: String): Boolean =
     ttsModel in READER_GEMINI_TTS_MODEL_IDS || ttsModel in READER_FISH_TTS_MODEL_IDS
 const val DEFAULT_CLOUD_TTS_SPEAKER_ID = "Aoede"
 const val READER_TTS_CHUNK_MAX_LENGTH = 250
-private const val ReaderTtsStartTraceLogTag = "EpistemeDesktopTtsStartTrace"
+private const val ReaderTtsStartTraceLogTag = "VellumDesktopTtsStartTrace"
 
 data class ReaderCloudTtsVoice(
     val id: String,

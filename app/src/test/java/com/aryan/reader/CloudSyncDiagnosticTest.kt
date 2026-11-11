@@ -12,8 +12,8 @@ import org.junit.Test
  * Guards the shared-tag sync diagnostics.
  *
  * `CloudSyncDiagnostic.kt` replaced two separate log tags with one
- * (`EpistemeCloudSync`) carrying explicit `plane`/`dir` fields, so a single
- * `logcat -s EpistemeCloudSync` shows both sides of sync. These tests protect the
+ * (`VellumCloudSync`) carrying explicit `plane`/`dir` fields, so a single
+ * `logcat -s VellumCloudSync` shows both sides of sync. These tests protect the
  * two properties that make that safe and useful:
  *
  *  1. **No user data.** Identifiers are hashed. A regression here would put

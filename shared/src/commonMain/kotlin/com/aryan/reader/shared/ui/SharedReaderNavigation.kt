@@ -92,10 +92,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-internal const val ReaderGapChromeLogTag = "EpistemeReaderGap"
-internal const val ReaderChromeWebViewLayoutLogTag = "EpistemeWebViewLayout"
-internal const val ReaderOpenTraceLogTag = "EpistemeDesktopOpenTrace"
-internal const val ReaderPositionTraceLogTag = "EpistemeDesktopPositionTrace"
+internal const val ReaderGapChromeLogTag = "VellumReaderGap"
+internal const val ReaderChromeWebViewLayoutLogTag = "VellumWebViewLayout"
+internal const val ReaderOpenTraceLogTag = "VellumDesktopOpenTrace"
+internal const val ReaderPositionTraceLogTag = "VellumDesktopPositionTrace"
 internal const val ReaderVerticalRenderedChapterRadius = 2
 
 internal fun readerVerticalRenderedChapterRange(chapterIndex: Int, lastChapterIndex: Int): IntRange? {

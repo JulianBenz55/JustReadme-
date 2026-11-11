@@ -35,7 +35,7 @@ import java.util.UUID
 import java.util.zip.ZipFile
 import javax.imageio.ImageIO
 
-private const val JvmBookOpenTraceTag = "EpistemeDesktopOpenTrace"
+private const val JvmBookOpenTraceTag = "VellumDesktopOpenTrace"
 
 private fun logJvmBookOpenTrace(message: () -> String) {
     logSharedReaderDiagnostic(JvmBookOpenTraceTag, message)

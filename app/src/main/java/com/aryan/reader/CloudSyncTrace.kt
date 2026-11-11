@@ -7,8 +7,8 @@ import com.aryan.reader.data.effectiveAnnotationModifiedTimestamp
 import com.aryan.reader.data.effectiveReadingPositionModifiedTimestamp
 import timber.log.Timber
 
-internal const val CloudSyncTraceTag = "EpistemeCloudSync"
-internal const val CloudAnnotationSyncTraceTag = "EpistemeCloudAnnotations"
+internal const val CloudSyncTraceTag = "VellumCloudSync"
+internal const val CloudAnnotationSyncTraceTag = "VellumCloudAnnotations"
 
 internal fun logCloudSyncTrace(message: () -> String) {
     if (!BuildConfig.DEBUG) return

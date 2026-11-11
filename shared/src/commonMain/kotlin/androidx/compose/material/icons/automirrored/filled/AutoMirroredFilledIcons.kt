@@ -10,45 +10,45 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
 
 val Icons.AutoMirrored.Filled.ArrowBack: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.arrowBack
+    get() = VellumAutoMirroredFilledIcons.arrowBack
 
 val Icons.AutoMirrored.Filled.ArrowForward: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.arrowForward
+    get() = VellumAutoMirroredFilledIcons.arrowForward
 
 val Icons.AutoMirrored.Filled.KeyboardArrowRight: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.keyboardArrowRight
+    get() = VellumAutoMirroredFilledIcons.keyboardArrowRight
 
 val Icons.AutoMirrored.Filled.LibraryBooks: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.libraryBooks
+    get() = VellumAutoMirroredFilledIcons.libraryBooks
 
 val Icons.AutoMirrored.Filled.List: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.list
+    get() = VellumAutoMirroredFilledIcons.list
 
 val Icons.AutoMirrored.Filled.MenuBook: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.menuBook
+    get() = VellumAutoMirroredFilledIcons.menuBook
 
 val Icons.AutoMirrored.Filled.NavigateBefore: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.navigateBefore
+    get() = VellumAutoMirroredFilledIcons.navigateBefore
 
 val Icons.AutoMirrored.Filled.NavigateNext: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.navigateNext
+    get() = VellumAutoMirroredFilledIcons.navigateNext
 
 val Icons.AutoMirrored.Filled.OpenInNew: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.openInNew
+    get() = VellumAutoMirroredFilledIcons.openInNew
 
 val Icons.AutoMirrored.Filled.Redo: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.redo
+    get() = VellumAutoMirroredFilledIcons.redo
 
 val Icons.AutoMirrored.Filled.Sort: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.sort
+    get() = VellumAutoMirroredFilledIcons.sort
 
 val Icons.AutoMirrored.Filled.Undo: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.undo
+    get() = VellumAutoMirroredFilledIcons.undo
 
 val Icons.AutoMirrored.Filled.VolumeUp: ImageVector
-    get() = EpistemeAutoMirroredFilledIcons.volumeUp
+    get() = VellumAutoMirroredFilledIcons.volumeUp
 
-private object EpistemeAutoMirroredFilledIcons {
+private object VellumAutoMirroredFilledIcons {
     val arrowBack: ImageVector by lazy {
         materialIcon(
             name = "ArrowBack",

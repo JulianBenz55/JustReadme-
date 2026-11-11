@@ -3,7 +3,7 @@ package com.aryan.reader.shared.reader
 import java.io.File
 import java.util.Locale
 
-internal fun sharedJvmEpistemeCacheRoot(
+internal fun sharedJvmVellumCacheRoot(
     env: (String) -> String? = System::getenv,
     userHome: String = System.getProperty("user.home").orEmpty(),
     osName: String = System.getProperty("os.name").orEmpty()
@@ -13,7 +13,7 @@ internal fun sharedJvmEpistemeCacheRoot(
         normalizedOs.startsWith("windows") -> {
             val baseDir = env("APPDATA")?.takeIf { it.isNotBlank() }
                 ?: File(userHome, "AppData/Roaming").absolutePath
-            File(baseDir, "Episteme")
+            File(baseDir, "Vellum")
         }
         normalizedOs == "linux" || normalizedOs.contains("linux") -> {
             val baseDir = env("XDG_CACHE_HOME")
@@ -21,11 +21,11 @@ internal fun sharedJvmEpistemeCacheRoot(
                 ?.let(::File)
                 ?.takeIf { it.isAbsolute }
                 ?: File(userHome, ".cache")
-            File(baseDir, "episteme")
+            File(baseDir, "vellum")
         }
         normalizedOs.startsWith("mac") || normalizedOs.contains("darwin") -> {
-            File(userHome, "Library/Caches/Episteme")
+            File(userHome, "Library/Caches/Vellum")
         }
-        else -> File(userHome, ".episteme/cache")
+        else -> File(userHome, ".vellum/cache")
     }
 }

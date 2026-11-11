@@ -1,7 +1,7 @@
 package com.aryan.reader.shared.reader
 
-private const val SharedReaderDiagnosticsEnv = "EPISTEME_DESKTOP_DIAGNOSTICS"
-private const val SharedReaderDiagnosticsTagsEnv = "EPISTEME_DESKTOP_DIAGNOSTICS_TAGS"
+private const val SharedReaderDiagnosticsEnv = "VELLUM_DESKTOP_DIAGNOSTICS"
+private const val SharedReaderDiagnosticsTagsEnv = "VELLUM_DESKTOP_DIAGNOSTICS_TAGS"
 
 private val SharedReaderDiagnosticTags: Set<String> =
     listOfNotNull(

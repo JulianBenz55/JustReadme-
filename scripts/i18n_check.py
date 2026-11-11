@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Localization QA gate for Episteme string resources.
+"""Localization QA gate for Vellum string resources.
 
 Checks Android string resources (source of truth) and the generated JSON
 catalogs consumed by iOS/desktop. See docs/localization-revamp-plan.md §4.
@@ -255,7 +255,7 @@ def check_xml_file(
     for name, value in strings.items():
         if name in base_translatable_false:
             rep.error(f"strings.xml '{name}': translatable=false key must not be translated")
-        if name == "app_name" and value != "Episteme":
+        if name == "app_name" and value != "Vellum":
             rep.error(f"strings.xml 'app_name': must not be translated (found '{value}')")
         base_value = base_strings.get(name)
         base_sig = placeholder_signature(base_value) if base_value is not None else None

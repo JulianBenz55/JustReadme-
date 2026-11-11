@@ -47,8 +47,8 @@ import kotlin.math.roundToInt
 import kotlin.coroutines.coroutineContext
 
 private const val DEBUG_PAGINATION_LOGS = false
-private const val AndroidEpubCutoffLogTag = "EpistemeEpubCutoff"
-private const val AndroidEpubPageGapDiagLogTag = "EpistemePageGapDiag"
+private const val AndroidEpubCutoffLogTag = "VellumEpubCutoff"
+private const val AndroidEpubPageGapDiagLogTag = "VellumPageGapDiag"
 private const val JustifiedSplitGapProbeMinFraction = 0.18f
 
 /**

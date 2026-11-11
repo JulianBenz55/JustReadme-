@@ -1,6 +1,6 @@
 package com.aryan.reader.shared
 
-const val EPISTEME_POLICY_BASE_URL = "https://aryan-raj3112.github.io/reader-policy"
+const val VELLUM_POLICY_BASE_URL = "https://aryan-raj3112.github.io/reader-policy"
 
 enum class SharedLegalProfile {
     STANDARD,
@@ -27,8 +27,8 @@ fun sharedLegalLinksForProfile(profile: SharedLegalProfile): SharedLegalLinks {
         }
     }
     return SharedLegalLinks(
-        privacyPolicyUrl = "$EPISTEME_POLICY_BASE_URL/$privacyPath",
-        termsUrl = "$EPISTEME_POLICY_BASE_URL/$termsPath",
-        licensesUrl = "$EPISTEME_POLICY_BASE_URL/licenses.html"
+        privacyPolicyUrl = "$VELLUM_POLICY_BASE_URL/$privacyPath",
+        termsUrl = "$VELLUM_POLICY_BASE_URL/$termsPath",
+        licensesUrl = "$VELLUM_POLICY_BASE_URL/licenses.html"
     )
 }

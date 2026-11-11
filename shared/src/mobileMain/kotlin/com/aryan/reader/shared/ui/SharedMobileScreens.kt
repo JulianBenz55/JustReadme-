@@ -147,9 +147,9 @@ fun SharedMobileAppDrawerContent(
                                     }
                                     // No balance badge: emphasize Pro status instead.
                                     !showCreditsBalance -> if (isProUser) {
-                                        readerString("drawer_pro_unlocked", "Episteme Pro and Credits")
+                                        readerString("drawer_pro_unlocked", "Vellum Pro and Credits")
                                     } else {
-                                        readerString("drawer_upgrade_pro", "Episteme Pro and Credits")
+                                        readerString("drawer_upgrade_pro", "Vellum Pro and Credits")
                                     }
                                     else -> {
                                         com.aryan.reader.shared.spendableDisplayText(credits, walletMicros, walletMigrated)
@@ -248,8 +248,8 @@ fun SharedMobileAppDrawerContent(
                     Text(
                         when {
                             edition == MobileAppEdition.STANDARD -> readerString("drawer_standard_version", "Standard version")
-                            isProUser -> readerString("drawer_pro_unlocked", "Episteme Pro and Credits")
-                            else -> readerString("drawer_upgrade_pro", "Episteme Pro and Credits")
+                            isProUser -> readerString("drawer_pro_unlocked", "Vellum Pro and Credits")
+                            else -> readerString("drawer_upgrade_pro", "Vellum Pro and Credits")
                         }
                     )
                 },

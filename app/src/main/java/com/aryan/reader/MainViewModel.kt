@@ -2628,7 +2628,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
     /**
      * Shared-tag record of a library-side sync decision. Emitted next to the
-     * full trace so one `logcat -s EpistemeCloudSync` line answers "which side
+     * full trace so one `logcat -s VellumCloudSync` line answers "which side
      * won, and did anything actually move?".
      */
     private fun logLibrarySyncDecision(

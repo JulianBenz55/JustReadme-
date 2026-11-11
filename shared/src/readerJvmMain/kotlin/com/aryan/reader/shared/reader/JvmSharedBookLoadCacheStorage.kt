@@ -42,7 +42,7 @@ internal class JvmSharedBookLoadCacheStorage(
 private fun defaultSharedBookLoadCacheRoot(): File {
     val overridePath = System.getProperty("reader.book.load.cache.dir")
     if (!overridePath.isNullOrBlank()) return File(overridePath).apply { mkdirs() }
-    return File(sharedJvmEpistemeCacheRoot(), "book_load_cache").apply { mkdirs() }
+    return File(sharedJvmVellumCacheRoot(), "book_load_cache").apply { mkdirs() }
 }
 
 private fun writeBookLoadCacheAtomically(file: File, bytes: ByteArray) {

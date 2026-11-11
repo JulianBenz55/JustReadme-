@@ -1357,7 +1357,7 @@ private fun logReaderLink(message: String) {
     logSharedReaderDiagnostic("ReaderLinkResolve") { message }
 }
 
-private const val ReaderPositionTraceLogTag = "EpistemeDesktopPositionTrace"
+private const val ReaderPositionTraceLogTag = "VellumDesktopPositionTrace"
 
 private fun logReaderPositionTrace(message: () -> String) {
     logSharedReaderDiagnostic(ReaderPositionTraceLogTag, message)

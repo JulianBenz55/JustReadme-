@@ -71,7 +71,7 @@ class JvmSharedEpubPageCacheStorage(
                 return JvmSharedEpubPageCacheStorage(File(overridePath).apply { mkdirs() })
             }
             return JvmSharedEpubPageCacheStorage(
-                File(sharedJvmEpistemeCacheRoot(), DefaultJvmEpubPageCacheDir).apply { mkdirs() }
+                File(sharedJvmVellumCacheRoot(), DefaultJvmEpubPageCacheDir).apply { mkdirs() }
             )
         }
     }

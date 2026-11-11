@@ -291,8 +291,8 @@ internal fun textBlockLayoutKey(
 internal fun legacyTextBlockLayoutKey(cfi: String, pageIndex: Int): String = "${cfi}_$pageIndex"
 
 internal const val WEB_VIEW_NORMAL_LINE_HEIGHT_MULTIPLIER = 1.2f
-internal const val ReaderUiCutoffLogTag = "EpistemeEpubCutoff"
-internal const val ReaderUiPageGapDiagLogTag = "EpistemePageGapDiag"
+internal const val ReaderUiCutoffLogTag = "VellumEpubCutoff"
+internal const val ReaderUiPageGapDiagLogTag = "VellumPageGapDiag"
 internal const val AndroidEpubEdgeDiagLogTag = "ReaderEdgeDiag"
 internal const val AndroidEpubCutoffTolerancePx = 1
 internal const val AndroidEpubCutoffEdgeProbePx = 2

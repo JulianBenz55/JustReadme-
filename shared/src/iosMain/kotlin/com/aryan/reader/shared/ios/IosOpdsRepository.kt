@@ -639,7 +639,7 @@ private class IosOpdsStreamPageCache(
             NSUserDomainMask,
             true,
         ).firstOrNull() as? String
-        cachesDirectory?.let { "$it/episteme_opds_stream_pages" }?.also { root ->
+        cachesDirectory?.let { "$it/vellum_opds_stream_pages" }?.also { root ->
             NSFileManager.defaultManager.createDirectoryAtPath(
                 root,
                 withIntermediateDirectories = true,
@@ -853,7 +853,7 @@ internal class IosUrlSessionHttpClient : IosOpdsHttpClient {
             timeoutInterval = 45.0
         ).apply {
             HTTPMethod = "GET"
-            setValue("EpistemeReader/1.0 (iOS)", forHTTPHeaderField = "User-Agent")
+            setValue("VellumReader/1.0 (iOS)", forHTTPHeaderField = "User-Agent")
             headers.forEach { (name, value) ->
                 setValue(value, forHTTPHeaderField = name)
             }

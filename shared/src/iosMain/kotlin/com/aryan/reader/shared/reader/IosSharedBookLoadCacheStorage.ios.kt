@@ -19,7 +19,7 @@ import platform.Foundation.writeToFile
 import platform.posix.memcpy
 import kotlin.math.roundToLong
 
-private const val IosBookLoadCacheDir = "episteme_book_load_cache"
+private const val IosBookLoadCacheDir = "vellum_book_load_cache"
 private const val IosBookLoadCacheMaxEntries = 80
 
 @OptIn(ExperimentalForeignApi::class)

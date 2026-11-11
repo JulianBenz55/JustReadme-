@@ -113,7 +113,7 @@ internal fun BackupDialog(onDismiss: () -> Unit) {
                     enabled = !busy,
                     onClick = {
                         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US).format(Date())
-                        createLauncher.launch("episteme-backup-$stamp.zip")
+                        createLauncher.launch("vellum-backup-$stamp.zip")
                     },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 ) { Text(stringResource(R.string.backup_create), maxLines = 1) }

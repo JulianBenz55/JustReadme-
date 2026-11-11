@@ -202,7 +202,7 @@ androidComponents {
             include("*.apk")
             into(layout.buildDirectory.dir("outputs/renamed-apk/${variant.name}"))
             rename {
-                "Episteme-$flavor-v${versionName.get()}-$buildType.apk"
+                "Vellum-$flavor-v${versionName.get()}-$buildType.apk"
             }
         }
 

@@ -83,7 +83,7 @@ import com.aryan.reader.shared.reader.logSharedReaderDiagnostic
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
-private const val ReaderChromeTapLogTag = "EpistemePdfChromeTap"
+private const val ReaderChromeTapLogTag = "VellumPdfChromeTap"
 
 @Composable
 fun ReaderWorkspaceShell(
@@ -1072,8 +1072,8 @@ private fun BoxScope.ReaderWorkspaceChromeOverlay(
     }
 }
 
-private const val ReaderGapLogTag = "EpistemeReaderGap"
-private const val WebViewLayoutLogTag = "EpistemeWebViewLayout"
+private const val ReaderGapLogTag = "VellumReaderGap"
+private const val WebViewLayoutLogTag = "VellumWebViewLayout"
 
 private fun logReaderGapLayout(
     layer: String,

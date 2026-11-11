@@ -112,7 +112,7 @@ object BackupManager {
                     entry = zip.nextEntry
                 }
             }
-            if (!sawManifest) throw IOException("This file is not an Episteme backup")
+            if (!sawManifest) throw IOException("This file is not an Vellum backup")
         } catch (e: Exception) {
             staging.deleteRecursively()
             throw e

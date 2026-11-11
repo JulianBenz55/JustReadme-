@@ -13,7 +13,7 @@ import timber.log.Timber
  * messages can contain user data. Callers should log only the derived values
  * exposed by this file rather than interpolating those values directly.
  */
-internal const val CLOUD_FOLDER_SYNC_LOG_TAG = "EpistemeCloudFolderSync"
+internal const val CLOUD_FOLDER_SYNC_LOG_TAG = "VellumCloudFolderSync"
 private val CLOUD_FOLDER_OPERATION_TOKEN_REGEX = Regex("op_[0-9a-f]{16}")
 private val CLOUD_FOLDER_CORRELATION_TOKEN_REGEX = Regex("[0-9a-f]{16}")
 

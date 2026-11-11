@@ -370,7 +370,7 @@ class ReaderHtmlDocumentBuilderTest {
         assertTrue(html.contains("data-reader-page-index=\"2\""))
         assertTrue(html.contains("data-reader-page-index=\"3\""))
         assertTrue(html.contains("readerPaginationLayoutLog"))
-        assertTrue(html.contains("EpistemeEpubPagination"))
+        assertTrue(html.contains("VellumEpubPagination"))
     }
 
     @Test
@@ -592,7 +592,7 @@ class ReaderHtmlDocumentBuilderTest {
         assertTrue(html.contains("return positionFromReaderHost(chapter, requestedOffset, preferredY, 'restore_locator_visible');"))
         assertTrue(html.contains("var position = pendingRestoreVisiblePosition() || currentVisiblePosition();"))
         assertTrue(html.contains("return fallback || { offset: contentStart, textNode: null };"))
-        assertTrue(html.contains("EpistemeDesktopTtsStartTrace"))
+        assertTrue(html.contains("VellumDesktopTtsStartTrace"))
         assertTrue(Regex("readerTtsStartTraceLog\\(\\s*'event=web_position_report_send").containsMatchIn(html))
     }
 

@@ -15,7 +15,7 @@ class AndroidStringFormatResourcesTest {
     fun `oss flavor uses standard launcher label`() {
         val ossStrings = readStringResources(File(findOssResDirectory(), "values/strings.xml"))
 
-        assertEquals("Episteme", ossStrings["app_name"])
+        assertEquals("Vellum", ossStrings["app_name"])
     }
 
     @Test

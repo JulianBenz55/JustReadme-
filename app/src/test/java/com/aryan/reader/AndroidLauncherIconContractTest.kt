@@ -18,7 +18,7 @@ import org.w3c.dom.Element
  * depends on are asserted here rather than left to review:
  *
  *  1. The adaptive icon keeps the conventional three layers: a flat `background`, a
- *     `foreground` carrying only the artwork, and a `monochrome` for themed icons. A
+ *     `foreground` (a VectorDrawable) carrying only the artwork, and a `monochrome` for themed icons. A
  *     full-bleed background with no foreground is fragile — launchers have been seen
  *     drawing such a background into the inner 72dp instead of the whole 108dp, which
  *     shrinks the icon.
@@ -26,7 +26,7 @@ import org.w3c.dom.Element
  *     the 66dp safe circle of the 108dp viewport (AOSP `AdaptiveIconDrawable`
  *     `SAFEZONE_SCALE = 66f / 72f`).
  *  3. A themed icon is recoloured by the launcher, so its layer must be a single flat
- *     colour with no gradient baked in.
+ *     colour (alpha may separate shapes) with no gradient baked in.
  *  4. The public surfaces — the README header and the Play listing — must serve the
  *     generated icon, never a private copy of it.
  *
@@ -46,7 +46,7 @@ class AndroidLauncherIconContractTest {
             )
             assertEquals(
                 "$name foreground must carry the artwork",
-                "@mipmap/ic_launcher_foreground",
+                "@drawable/ic_launcher_foreground",
                 doc.child("foreground").getAttribute("android:drawable"),
             )
             assertEquals(
@@ -58,79 +58,48 @@ class AndroidLauncherIconContractTest {
     }
 
     @Test
-    fun inAppArtworkIsTheLauncherFanAtTheLauncherFanSize() {
-        // The icon shown *inside* the app is the launcher icon's own fan,
+    fun inAppArtworkIsTheLauncherLogoAtTheLauncherLogoSize() {
+        // The icon shown *inside* the app is the launcher icon's own logo,
         // generated from the same source into AppIconArtwork.kt and repainted
         // in the app theme by AppIcon. Two things would silently undo that:
         // the artwork drifting away from the launcher's foreground, and the
-        // artwork stopping being the fan's own size (a Compose canvas sized
-        // against the launcher's 108dp viewport draws the fan at 54/108 of
-        // its slot -- a 16x10dp speck in a 32dp avatar).
+        // artwork stopping being the logo's own size.
         val artwork = readGeneratedFile(
             "shared/src/commonMain/kotlin/com/aryan/reader/shared/ui/AppIconArtwork.kt",
         )
-        val foreground = readGeneratedFile(
-            "branding/app-icon/episteme-icon-android-foreground.svg",
-        )
+        val foreground = readText("drawable/ic_launcher_foreground.xml")
 
-        // The same wave paths the launcher foreground ships, so the in-app
-        // fan cannot drift from the launcher fan. The shade layer is
-        // deliberately excluded: it is counter-transformed into gradient
-        // space, so its path data differs by design.
-        val wavePaths = Regex("""<path\b[^>]*\sd="([^"]+)"[^>]*/>""")
-            .findAll(foreground)
-            .map { it.groupValues[1] }
-            .filter { it.contains('c') }   // the four bands are curves; the shade is a rectangle
-            .toList()
-        assertEquals(
-            "the foreground should carry four curved wave bands",
-            4, wavePaths.size,
-        )
-        for (path in wavePaths) {
-            assertTrue(
-                "AppIconArtwork lost the wave path $path",
-                artwork.contains(path),
-            )
+        val shapes = pathData(foreground)
+        assertEquals("the foreground should carry the logo's 11 shapes", 11, shapes.size)
+        for (path in shapes) {
+            assertTrue("AppIconArtwork lost the logo path $path", artwork.contains(path))
         }
-        // ...and the shade layer is still there alongside them
         assertEquals(
-            "the artwork should carry the four bands plus the shade layer",
-            5, artwork.split("AppIconLayer(").size - 1,
+            "the artwork should carry the same 11 shapes",
+            11, artwork.split("AppIconLayer(").size - 1,
         )
 
-        // The artwork's viewport is the fan's placed size, measured here
-        // from the shipped foreground the same way the safe-zone test above
-        // measures it -- so the in-app icon and the launcher icon render the
-        // fan at the same optical size. The tolerance is the anti-aliased
-        // fringe on the fan's tips, which the alpha measurement picks up;
-        // any real regression (the 108dp canvas, a square viewport, a lost
-        // crop) is off by whole dp and nowhere near it.
-        val size = 432                                   // 108dp at xxxhdpi
-        val img = ImageIO.read(file("mipmap-xxxhdpi/ic_launcher_foreground.png").inputStream())
-        val (x0, y0, x1, y1) = alphaBox(img)!!
-        val dp = { px: Int -> px * ADAPTIVE_DP.toDouble() / size }
+        // The artwork's viewport is the logo's placed size in dp, measured from
+        // the foreground's own path data, so the in-app icon and the launcher
+        // icon render the logo at the same optical size.
+        val scale = parse("drawable/ic_launcher_foreground.xml").groupScale().toDouble()
+        val box = bounds(shapes)
         assertEquals(
-            "the artwork's viewport width must be the fan's placed width",
-            (dp(x1) - dp(x0) + 1),
-            artwork.constValue("viewportWidth"),
-            1.25,
+            "the artwork's viewport width must be the logo's placed width",
+            (box[2] - box[0]) * scale, artwork.constValue("viewportWidth"), 1.25,
         )
         assertEquals(
-            "the artwork's viewport height must be the fan's placed height",
-            (dp(y1) - dp(y0) + 1),
-            artwork.constValue("viewportHeight"),
-            1.25,
+            "the artwork's viewport height must be the logo's placed height",
+            (box[3] - box[1]) * scale, artwork.constValue("viewportHeight"), 1.25,
         )
-
-        // ...and the artwork is placed with the same transform the themed
-        // glyph uses, so an in-app plate never shows a bigger or smaller
-        // mark than a themed launcher icon does.
+        // ...and it is placed with the same transform the themed glyph uses
         assertEquals(
-            "AppIconArtwork must scale the fan exactly as the themed glyph does",
+            "AppIconArtwork must scale the logo exactly as the themed glyph does",
             parse("drawable/ic_launcher_monochrome.xml").groupScale().toDouble(),
             artwork.constValue("sourceScale"),
             0.001,
         )
+        assertEquals(scale, artwork.constValue("sourceScale"), 0.001)
     }
 
     @Test
@@ -146,32 +115,38 @@ class AndroidLauncherIconContractTest {
     }
 
     @Test
-    fun adaptiveForegroundIsArtworkOnTransparencyInsideTheSafeZone() {
+    fun adaptiveForegroundIsArtworkInsideTheSafeZone() {
         DENSITIES.forEach { density ->
-            listOf("ic_launcher_foreground.png", "ic_launcher.png", "ic_launcher_round.png")
+            listOf("ic_launcher.png", "ic_launcher_round.png")
                 .forEach { assertTrue("missing mipmap-$density/$it", file("mipmap-$density/$it").isFile) }
         }
+        listOf("drawable/ic_launcher_foreground.xml", "drawable/ic_launcher_monochrome.xml").forEach { name ->
+            val xml = readText(name)
+            assertTrue("$name must be a vector", xml.contains("<vector"))
+            assertFalse("$name must not bake in a gradient or need a clip",
+                xml.contains("gradient") || xml.contains("aapt:attr") || xml.contains("clip-path"))
 
-        val size = 432                                   // 108dp at xxxhdpi
-        val img = ImageIO.read(file("mipmap-xxxhdpi/ic_launcher_foreground.png").inputStream())
-        assertEquals("foreground layer must be square", size, img.width)
-        assertEquals("foreground layer must be square", size, img.height)
-
-        val box = alphaBox(img)
-        assertTrue("adaptive foreground rendered empty", box != null)
-        val (x0, y0, x1, y1) = box!!
-        val dp = { px: Int -> px.toDouble() * ADAPTIVE_DP / size }
-        val reach = hypot(dp(x1) - dp(x0), dp(y1) - dp(y0)) / 2
-        assertTrue(
-            "foreground reaches ${"%.1f".format(reach)}dp from centre, past the 33dp safe " +
-                "radius — a launcher mask would crop the artwork",
-            reach <= SAFE_RADIUS_DP,
-        )
-        // and it has to be roughly centred, or it reads as off-centre in the plate
-        val cx = (dp(x0) + dp(x1)) / 2
-        val cy = (dp(y0) + dp(y1)) / 2
-        assertEquals("foreground must be centred horizontally", ADAPTIVE_DP / 2.0, cx, 1.0)
-        assertEquals("foreground must be centred vertically", ADAPTIVE_DP / 2.0, cy, 1.0)
+            // farthest ink from the viewport centre, from the path data and the group transform
+            val doc = parse(name)
+            val g = doc.group()
+            val s = g.getAttribute("android:scaleX").toDouble()
+            val tx = g.getAttribute("android:translateX").toDouble()
+            val ty = g.getAttribute("android:translateY").toDouble()
+            val reach = pathPoints(pathData(xml)).maxOf { (x, y) ->
+                hypot(x * s + tx - ADAPTIVE_DP / 2, y * s + ty - ADAPTIVE_DP / 2)
+            }
+            assertTrue(
+                "$name reaches ${"%.1f".format(reach)}dp from centre, past the 33dp safe " +
+                    "radius — a launcher mask would crop the artwork",
+                reach <= SAFE_RADIUS_DP,
+            )
+            // roughly centred, or it reads as off-centre in the plate
+            val box = bounds(pathData(xml))
+            assertEquals("$name must be centred horizontally", ADAPTIVE_DP / 2.0,
+                (box[0] + box[2]) / 2 * s + tx, 1.0)
+            assertEquals("$name must be centred vertically", ADAPTIVE_DP / 2.0,
+                (box[1] + box[3]) / 2 * s + ty, 1.0)
+        }
     }
 
     @Test
@@ -181,103 +156,26 @@ class AndroidLauncherIconContractTest {
             "must stay a vector: the TTS notification uses it as its small icon",
             xml.contains("<vector"),
         )
-        assertEquals(
-            "a themed icon is recoloured by the launcher, so the glyph must be one path",
-            1,
-            Regex("<path").findAll(xml).count(),
-        )
-        assertFalse(
-            "monochrome layer must not bake in a gradient or need a clip",
-            xml.contains("gradient") || xml.contains("aapt:attr") || xml.contains("clip-path"),
-        )
         val colours = Regex("""android:fillColor="([^"]+)"""")
             .findAll(xml)
             .map { it.groupValues[1] }
-            .toList()
-        assertEquals("monochrome layer must be a single flat colour", listOf("#FFFFFFFF"), colours)
+            .toSet()
+        assertEquals("monochrome layer must be a single flat colour", setOf("#FFFFFFFF"), colours)
+        assertTrue(
+            "the monochrome layer should keep the logo's 11 shapes",
+            Regex("<path").findAll(xml).count() == 11,
+        )
     }
 
     @Test
-    fun monochromeGlyphNeverPresentsAnEdgeInsideTheMask() {
-        // The launcher mask supplies a themed icon's outline. That gives exactly two
-        // acceptable designs, and this rules out the broken middle one:
-        //
-        //  * a *field* that bleeds past the mask, so the mask alone decides the shape; or
-        //  * no field at all, so the themed background shows through around a free mark.
-        //
-        // What must never happen is a field that stops short of the mask: its own straight
-        // edges then appear inside the mask and the themed background shows as a band on
-        // every side. That is the gap this replaces.
+    fun monochromeGlyphIsAFreeMarkWithoutAField() {
+        // The launcher mask supplies a themed icon's outline. The logo is a free-standing
+        // mark, so no path may be a full-viewport rectangle whose straight edges would
+        // show inside the mask.
         val xml = readText("drawable/ic_launcher_monochrome.xml")
-        val d = requireNotNull(
-            Regex("""pathData="([^"]+)"""").find(xml)?.groupValues?.get(1)
-        ) { "the monochrome vector has no path data" }
-        val scale = requireNotNull(
-            Regex("""android:scaleX="([\d.]+)"""").find(xml)?.groupValues?.get(1)?.toDouble()
-        ) { "group scale is missing from the monochrome vector" }
-        val tx = requireNotNull(
-            Regex("""android:translateX="([-\d.]+)"""").find(xml)?.groupValues?.get(1)?.toDouble()
-        ) { "group translate is missing from the monochrome vector" }
-
-        // an axis-aligned M/H/V/H/Z rectangle as the first subpath means "has a field"
-        val field = Regex("""^\s*(M[-\d.]+ [-\d.]+ H[-\d.]+ V[-\d.]+ H[-\d.]+ Z)""").find(d)
-        if (field == null) return   // fieldless by design: the free-mark case
-
-        // M x y  H x  V y  H x  Z  ->  five coordinates: three x, two y
-        val n = Regex("""[-\d.]+""").findAll(field.groupValues[1]).map { it.value.toDouble() }.toList()
-        val width = (listOf(n[0], n[2], n[4]).max() - listOf(n[0], n[2], n[4]).min()) * scale
-        val height = (listOf(n[1], n[3]).max() - listOf(n[1], n[3]).min()) * scale
-        assertTrue(
-            "field spans ${width}dp wide; it must reach the full ${ADAPTIVE_DP}dp viewport " +
-                "or the mask exposes themed background around it",
-            width >= ADAPTIVE_DP - 0.5,
-        )
-        assertTrue(
-            "field spans ${height}dp tall; it must reach the full ${ADAPTIVE_DP}dp viewport",
-            height >= ADAPTIVE_DP - 0.5,
-        )
-    }
-
-    @Test
-    fun foregroundSitsOnOneBaselineWithNoStraySliver() {
-        // The wave paths are authored oversized and trimmed by `FAN_TRIM` in the generator.
-        // If that trim is lost the fan still renders, just wrong: the left page drops below
-        // the right one and a sliver of gradient sticks out past the far right edge. Both
-        // are invisible in a thumbnail, so they are pinned here.
-        val img = ImageIO.read(file("mipmap-xxxhdpi/ic_launcher_foreground.png").inputStream())
-        val box = requireNotNull(alphaBox(img)) { "adaptive foreground rendered empty" }
-        val (x0, y0, x1, y1) = box
-
-        val ink = { x: Int, y: Int -> img.getRGB(x, y) ushr 24 > 16 }
-        val rowRuns = { y: Int ->
-            val xs = (x0..x1).filter { ink(it, y) }
-            if (xs.isEmpty()) null else Triple(xs.first(), xs.last(), xs.size)
-        }
-
-        val bottom = requireNotNull(rowRuns(y1 - 1)) { "no ink on the baseline row" }
-        assertEquals(
-            "the bottom ink row must span the full width: a shorter run means the left " +
-                "page is sitting below the right one",
-            x1 - x0 + 1,          // alphaBox's right edge is inclusive
-            bottom.third,
-        )
-        assertEquals("bottom row must start at the left edge", x0, bottom.first)
-
-        val rightEdges = (y0 until y1).mapNotNull { rowRuns(it) }.map { it.second }.toSet()
-        assertEquals(
-            "every ink row must end at the same x: more than one means a stray sliver " +
-                "along the right edge ($rightEdges)",
-            setOf(x1),
-            rightEdges,
-        )
-
-        // nothing may be painted outside the fan's own bounds, on any side
-        val inside = (y0..y1).sumOf { row -> (x0..x1).count { ink(it, row) } }
-        val total = (0 until img.height).sumOf { row -> (0 until img.width).count { ink(row, it) } }
-        assertEquals(
-            "ink painted outside the fan's bounding box ($total - $inside stray pixels)",
-            inside,
-            total,
+        assertFalse(
+            "monochrome must not carry a rectangular field",
+            Regex("""pathData="\s*M[-\d.]+ [-\d.]+ H[-\d.]+ V[-\d.]+ H""").containsMatchIn(xml),
         )
     }
 
@@ -296,25 +194,23 @@ class AndroidLauncherIconContractTest {
 
     @Test
     fun publicSurfacesServeTheGeneratedIcon() {
-        // Both of these used to hold a private copy of the icon, outside the generator's
-        // deploy table, so nothing refreshed them: the README header and the Play listing
-        // kept serving the old mark while the app itself had moved on. The README now
-        // points at the generated branding ladder by reference, and the listing is
-        // deployed from the generated store asset.
+        // The README header points at the generated branding ladder by reference, and the
+        // Play listing (when the repo carries one) is deployed from the generated store asset.
         val referenced = Regex("""<img src="(branding/app-icon/png/branding/icon-\d+\.png)"""")
             .find(readGeneratedFile("README.md"))?.groupValues?.get(1)
             ?: error("the README header icon must be referenced from branding/app-icon/png/branding/")
         assertTrue("the README references $referenced, which is not in the repo", projectFile(referenced).isFile)
 
         val listing = projectFile("fastlane/metadata/android/en-US/images/icon.png")
-        assertTrue("the Play listing icon is missing", listing.isFile)
-        assertTrue(
-            "the Play listing icon is not the generated store asset — re-run " +
-                "scripts/generate_app_icons.py --deploy",
-            listing.readBytes().contentEquals(
-                projectFile("branding/app-icon/png/store/play-store-512.png").readBytes(),
-            ),
-        )
+        if (listing.isFile) {
+            assertTrue(
+                "the Play listing icon is not the generated store asset — re-run " +
+                    "scripts/generate_app_icons.py",
+                listing.readBytes().contentEquals(
+                    projectFile("branding/app-icon/png/store/play-store-512.png").readBytes(),
+                ),
+            )
+        }
     }
 
     // ------------------------------------------------------------------ helpers
@@ -362,23 +258,30 @@ class AndroidLauncherIconContractTest {
 
     private fun Element.group(): Element = elements("group").single()
 
-    /** Bounding box of the pixels with meaningful alpha, as left/top/right/bottom. */
-    private fun alphaBox(img: java.awt.image.BufferedImage): IntArray? {
-        var x0 = Int.MAX_VALUE
-        var y0 = Int.MAX_VALUE
-        var x1 = -1
-        var y1 = -1
-        for (y in 0 until img.height) {
-            for (x in 0 until img.width) {
-                if (img.getRGB(x, y) ushr 24 > 16) {
-                    if (x < x0) x0 = x
-                    if (x > x1) x1 = x
-                    if (y < y0) y0 = y
-                    if (y > y1) y1 = y
+    /** Every `android:pathData` value of a VectorDrawable, in document order. */
+    private fun pathData(xml: String): List<String> =
+        Regex("""android:pathData="([^"]+)"""").findAll(xml).map { it.groupValues[1] }.toList()
+
+    /** The on-curve points (M/L endpoints and Q end points) of absolute M/L/Q/Z path data. */
+    private fun pathPoints(paths: List<String>): List<Pair<Double, Double>> = buildList {
+        for (d in paths) {
+            val tokens = Regex("""[MLQZ]|-?\d+\.?\d*""").findAll(d).map { it.value }.toList()
+            var i = 0
+            while (i < tokens.size) {
+                when (tokens[i]) {
+                    "M", "L" -> { add(tokens[i + 1].toDouble() to tokens[i + 2].toDouble()); i += 3 }
+                    "Q" -> { add(tokens[i + 3].toDouble() to tokens[i + 4].toDouble()); i += 5 }
+                    else -> i += 1
                 }
             }
         }
-        return if (x1 < 0) null else intArrayOf(x0, y0, x1, y1)
+    }
+
+    /** left, top, right, bottom of [pathPoints]. */
+    private fun bounds(paths: List<String>): DoubleArray {
+        val pts = pathPoints(paths)
+        return doubleArrayOf(pts.minOf { it.first }, pts.minOf { it.second },
+            pts.maxOf { it.first }, pts.maxOf { it.second })
     }
 
     private companion object {

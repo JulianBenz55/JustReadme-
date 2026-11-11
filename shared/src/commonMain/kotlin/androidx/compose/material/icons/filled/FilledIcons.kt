@@ -10,285 +10,285 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
 
 val Icons.Filled.AccountCircle: ImageVector
-    get() = EpistemeFilledIcons.accountCircle
+    get() = VellumFilledIcons.accountCircle
 
 val Icons.Filled.Add: ImageVector
-    get() = EpistemeFilledIcons.add
+    get() = VellumFilledIcons.add
 
 val Icons.Filled.Ai: ImageVector
-    get() = EpistemeFilledIcons.ai
+    get() = VellumFilledIcons.ai
 
 val Icons.Filled.ArrowDownward: ImageVector
-    get() = EpistemeFilledIcons.arrowDownward
+    get() = VellumFilledIcons.arrowDownward
 
 val Icons.Filled.ArrowDropDown: ImageVector
-    get() = EpistemeFilledIcons.arrowDropDown
+    get() = VellumFilledIcons.arrowDropDown
 
 val Icons.Filled.ArrowDropUp: ImageVector
-    get() = EpistemeFilledIcons.arrowDropUp
+    get() = VellumFilledIcons.arrowDropUp
 
 val Icons.Filled.ArrowUpward: ImageVector
-    get() = EpistemeFilledIcons.arrowUpward
+    get() = VellumFilledIcons.arrowUpward
 
 val Icons.Filled.Book: ImageVector
-    get() = EpistemeFilledIcons.book
+    get() = VellumFilledIcons.book
 
 val Icons.Filled.Bookmark: ImageVector
-    get() = EpistemeFilledIcons.bookmark
+    get() = VellumFilledIcons.bookmark
 
 val Icons.Filled.BookmarkBorder: ImageVector
-    get() = EpistemeFilledIcons.bookmarkBorder
+    get() = VellumFilledIcons.bookmarkBorder
 
 val Icons.Filled.Brush: ImageVector
-    get() = EpistemeFilledIcons.brush
+    get() = VellumFilledIcons.brush
 
 val Icons.Filled.BugReport: ImageVector
-    get() = EpistemeFilledIcons.bugReport
+    get() = VellumFilledIcons.bugReport
 
 val Icons.Filled.Check: ImageVector
-    get() = EpistemeFilledIcons.check
+    get() = VellumFilledIcons.check
 
 val Icons.Filled.ChevronLeft: ImageVector
-    get() = EpistemeFilledIcons.chevronLeft
+    get() = VellumFilledIcons.chevronLeft
 
 val Icons.Filled.ChevronRight: ImageVector
-    get() = EpistemeFilledIcons.chevronRight
+    get() = VellumFilledIcons.chevronRight
 
 val Icons.Filled.Close: ImageVector
-    get() = EpistemeFilledIcons.close
+    get() = VellumFilledIcons.close
 
 val Icons.Filled.Cloud: ImageVector
-    get() = EpistemeFilledIcons.cloud
+    get() = VellumFilledIcons.cloud
 
 val Icons.Filled.CloudDownload: ImageVector
-    get() = EpistemeFilledIcons.cloudDownload
+    get() = VellumFilledIcons.cloudDownload
 
 val Icons.Filled.Code: ImageVector
-    get() = EpistemeFilledIcons.code
+    get() = VellumFilledIcons.code
 
 val Icons.Filled.ContentCopy: ImageVector
-    get() = EpistemeFilledIcons.contentCopy
+    get() = VellumFilledIcons.contentCopy
 
 val Icons.Filled.CopyAll: ImageVector
-    get() = EpistemeFilledIcons.copyAll
+    get() = VellumFilledIcons.copyAll
 
 val Icons.Filled.CreateNewFolder: ImageVector
-    get() = EpistemeFilledIcons.createNewFolder
+    get() = VellumFilledIcons.createNewFolder
 
 val Icons.Filled.Delete: ImageVector
-    get() = EpistemeFilledIcons.delete
+    get() = VellumFilledIcons.delete
 
 val Icons.Filled.Description: ImageVector
-    get() = EpistemeFilledIcons.description
+    get() = VellumFilledIcons.description
 
 val Icons.Filled.DoNotTouch: ImageVector
-    get() = EpistemeFilledIcons.doNotTouch
+    get() = VellumFilledIcons.doNotTouch
 
 val Icons.Filled.Download: ImageVector
-    get() = EpistemeFilledIcons.download
+    get() = VellumFilledIcons.download
 
 val Icons.Filled.Edit: ImageVector
-    get() = EpistemeFilledIcons.edit
+    get() = VellumFilledIcons.edit
 
 val Icons.Filled.Email: ImageVector
-    get() = EpistemeFilledIcons.email
+    get() = VellumFilledIcons.email
 
 val Icons.Filled.ExpandLess: ImageVector
-    get() = EpistemeFilledIcons.expandLess
+    get() = VellumFilledIcons.expandLess
 
 val Icons.Filled.ExpandMore: ImageVector
-    get() = EpistemeFilledIcons.expandMore
+    get() = VellumFilledIcons.expandMore
 
 val Icons.Filled.Favorite: ImageVector
-    get() = EpistemeFilledIcons.favorite
+    get() = VellumFilledIcons.favorite
 
 val Icons.Filled.Feedback: ImageVector
-    get() = EpistemeFilledIcons.feedback
+    get() = VellumFilledIcons.feedback
 
 val Icons.Filled.FileOpen: ImageVector
-    get() = EpistemeFilledIcons.fileOpen
+    get() = VellumFilledIcons.fileOpen
 
 val Icons.Filled.FilterList: ImageVector
-    get() = EpistemeFilledIcons.filterList
+    get() = VellumFilledIcons.filterList
 
 val Icons.Filled.Folder: ImageVector
-    get() = EpistemeFilledIcons.folder
+    get() = VellumFilledIcons.folder
 
 val Icons.Filled.FolderSpecial: ImageVector
-    get() = EpistemeFilledIcons.folderSpecial
+    get() = VellumFilledIcons.folderSpecial
 
 val Icons.Filled.FormatListNumbered: ImageVector
-    get() = EpistemeFilledIcons.formatListNumbered
+    get() = VellumFilledIcons.formatListNumbered
 
 val Icons.Filled.Fonts: ImageVector
-    get() = EpistemeFilledIcons.fonts
+    get() = VellumFilledIcons.fonts
 
 val Icons.Filled.Fullscreen: ImageVector
-    get() = EpistemeFilledIcons.fullscreen
+    get() = VellumFilledIcons.fullscreen
 
 val Icons.Filled.FullscreenExit: ImageVector
-    get() = EpistemeFilledIcons.fullscreenExit
+    get() = VellumFilledIcons.fullscreenExit
 
 val Icons.Filled.Gavel: ImageVector
-    get() = EpistemeFilledIcons.gavel
+    get() = VellumFilledIcons.gavel
 
 val Icons.Filled.GraphicEq: ImageVector
-    get() = EpistemeFilledIcons.graphicEq
+    get() = VellumFilledIcons.graphicEq
 
 val Icons.Filled.Home: ImageVector
-    get() = EpistemeFilledIcons.home
+    get() = VellumFilledIcons.home
 
 val Icons.Filled.ImportExport: ImageVector
-    get() = EpistemeFilledIcons.importExport
+    get() = VellumFilledIcons.importExport
 
 val Icons.Filled.Info: ImageVector
-    get() = EpistemeFilledIcons.info
+    get() = VellumFilledIcons.info
 
 val Icons.Filled.KeyboardArrowDown: ImageVector
-    get() = EpistemeFilledIcons.keyboardArrowDown
+    get() = VellumFilledIcons.keyboardArrowDown
 
 val Icons.Filled.KeyboardArrowLeft: ImageVector
-    get() = EpistemeFilledIcons.keyboardArrowLeft
+    get() = VellumFilledIcons.keyboardArrowLeft
 
 val Icons.Filled.KeyboardArrowRight: ImageVector
-    get() = EpistemeFilledIcons.keyboardArrowRight
+    get() = VellumFilledIcons.keyboardArrowRight
 
 val Icons.Filled.KeyboardArrowUp: ImageVector
-    get() = EpistemeFilledIcons.keyboardArrowUp
+    get() = VellumFilledIcons.keyboardArrowUp
 
 val Icons.Filled.Lock: ImageVector
-    get() = EpistemeFilledIcons.lock
+    get() = VellumFilledIcons.lock
 
 val Icons.Filled.LockOpen: ImageVector
-    get() = EpistemeFilledIcons.lockOpen
+    get() = VellumFilledIcons.lockOpen
 
 val Icons.Filled.Logout: ImageVector
-    get() = EpistemeFilledIcons.logout
+    get() = VellumFilledIcons.logout
 
 val Icons.Filled.Menu: ImageVector
-    get() = EpistemeFilledIcons.menu
+    get() = VellumFilledIcons.menu
 
 val Icons.Filled.MoreVert: ImageVector
-    get() = EpistemeFilledIcons.moreVert
+    get() = VellumFilledIcons.moreVert
 
 val Icons.Filled.MyLocation: ImageVector
-    get() = EpistemeFilledIcons.myLocation
+    get() = VellumFilledIcons.myLocation
 
 val Icons.Filled.OpenInNew: ImageVector
-    get() = EpistemeFilledIcons.openInNew
+    get() = VellumFilledIcons.openInNew
 
 val Icons.Filled.Palette: ImageVector
-    get() = EpistemeFilledIcons.palette
+    get() = VellumFilledIcons.palette
 
 val Icons.Filled.Pause: ImageVector
-    get() = EpistemeFilledIcons.pause
+    get() = VellumFilledIcons.pause
 
 val Icons.Filled.PhoneAndroid: ImageVector
-    get() = EpistemeFilledIcons.phoneAndroid
+    get() = VellumFilledIcons.phoneAndroid
 
 val Icons.Filled.PlayArrow: ImageVector
-    get() = EpistemeFilledIcons.playArrow
+    get() = VellumFilledIcons.playArrow
 
 val Icons.Filled.PlayCircle: ImageVector
-    get() = EpistemeFilledIcons.playCircle
+    get() = VellumFilledIcons.playCircle
 
 val Icons.Filled.Policy: ImageVector
-    get() = EpistemeFilledIcons.policy
+    get() = VellumFilledIcons.policy
 
 val Icons.Filled.Print: ImageVector
-    get() = EpistemeFilledIcons.print
+    get() = VellumFilledIcons.print
 
 val Icons.Filled.Psychology: ImageVector
-    get() = EpistemeFilledIcons.psychology
+    get() = VellumFilledIcons.psychology
 
 val Icons.Filled.PushPin: ImageVector
-    get() = EpistemeFilledIcons.pushPin
+    get() = VellumFilledIcons.pushPin
 
 val Icons.Filled.Refresh: ImageVector
-    get() = EpistemeFilledIcons.refresh
+    get() = VellumFilledIcons.refresh
 
 val Icons.Filled.Remove: ImageVector
-    get() = EpistemeFilledIcons.remove
+    get() = VellumFilledIcons.remove
 
 val Icons.Filled.RemoveCircleOutline: ImageVector
-    get() = EpistemeFilledIcons.removeCircleOutline
+    get() = VellumFilledIcons.removeCircleOutline
 
 val Icons.Filled.Restore: ImageVector
-    get() = EpistemeFilledIcons.restore
+    get() = VellumFilledIcons.restore
 
 val Icons.Filled.Save: ImageVector
-    get() = EpistemeFilledIcons.save
+    get() = VellumFilledIcons.save
 
 val Icons.Filled.ScreenRotation: ImageVector
-    get() = EpistemeFilledIcons.screenRotation
+    get() = VellumFilledIcons.screenRotation
 
 val Icons.Filled.Search: ImageVector
-    get() = EpistemeFilledIcons.search
+    get() = VellumFilledIcons.search
 
 val Icons.Filled.SelectAll: ImageVector
-    get() = EpistemeFilledIcons.selectAll
+    get() = VellumFilledIcons.selectAll
 
 val Icons.Filled.Settings: ImageVector
-    get() = EpistemeFilledIcons.settings
+    get() = VellumFilledIcons.settings
 
 val Icons.Filled.Share: ImageVector
-    get() = EpistemeFilledIcons.share
+    get() = VellumFilledIcons.share
 
 val Icons.Filled.SkipNext: ImageVector
-    get() = EpistemeFilledIcons.skipNext
+    get() = VellumFilledIcons.skipNext
 
 val Icons.Filled.SkipPrevious: ImageVector
-    get() = EpistemeFilledIcons.skipPrevious
+    get() = VellumFilledIcons.skipPrevious
 
 val Icons.Filled.Smartphone: ImageVector
-    get() = EpistemeFilledIcons.smartphone
+    get() = VellumFilledIcons.smartphone
 
 val Icons.Filled.Sort: ImageVector
-    get() = EpistemeFilledIcons.sort
+    get() = VellumFilledIcons.sort
 
 val Icons.Filled.Star: ImageVector
-    get() = EpistemeFilledIcons.star
+    get() = VellumFilledIcons.star
 
 val Icons.Filled.Stop: ImageVector
-    get() = EpistemeFilledIcons.stop
+    get() = VellumFilledIcons.stop
 
 val Icons.Filled.SwapHoriz: ImageVector
-    get() = EpistemeFilledIcons.swapHoriz
+    get() = VellumFilledIcons.swapHoriz
 
 val Icons.Filled.Sync: ImageVector
-    get() = EpistemeFilledIcons.sync
+    get() = VellumFilledIcons.sync
 
 val Icons.Filled.Tag: ImageVector
-    get() = EpistemeFilledIcons.tag
+    get() = VellumFilledIcons.tag
 
 val Icons.Filled.TextFields: ImageVector
-    get() = EpistemeFilledIcons.textFields
+    get() = VellumFilledIcons.textFields
 
 val Icons.Filled.TouchApp: ImageVector
-    get() = EpistemeFilledIcons.touchApp
+    get() = VellumFilledIcons.touchApp
 
 val Icons.Filled.Translate: ImageVector
-    get() = EpistemeFilledIcons.translate
+    get() = VellumFilledIcons.translate
 
 val Icons.Filled.Tune: ImageVector
-    get() = EpistemeFilledIcons.tune
+    get() = VellumFilledIcons.tune
 
 val Icons.Filled.Verified: ImageVector
-    get() = EpistemeFilledIcons.verified
+    get() = VellumFilledIcons.verified
 
 val Icons.Filled.VerifiedUser: ImageVector
-    get() = EpistemeFilledIcons.verifiedUser
+    get() = VellumFilledIcons.verifiedUser
 
 val Icons.Filled.Visibility: ImageVector
-    get() = EpistemeFilledIcons.visibility
+    get() = VellumFilledIcons.visibility
 
 val Icons.Filled.VisibilityOff: ImageVector
-    get() = EpistemeFilledIcons.visibilityOff
+    get() = VellumFilledIcons.visibilityOff
 
 val Icons.Filled.ZoomOut: ImageVector
-    get() = EpistemeFilledIcons.zoomOut
+    get() = VellumFilledIcons.zoomOut
 
-private object EpistemeFilledIcons {
+private object VellumFilledIcons {
     val accountCircle: ImageVector by lazy {
         materialIcon(
             name = "AccountCircle",

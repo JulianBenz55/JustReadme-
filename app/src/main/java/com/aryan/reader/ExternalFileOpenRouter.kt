@@ -62,7 +62,7 @@ object ExternalFileOpenRouteDecider {
         // Forward only the URI grants. Anything else the sender set describes
         // the sender's own task (CLEAR_TOP, RESET_TASK_IF_NEEDED,
         // EXCLUDE_FROM_RECENTS, ...) and would be applied to our activity.
-        // NEW_TASK is re-added explicitly so the reader lands in Episteme's
+        // NEW_TASK is re-added explicitly so the reader lands in Vellum's
         // task by intent rather than relying on MainActivity's singleTask
         // launch mode implying it.
         //

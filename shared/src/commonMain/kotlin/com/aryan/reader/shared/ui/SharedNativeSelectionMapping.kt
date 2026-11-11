@@ -1373,8 +1373,8 @@ internal fun SharedReaderTextAlign.toComposeTextAlign(): TextAlign {
 
 internal const val ReaderNativeAnnotationUrl = "URL"
 internal const val ReaderNativeAnnotationHighlight = "HIGHLIGHT"
-internal const val DesktopHighlightMapLogTag = "EpistemeDesktopHighlightMap"
-internal const val EpubPageFitLogTag = "EpistemeEpubPageFit"
+internal const val DesktopHighlightMapLogTag = "VellumDesktopHighlightMap"
+internal const val EpubPageFitLogTag = "VellumEpubPageFit"
 internal const val EpubCutoffLogTag = SharedEpubCutoffDiagnosticsTag
 internal const val EpubPageFitTailBlockCount = 4
 internal const val SharedNativeListItemMarkerAreaWidthDp = 32

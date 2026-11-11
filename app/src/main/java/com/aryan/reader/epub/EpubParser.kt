@@ -711,7 +711,7 @@ class EpubParser(private val context: Context) {
                 val sourcePath = spineChapter.contentFilePath()
                 val extension = sourcePath.substringAfterLast('.', "xhtml")
                 val baseName = sourcePath.substringBeforeLast('.', sourcePath)
-                val sectionPath = "${baseName}.episteme-section-${section.materializationIndex + 1}.$extension"
+                val sectionPath = "${baseName}.vellum-section-${section.materializationIndex + 1}.$extension"
                 val sectionFile = File(extractionRoot, sectionPath)
                 sectionFile.parentFile?.mkdirs()
                 sectionFile.writeText(sectionDocument.outerHtml())

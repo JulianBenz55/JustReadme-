@@ -384,7 +384,7 @@ object LocalSyncUtils {
                 val existingMain = syncDir.findFile(targetName)
                 var previousMain: DocumentFile? = null
                 if (existingMain != null) {
-                    val backupName = "$targetName.sync-conflict-episteme-${System.currentTimeMillis()}.json"
+                    val backupName = "$targetName.sync-conflict-vellum-${System.currentTimeMillis()}.json"
                     if (!existingMain.renameTo(backupName)) {
                         Timber.tag("FolderAnnotationSync").e("Could not preserve existing sidecar before replacement.")
                         tempFile.delete()

@@ -10,27 +10,27 @@ import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
 
 val Icons.Outlined.AccountCircle: ImageVector
-    get() = EpistemeOutlinedIcons.accountCircle
+    get() = VellumOutlinedIcons.accountCircle
 
 val Icons.Outlined.Email: ImageVector
-    get() = EpistemeOutlinedIcons.email
+    get() = VellumOutlinedIcons.email
 
 val Icons.Outlined.FavoriteBorder: ImageVector
-    get() = EpistemeOutlinedIcons.favoriteBorder
+    get() = VellumOutlinedIcons.favoriteBorder
 
 val Icons.Outlined.Feedback: ImageVector
-    get() = EpistemeOutlinedIcons.feedback
+    get() = VellumOutlinedIcons.feedback
 
 val Icons.Outlined.FileOpen: ImageVector
-    get() = EpistemeOutlinedIcons.fileOpen
+    get() = VellumOutlinedIcons.fileOpen
 
 val Icons.Outlined.Gavel: ImageVector
-    get() = EpistemeOutlinedIcons.gavel
+    get() = VellumOutlinedIcons.gavel
 
 val Icons.Outlined.Policy: ImageVector
-    get() = EpistemeOutlinedIcons.policy
+    get() = VellumOutlinedIcons.policy
 
-private object EpistemeOutlinedIcons {
+private object VellumOutlinedIcons {
     val accountCircle: ImageVector by lazy {
         materialIcon(
             name = "AccountCircle",

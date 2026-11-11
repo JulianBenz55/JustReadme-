@@ -83,7 +83,7 @@ internal fun readerHtmlNavigationScript(pageAnchorJson: String): String = """
               }
               window.readerSelectionDebugLog = readerSelectionDebugLog;
               function readerHighlightFlowLog(message) {
-                var line = 'EpistemeEpubHighlightFlow ' + message;
+                var line = 'VellumEpubHighlightFlow ' + message;
                 var delivered = false;
                 if (window.kmpJsBridge && window.kmpJsBridge.callNative) {
                   try {
@@ -97,7 +97,7 @@ internal fun readerHtmlNavigationScript(pageAnchorJson: String): String = """
               }
               window.readerHighlightFlowLog = readerHighlightFlowLog;
               function readerDesktopHighlightMapLog(message) {
-                var line = 'EpistemeDesktopHighlightMap ' + message;
+                var line = 'VellumDesktopHighlightMap ' + message;
                 var delivered = false;
                 if (window.kmpJsBridge && window.kmpJsBridge.callNative) {
                   try {
@@ -427,7 +427,7 @@ internal fun readerHtmlNavigationScript(pageAnchorJson: String): String = """
                 }
               }
               function readerDesktopPositionTraceLog(message) {
-                var line = 'EpistemeDesktopPositionTrace ' + message;
+                var line = 'VellumDesktopPositionTrace ' + message;
                 var delivered = false;
                 if (window.kmpJsBridge && window.kmpJsBridge.callNative) {
                   try {
@@ -441,7 +441,7 @@ internal fun readerHtmlNavigationScript(pageAnchorJson: String): String = """
               }
               window.readerDesktopPositionTraceLog = readerDesktopPositionTraceLog;
               function readerTtsStartTraceLog(message) {
-                var line = 'EpistemeDesktopTtsStartTrace ' + message;
+                var line = 'VellumDesktopTtsStartTrace ' + message;
                 var delivered = false;
                 if (window.kmpJsBridge && window.kmpJsBridge.callNative) {
                   try {
@@ -472,7 +472,7 @@ internal fun readerHtmlNavigationScript(pageAnchorJson: String): String = """
                 return label;
               }
               function readerPaginationLog(message) {
-                var line = 'EpistemeEpubPagination ' + message;
+                var line = 'VellumEpubPagination ' + message;
                 var delivered = false;
                 if (window.kmpJsBridge && window.kmpJsBridge.callNative) {
                   try {
@@ -485,7 +485,7 @@ internal fun readerHtmlNavigationScript(pageAnchorJson: String): String = """
                 }
               }
               function readerGapLog(message) {
-                var line = 'EpistemeReaderGap ' + message;
+                var line = 'VellumReaderGap ' + message;
                 var delivered = false;
                 if (window.kmpJsBridge && window.kmpJsBridge.callNative) {
                   try {

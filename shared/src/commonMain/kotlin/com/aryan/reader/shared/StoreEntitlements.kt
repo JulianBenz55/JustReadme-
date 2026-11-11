@@ -24,7 +24,7 @@ enum class IosPurchaseAvailability {
     AVAILABLE,
 }
 
-/** Purchases belong to the canonical Episteme account, not its login provider. */
+/** Purchases belong to the canonical Vellum account, not its login provider. */
 fun iosPurchaseAvailability(
     isSignedIn: Boolean,
     isPro: Boolean,

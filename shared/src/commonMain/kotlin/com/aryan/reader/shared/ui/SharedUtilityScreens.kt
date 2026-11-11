@@ -715,13 +715,13 @@ fun SharedSupportProjectScreen(
 ) {
     SharedScreenScaffold(
         title = readerString("drawer_support_project", "Support project"),
-        subtitle = readerString("desktop_support_project_desc", "Ways to support Episteme development"),
+        subtitle = readerString("desktop_support_project_desc", "Ways to support Vellum development"),
         modifier = modifier
     ) {
         SharedUtilityHeader(
             icon = { Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(52.dp)) },
-            title = readerString("desktop_support_episteme", "Support Episteme"),
-            body = readerString("desktop_support_episteme_desc", "Contributions help me improve Episteme across all platforms.")
+            title = readerString("desktop_support_vellum", "Support Vellum"),
+            body = readerString("desktop_support_vellum_desc", "Contributions help me improve Vellum across all platforms.")
         )
         SharedUtilityOptionCard(
             title = readerString("desktop_github_sponsors", "GitHub Sponsors"),
@@ -751,7 +751,7 @@ fun SharedAboutScreen(
     modifier: Modifier = Modifier
 ) {
     SharedScreenScaffold(
-        title = readerString("about_title", "About Episteme"),
+        title = readerString("about_title", "About Vellum"),
         subtitle = subtitle,
         modifier = modifier
     ) {
@@ -776,7 +776,7 @@ fun SharedAboutScreen(
                     }
                 }
                 Column {
-                    Text(readerString("app_name", "Episteme"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text(readerString("app_name", "Vellum"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text(versionName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(buildLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -801,7 +801,7 @@ fun SharedAboutScreen(
         if (onOpenPrivacyPolicy != null) {
             SharedUtilityOptionCard(
                 title = readerString("legal_privacy_policy", "Privacy Policy"),
-                body = readerString("about_privacy_desc", "How Episteme handles data for this edition."),
+                body = readerString("about_privacy_desc", "How Vellum handles data for this edition."),
                 icon = { Icon(Icons.Default.Policy, contentDescription = null, modifier = Modifier.size(28.dp)) },
                 onClick = onOpenPrivacyPolicy
             )
