@@ -442,12 +442,12 @@ fun SharedMobileContextualActionBar(
                         Icon(Icons.Default.PushPin, contentDescription = labels.pin)
                     }
                 }
-                if (selectedItemCount == 1) {
-                    onInfo?.let { action ->
-                        IconButton(onClick = action) {
-                            Icon(Icons.Default.Info, contentDescription = labels.info)
-                        }
+                onInfo?.let { action ->
+                    IconButton(onClick = action) {
+                        Icon(Icons.Default.Info, contentDescription = labels.info)
                     }
+                }
+                if (selectedItemCount == 1) {
                     onSave?.let { action ->
                         IconButton(onClick = action) {
                             Icon(Icons.Default.Save, contentDescription = labels.save)
@@ -489,10 +489,8 @@ internal fun SharedMobileCompactSelectionActions(
     tagIcon: @Composable (String?) -> Unit,
 ) {
     var showMore by remember { mutableStateOf(false) }
-    if (selectedItemCount == 1) {
-        onInfo?.let { action ->
-            IconButton(onClick = action) { Icon(Icons.Default.Info, contentDescription = labels.info) }
-        }
+    onInfo?.let { action ->
+        IconButton(onClick = action) { Icon(Icons.Default.Info, contentDescription = labels.info) }
     }
     onPin?.let { action ->
         IconButton(onClick = action) { Icon(Icons.Default.PushPin, contentDescription = labels.pin) }

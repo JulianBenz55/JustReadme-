@@ -332,7 +332,7 @@ fun ContextualTopAppBar(
         labels = SharedMobileContextualActionLabels(
             selectedCount = stringResource(R.string.items_selected_count, selectedItemCount),
             clearSelection = stringResource(R.string.clear_selection),
-            info = stringResource(R.string.info),
+            info = stringResource(R.string.bulk_meta_action),
             pin = stringResource(R.string.pin_unpin),
             selectAll = stringResource(R.string.select_all),
             delete = stringResource(overflowDeleteLabelRes),

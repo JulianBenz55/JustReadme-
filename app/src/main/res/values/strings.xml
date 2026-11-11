@@ -2788,4 +2788,20 @@
     <string name="overview_meta_cover_selected">New cover selected</string>
     <string name="overview_meta_save">Save metadata</string>
     <string name="overview_meta_reset">Reset</string>
+
+    <!-- Book page quick jumps + bulk metadata -->
+    <string name="overview_jump_file">File</string>
+    <string name="overview_jump_reviews">Reviews</string>
+    <string name="overview_jump_metadata">Edit metadata</string>
+    <string name="overview_load_cover">Load cover</string>
+    <string name="overview_cover_saved">Cover updated.</string>
+    <string name="bulk_meta_action">Edit metadata of selected books</string>
+    <string name="bulk_meta_title">Edit %1$d books</string>
+    <string name="bulk_meta_hint">Only filled-in fields are applied to all selected books. Empty fields stay unchanged.</string>
+    <string name="bulk_meta_author">Author</string>
+    <string name="bulk_meta_series">Series</string>
+    <string name="bulk_meta_number_auto">Number books automatically (in selection order)</string>
+    <string name="bulk_meta_number_start">Start at</string>
+    <string name="bulk_meta_apply">Apply to %1$d books</string>
+    <string name="bulk_meta_done">Metadata updated for %1$d books.</string>
 </resources>

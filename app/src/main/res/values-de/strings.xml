@@ -2009,4 +2009,20 @@
     <string name="overview_meta_cover_selected">Neues Cover gewählt</string>
     <string name="overview_meta_save">Metadaten speichern</string>
     <string name="overview_meta_reset">Zurücksetzen</string>
+
+    <!-- Buchseite Schnellsprünge + Sammel-Metadaten -->
+    <string name="overview_jump_file">Datei</string>
+    <string name="overview_jump_reviews">Rezension</string>
+    <string name="overview_jump_metadata">Metadaten bearbeiten</string>
+    <string name="overview_load_cover">Cover laden</string>
+    <string name="overview_cover_saved">Cover aktualisiert.</string>
+    <string name="bulk_meta_action">Metadaten der ausgewählten Bücher bearbeiten</string>
+    <string name="bulk_meta_title">%1$d Bücher bearbeiten</string>
+    <string name="bulk_meta_hint">Nur ausgefüllte Felder werden bei allen ausgewählten Büchern übernommen. Leere Felder bleiben unverändert.</string>
+    <string name="bulk_meta_author">Autor</string>
+    <string name="bulk_meta_series">Buchreihe</string>
+    <string name="bulk_meta_number_auto">Bücher automatisch nummerieren (in Auswahlreihenfolge)</string>
+    <string name="bulk_meta_number_start">Beginnen bei</string>
+    <string name="bulk_meta_apply">Auf %1$d Bücher anwenden</string>
+    <string name="bulk_meta_done">Metadaten für %1$d Bücher aktualisiert.</string>
 </resources>

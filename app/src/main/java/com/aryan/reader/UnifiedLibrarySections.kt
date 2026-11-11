@@ -253,6 +253,7 @@ internal fun UnifiedLibraryHome(
     onListViewChange: (Boolean) -> Unit,
     onBookClick: (RecentFileItem) -> Unit,
     onBookLongClick: (RecentFileItem) -> Unit,
+    onBookTitleClick: (RecentFileItem) -> Unit = onBookClick,
     openTabs: List<RecentFileItem>,
     tabsEnabled: Boolean,
     onCloseTab: (RecentFileItem) -> Unit,
@@ -307,6 +308,7 @@ internal fun UnifiedLibraryHome(
                 onLongClick = { onBookLongClick(item) },
                 isDownloading = item.bookId in downloadingBookIds,
                 usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName,
+                onTitleClick = { onBookTitleClick(item) },
             )
         },
         bookListItem = { item ->
@@ -318,6 +320,7 @@ internal fun UnifiedLibraryHome(
                 onItemLongClick = { onBookLongClick(item) },
                 isDownloading = item.bookId in downloadingBookIds,
                 usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName,
+                onTitleClick = { onBookTitleClick(item) },
             )
         },
         widthClass = when (widthSizeClass) {
@@ -345,6 +348,7 @@ internal fun UnifiedShelvesSection(
     onAddBooks: (String) -> Unit,
     onBookClick: (RecentFileItem) -> Unit,
     onBookLongClick: (RecentFileItem) -> Unit,
+    onBookTitleClick: (RecentFileItem) -> Unit = onBookClick,
     sortOrder: SortOrder = SortOrder.RECENT,
     onReorderShelf: (shelfId: String, orderedBookIds: List<String>) -> Unit = { _, _ -> },
 ) {
@@ -482,6 +486,7 @@ internal fun UnifiedShelvesSection(
                 onLongClick = { onBookLongClick(item) },
                 isDownloading = item.bookId in downloadingBookIds,
                 usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName,
+                onTitleClick = { onBookTitleClick(item) },
             )
         },
     )

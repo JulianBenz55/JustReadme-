@@ -44,7 +44,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -144,7 +152,7 @@ private fun StaggerIn(index: Int, content: @Composable () -> Unit) {
  * Full-screen "About this book" page: cover, title, quick actions, reading progress, file
  * details, description, shelves, tags and the user's own reviews (stored on the device).
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun BookOverviewScreen(
     book: RecentFileItem,
@@ -168,6 +176,39 @@ internal fun BookOverviewScreen(
     var showFileDetails by rememberSaveable { mutableStateOf(false) }
     var showFullDescription by rememberSaveable { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val jumpOffsetPx = with(density) { -60.dp.roundToPx() }
+
+    // Items before the quick-jump targets: cover, title, quick actions, sticky bar, progress, file.
+    val description = book.description?.takeIf { it.isNotBlank() }?.let { stripHtml(it) }?.takeIf { it.isNotBlank() }
+    val hasShelvesOrTags = shelfNames.isNotEmpty() || book.tags.isNotEmpty()
+    val fileIndex = 5
+    val reviewsIndex = 6 + (if (description != null) 1 else 0) + (if (hasShelvesOrTags) 1 else 0)
+    val metadataIndex = reviewsIndex + 1 + reviews.size
+    fun jumpTo(index: Int) {
+        scope.launch { listState.animateScrollToItem(index, jumpOffsetPx) }
+    }
+
+    // "Load cover" goes straight to the picker and stores the image right away.
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            onSaveMetadata(
+                BookMetadataEdit(
+                    title = book.title?.takeIf { it.isNotBlank() } ?: book.displayName.substringBeforeLast('.'),
+                    author = book.author?.ifBlank { null },
+                    seriesName = book.seriesName?.ifBlank { null },
+                    seriesIndex = book.seriesIndex,
+                    description = book.description,
+                    coverImageUri = uri.toString(),
+                ),
+            )
+        }
+    }
 
     fun hasTag(name: String) = book.tags.any { it.name.equals(name, ignoreCase = true) }
 
@@ -240,7 +281,8 @@ internal fun BookOverviewScreen(
                 }
 
                 LazyColumn(
-                    Modifier.weight(1f).fillMaxWidth(),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    state = listState,
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
@@ -379,6 +421,29 @@ internal fun BookOverviewScreen(
                         }
                     }
 
+                    // Quick jumps: no long scrolling to reach file, reviews, metadata or cover.
+                    stickyHeader(key = "quickJumps") {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 4.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            JumpChip(stringResource(R.string.overview_jump_file), null) {
+                                showFileDetails = true
+                                jumpTo(fileIndex)
+                            }
+                            JumpChip(stringResource(R.string.overview_jump_reviews), null) { jumpTo(reviewsIndex) }
+                            JumpChip(stringResource(R.string.overview_jump_metadata), Icons.Default.Edit) { jumpTo(metadataIndex) }
+                            JumpChip(stringResource(R.string.overview_load_cover), Icons.Default.Palette) {
+                                coverPicker.launch(arrayOf("image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"))
+                            }
+                        }
+                    }
+
                     // Reading progress.
                     item {
                         StaggerIn(3) {
@@ -481,7 +546,6 @@ internal fun BookOverviewScreen(
                     }
 
                     // Description.
-                    val description = book.description?.takeIf { it.isNotBlank() }?.let { stripHtml(it) }?.takeIf { it.isNotBlank() }
                     if (description != null) {
                         item {
                             StaggerIn(5) {
@@ -505,7 +569,7 @@ internal fun BookOverviewScreen(
                     }
 
                     // Shelves and tags.
-                    if (shelfNames.isNotEmpty() || book.tags.isNotEmpty()) {
+                    if (hasShelvesOrTags) {
                         item {
                             StaggerIn(6) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -788,6 +852,33 @@ private fun QuickAction(
                 scaleX = scale
                 scaleY = scale
             },
+        )
+    }
+}
+
+@Composable
+private fun JumpChip(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 1,
         )
     }
 }

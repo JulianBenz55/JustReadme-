@@ -91,6 +91,8 @@ fun SharedAndroidHomeRecentCard(
     statusBadges: @Composable (Modifier) -> Unit,
     fileTypeBadge: @Composable (compact: Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** Tapping the title (instead of the cover) runs this; the rest of the card keeps [onClick]. */
+    onTitleClick: (() -> Unit)? = null,
 ) {
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
@@ -136,6 +138,8 @@ fun SharedAndroidHomeRecentCard(
                 cover = cover,
                 statusBadges = statusBadges,
                 fileTypeBadge = fileTypeBadge,
+                onTitleClick = onTitleClick,
+                onTitleLongClick = onLongClick,
             )
         } else {
             GridBookCard(
@@ -152,6 +156,8 @@ fun SharedAndroidHomeRecentCard(
                 cover = cover,
                 statusBadges = statusBadges,
                 fileTypeBadge = fileTypeBadge,
+                onTitleClick = onTitleClick,
+                onTitleLongClick = onLongClick,
             )
         }
     }
@@ -172,6 +178,8 @@ private fun GridBookCard(
     cover: @Composable (Modifier) -> Unit,
     statusBadges: @Composable (Modifier) -> Unit,
     fileTypeBadge: @Composable (compact: Boolean) -> Unit,
+    onTitleClick: (() -> Unit)?,
+    onTitleLongClick: () -> Unit,
 ) {
     val coverShape = RoundedCornerShape(14.dp)
     Column(Modifier.fillMaxWidth()) {
@@ -210,7 +218,10 @@ private fun GridBookCard(
             lineHeight = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .titleTapTarget(onTitleClick, onTitleLongClick)
+                .padding(horizontal = 2.dp, vertical = 2.dp),
         )
         val secondLine = progressPercent?.let { "$it %" } ?: author.trim()
         if (secondLine.isNotEmpty()) {
@@ -243,6 +254,8 @@ private fun WideBookCard(
     cover: @Composable (Modifier) -> Unit,
     statusBadges: @Composable (Modifier) -> Unit,
     fileTypeBadge: @Composable (compact: Boolean) -> Unit,
+    onTitleClick: (() -> Unit)?,
+    onTitleLongClick: () -> Unit,
 ) {
     val coverShape = RoundedCornerShape(10.dp)
     val progress by animateFloatAsState(
@@ -291,6 +304,7 @@ private fun WideBookCard(
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.titleTapTarget(onTitleClick, onTitleLongClick),
                     )
                     val authorText = author.trim()
                     if (authorText.isNotEmpty()) {
@@ -327,6 +341,14 @@ private fun WideBookCard(
         }
     }
 }
+
+/**
+ * Makes a card title its own tap target. Long press still selects the book, so the title does not
+ * swallow the gesture the card normally handles.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private fun Modifier.titleTapTarget(onTitleClick: (() -> Unit)?, onLongClick: () -> Unit): Modifier =
+    if (onTitleClick == null) this else this.combinedClickable(onClick = onTitleClick, onLongClick = onLongClick)
 
 @Composable
 private fun BoxScope.CoverStateOverlays(

@@ -9647,50 +9647,88 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun updateBookMetadata(bookId: String, metadata: BookMetadataEdit) {
-        viewModelScope.launch {
-            val currentItem = bookStore.getFileByBookId(bookId) ?: return@launch
-            if (currentItem.type != FileType.EPUB) {
-                // PDFs and other formats have no embedded editor: keep the edit in the app.
-                saveBookMetadataInAppOnly(currentItem, metadata)
-                showBanner(appContext.getString(R.string.banner_metadata_saved))
-                return@launch
-            }
+        viewModelScope.launch { applyBookMetadataEdit(bookId, metadata, showBanners = true) }
+    }
 
-            val editResult = epubMetadataFileEditor.writeMetadata(currentItem, metadata)
-            editResult.onFailure { error ->
-                Timber.e(error, "Failed to update EPUB metadata for $bookId")
-                // The file may be read-only (e.g. folder grant lost after a restore). The
-                // edit is still worth keeping, so store it in the library instead.
-                saveBookMetadataInAppOnly(currentItem, metadata)
-                showBanner(appContext.getString(R.string.banner_metadata_saved_in_app))
-            }.onSuccess { result ->
-                cleanupBookDataLocally(bookId)
-                val savedMetadata = BookMetadataEdit(
-                    title = result.metadata.title ?: metadata.title,
-                    author = result.metadata.author,
-                    seriesName = result.metadata.seriesName,
-                    seriesIndex = result.metadata.seriesIndex,
-                    description = result.metadata.description
+    /**
+     * Applies the same author / series change to several books one after the other, with a single
+     * banner at the end. A null value leaves that field as it is on each book; [seriesStartIndex]
+     * numbers the books in the given order (start, start + 1, ...).
+     */
+    fun updateBooksMetadata(
+        bookIds: List<String>,
+        author: String?,
+        seriesName: String?,
+        seriesStartIndex: Double?,
+    ) {
+        if (bookIds.isEmpty() || (author == null && seriesName == null && seriesStartIndex == null)) return
+        viewModelScope.launch {
+            var done = 0
+            bookIds.forEachIndexed { position, bookId ->
+                val current = bookStore.getFileByBookId(bookId) ?: return@forEachIndexed
+                val edit = BookMetadataEdit(
+                    title = current.title?.takeIf { it.isNotBlank() }
+                        ?: current.displayName.substringBeforeLast('.', current.displayName),
+                    author = author ?: current.author,
+                    seriesName = seriesName ?: current.seriesName,
+                    seriesIndex = seriesStartIndex?.let { it + position } ?: current.seriesIndex,
+                    description = current.description,
                 )
-                val coverPath = result.cover?.let { cover ->
-                    currentItem.uriString?.toUri()?.let { uri ->
-                        bookArtifactStore.saveEmbeddedCoverToCache(cover.bytes, uri, cover.extension)
-                    }
-                }
-                bookStore.updateUserEditableMetadata(
-                    bookId = bookId,
-                    metadata = savedMetadata,
-                    fileSize = result.fileSize,
-                    fileContentModifiedTimestamp = result.fileContentModifiedTimestamp,
-                    coverImagePath = coverPath
-                )
-                val updatedItem = bookStore.getFileByBookId(bookId)
-                if (updatedItem != null && uiState.value.isSyncEnabled && updatedItem.sourceFolderUri == null) {
-                    uploadNewBookAndMetadata(updatedItem)
-                }
-                showBanner("EPUB metadata updated.")
+                if (applyBookMetadataEdit(bookId, edit, showBanners = false)) done++
             }
+            showBanner(appContext.getString(R.string.bulk_meta_done, done))
         }
+    }
+
+    /** Returns true when the book was found and the edit was stored (in the file or the library). */
+    private suspend fun applyBookMetadataEdit(
+        bookId: String,
+        metadata: BookMetadataEdit,
+        showBanners: Boolean,
+    ): Boolean {
+        val currentItem = bookStore.getFileByBookId(bookId) ?: return false
+        if (currentItem.type != FileType.EPUB) {
+            // PDFs and other formats have no embedded editor: keep the edit in the app.
+            saveBookMetadataInAppOnly(currentItem, metadata)
+            if (showBanners) showBanner(appContext.getString(R.string.banner_metadata_saved))
+            return true
+        }
+
+        val editResult = epubMetadataFileEditor.writeMetadata(currentItem, metadata)
+        editResult.onFailure { error ->
+            Timber.e(error, "Failed to update EPUB metadata for $bookId")
+            // The file may be read-only (e.g. folder grant lost after a restore). The
+            // edit is still worth keeping, so store it in the library instead.
+            saveBookMetadataInAppOnly(currentItem, metadata)
+            if (showBanners) showBanner(appContext.getString(R.string.banner_metadata_saved_in_app))
+        }.onSuccess { result ->
+            cleanupBookDataLocally(bookId)
+            val savedMetadata = BookMetadataEdit(
+                title = result.metadata.title ?: metadata.title,
+                author = result.metadata.author,
+                seriesName = result.metadata.seriesName,
+                seriesIndex = result.metadata.seriesIndex,
+                description = result.metadata.description
+            )
+            val coverPath = result.cover?.let { cover ->
+                currentItem.uriString?.toUri()?.let { uri ->
+                    bookArtifactStore.saveEmbeddedCoverToCache(cover.bytes, uri, cover.extension)
+                }
+            }
+            bookStore.updateUserEditableMetadata(
+                bookId = bookId,
+                metadata = savedMetadata,
+                fileSize = result.fileSize,
+                fileContentModifiedTimestamp = result.fileContentModifiedTimestamp,
+                coverImagePath = coverPath
+            )
+            val updatedItem = bookStore.getFileByBookId(bookId)
+            if (updatedItem != null && uiState.value.isSyncEnabled && updatedItem.sourceFolderUri == null) {
+                uploadNewBookAndMetadata(updatedItem)
+            }
+            if (showBanners) showBanner("EPUB metadata updated.")
+        }
+        return true
     }
 
     /** Saves edited metadata (and an optional new cover) to the library only, not into the file. */

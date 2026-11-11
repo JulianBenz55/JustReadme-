@@ -111,6 +111,7 @@ fun RecentFileCard(
     onLongClick: () -> Unit,
     isDownloading: Boolean,
     usePdfFileNameAsDisplayName: Boolean = false,
+    onTitleClick: (() -> Unit)? = null,
 ) {
     val progressPercent = item.progressPercentage?.takeIf { it > 0f }?.coerceIn(0f, 100f)?.toInt()
     val authorText = item.author?.takeIf { it.isNotBlank() && !it.equals("Unknown", ignoreCase = true) } ?: " "
@@ -128,6 +129,7 @@ fun RecentFileCard(
         selectedDescription = stringResource(R.string.content_desc_selected),
         onClick = onClick,
         onLongClick = onLongClick,
+        onTitleClick = onTitleClick,
         modifier = modifier,
         cover = { coverModifier ->
                 ThemedBookCover(

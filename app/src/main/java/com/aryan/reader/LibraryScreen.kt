@@ -57,6 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.ImageLoader
 import coil.compose.AsyncImage
@@ -80,6 +82,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun LibraryListItem(
     item: RecentFileItem,
@@ -89,6 +92,7 @@ internal fun LibraryListItem(
     onItemLongClick: () -> Unit,
     isDownloading: Boolean,
     usePdfFileNameAsDisplayName: Boolean = false,
+    onTitleClick: (() -> Unit)? = null,
 ) {
     SharedMobileLibraryBookListCardFrame(
         isAvailable = item.isAvailable,
@@ -131,6 +135,11 @@ internal fun LibraryListItem(
                     minLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = 20.sp,
+                    modifier = if (onTitleClick != null) {
+                        Modifier.combinedClickable(onClick = onTitleClick, onLongClick = onItemLongClick)
+                    } else {
+                        Modifier
+                    },
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(

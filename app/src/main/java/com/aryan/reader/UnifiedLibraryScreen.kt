@@ -214,6 +214,7 @@ fun UnifiedLibraryScreen(
     var showAddBookMenu by rememberSaveable { mutableStateOf(false) }
     var showBackupDialog by rememberSaveable { mutableStateOf(false) }
     var overviewBookId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showBulkMetadata by rememberSaveable { mutableStateOf(false) }
     var webImportMode by remember { mutableStateOf<com.aryan.reader.webimport.WebImportMode?>(null) }
     var showWebSources by rememberSaveable { mutableStateOf(false) }
     var showTtsBookPicker by rememberSaveable {
@@ -611,14 +612,9 @@ fun UnifiedLibraryScreen(
                     ContextualTopAppBar(
                         selectedItemCount = selectedItems.size,
                         onNavIconClick = viewModel::clearContextualAction,
-                        onInfoClick = selectedItems.singleOrNull()?.let { item ->
-                            {
-                                // The info action now opens the full "About this book" page; the
-                                // old metadata editor stays reachable from its edit button.
-                                overviewBookId = item.bookId
-                                viewModel.clearContextualAction()
-                            }
-                        },
+                        // The "i" only appears for 2+ selected books and edits their metadata together.
+                        // A single book is opened with a tap on its title instead.
+                        onInfoClick = if (selectedItems.size >= 2) ({ showBulkMetadata = true }) else null,
                         onTagClick = { viewModel.openTagSelection(selectedItems.map { it.bookId }.toSet()) },
                         onAddToShelfClick = { viewModel.openAddSelectedToShelf(selectedItems.map { it.bookId }.toSet()) },
                         onPinClick = { viewModel.togglePinForContextualItems(isHome = false) },
@@ -688,6 +684,18 @@ fun UnifiedLibraryScreen(
                         } else viewModel.onRecentFileClicked(item)
                     },
                     onBookLongClick = viewModel::onRecentItemLongPress,
+                    onBookTitleClick = { item ->
+                        when {
+                            // While selecting, a title tap toggles the book like any other tap.
+                            selectedItems.isNotEmpty() || item.type == FileType.AUDIOBOOK -> {
+                                if (item.type == FileType.AUDIOBOOK && selectedItems.isEmpty()) {
+                                    importedAudiobooks.firstOrNull { it.bookId == item.bookId }
+                                        ?.let { audiobookPlayerItem = it.toUiItem() }
+                                } else viewModel.onRecentFileClicked(item)
+                            }
+                            else -> overviewBookId = item.bookId
+                        }
+                    },
                     openTabs = uiState.openTabs,
                     tabsEnabled = uiState.isTabsEnabled,
                     onCloseTab = { viewModel.closeTab(it.bookId) },
@@ -781,6 +789,10 @@ fun UnifiedLibraryScreen(
                             onAddBooks = { shelfId -> shelfIdAddingBooks = shelfId },
                             onBookClick = viewModel::onRecentFileClicked,
                             onBookLongClick = viewModel::onRecentItemLongPress,
+                            onBookTitleClick = { item ->
+                                if (selectedItems.isNotEmpty()) viewModel.onRecentFileClicked(item)
+                                else overviewBookId = item.bookId
+                            },
                             sortOrder = uiState.sortOrder,
                             onReorderShelf = { shelfId, orderedIds ->
                                 if (shelfId.isNotEmpty()) viewModel.reorderShelf(shelfId, orderedIds)
@@ -1146,6 +1158,22 @@ fun UnifiedLibraryScreen(
                     showAnnotationExportFormatDialogFor = liveBook
                 },
                 onSaveMetadata = { edit -> viewModel.updateBookMetadata(bookId, edit) },
+            )
+        }
+    }
+    if (showBulkMetadata) {
+        if (selectedItems.size < 2) {
+            showBulkMetadata = false
+        } else {
+            val orderedIds = selectedItems.map { it.bookId }
+            BulkMetadataDialog(
+                bookCount = orderedIds.size,
+                onDismiss = { showBulkMetadata = false },
+                onApply = { author, series, startIndex ->
+                    viewModel.updateBooksMetadata(orderedIds, author, series, startIndex)
+                    showBulkMetadata = false
+                    viewModel.clearContextualAction()
+                },
             )
         }
     }
