@@ -39,6 +39,7 @@ internal fun BackupDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var includeBooks by rememberSaveable { mutableStateOf(true) }
+    var includeWebClips by rememberSaveable { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var restoreReady by remember { mutableStateOf(false) }
@@ -49,7 +50,7 @@ internal fun BackupDialog(onDismiss: () -> Unit) {
             busy = true
             message = null
             try {
-                BackupManager.export(context.applicationContext, uri, includeBooks)
+                BackupManager.export(context.applicationContext, uri, includeBooks, includeWebClips)
                 message = context.getString(R.string.backup_created)
             } catch (e: CancellationException) {
                 throw e
@@ -108,6 +109,13 @@ internal fun BackupDialog(onDismiss: () -> Unit) {
                 ) {
                     Checkbox(checked = includeBooks, onCheckedChange = { includeBooks = it }, enabled = !busy)
                     Text(stringResource(R.string.backup_include_books), style = MaterialTheme.typography.bodyMedium)
+                }
+                Row(
+                    Modifier.fillMaxWidth().clickable(enabled = !busy) { includeWebClips = !includeWebClips },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = includeWebClips, onCheckedChange = { includeWebClips = it }, enabled = !busy)
+                    Text(stringResource(R.string.backup_include_web_clips), style = MaterialTheme.typography.bodyMedium)
                 }
                 Button(
                     enabled = !busy,

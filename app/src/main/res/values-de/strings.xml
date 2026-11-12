@@ -1949,8 +1949,9 @@
     <string name="web_sources_toggle_hint">Erklärung ein- oder ausblenden</string>
     <string name="reorder_folders_title">Ordner anordnen</string>
     <string name="backup_title">Backup</string>
-    <string name="backup_description">Speichert alles in einer Datei: Einstellungen, Regale samt Inhalt, Lesestand, Lesezeichen und Annotationen. Beim Wiederherstellen werden die aktuellen Daten ersetzt und die App startet neu.</string>
+    <string name="backup_description">Speichert alles in einer Datei: Einstellungen, Regale samt Inhalt, Lesestand, Lesezeichen, Annotationen und selbst gesetzte Cover. Alle anderen Cover werden nach dem Wiederherstellen neu aus den Büchern gelesen. Beim Wiederherstellen werden die aktuellen Daten ersetzt und die App startet neu.</string>
     <string name="backup_include_books">Buchdateien einschließen (größere Datei)</string>
+    <string name="backup_include_web_clips">Web-Clips einschließen (aus dem Browser gespeicherte EPUBs)</string>
     <string name="backup_create">Backup erstellen</string>
     <string name="backup_restore">Aus Backup wiederherstellen</string>
     <string name="backup_created">Backup gespeichert.</string>

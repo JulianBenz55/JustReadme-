@@ -166,6 +166,10 @@ interface RecentFileDao {
     @Query("UPDATE recent_files SET coverImagePath = NULL, folderCoverMetadataParsed = 0 WHERE bookId = :bookId")
     suspend fun clearCoverReference(bookId: String): Int
 
+    /** Points a book at a (re)created cover file; the cover counts as parsed so workers skip it. */
+    @Query("UPDATE recent_files SET coverImagePath = :coverPath, folderCoverMetadataParsed = 1 WHERE bookId = :bookId")
+    suspend fun setCoverPath(bookId: String, coverPath: String): Int
+
     @Query("UPDATE recent_files SET isAvailable = 0 WHERE bookId = :bookId AND isAvailable = 1")
     suspend fun markUnavailable(bookId: String): Int
 

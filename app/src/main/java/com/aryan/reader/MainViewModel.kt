@@ -9715,9 +9715,21 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 seriesIndex = result.metadata.seriesIndex,
                 description = result.metadata.description
             )
-            val coverPath = result.cover?.let { cover ->
-                currentItem.uriString?.toUri()?.let { uri ->
-                    bookArtifactStore.saveEmbeddedCoverToCache(cover.bytes, uri, cover.extension)
+            val coverPath = if (metadata.coverImageUri != null) {
+                // The user picked this cover: keep it as a small JPEG that backups always carry
+                // and that is matched back to this book after a restore.
+                val pickedBytes = result.cover?.bytes ?: readCoverBytes(metadata.coverImageUri.toUri())
+                pickedBytes?.let { com.aryan.reader.data.ManualCoverStore.save(appContext, bookId, it) }
+                    ?: result.cover?.let { cover ->
+                        currentItem.uriString?.toUri()?.let { uri ->
+                            bookArtifactStore.saveEmbeddedCoverToCache(cover.bytes, uri, cover.extension)
+                        }
+                    }
+            } else {
+                result.cover?.let { cover ->
+                    currentItem.uriString?.toUri()?.let { uri ->
+                        bookArtifactStore.saveEmbeddedCoverToCache(cover.bytes, uri, cover.extension)
+                    }
                 }
             }
             bookStore.updateUserEditableMetadata(
@@ -9736,24 +9748,21 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         return true
     }
 
+    /** Reads a picked cover image; null if it cannot be read or is unreasonably large. */
+    private suspend fun readCoverBytes(coverUri: Uri): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            appContext.contentResolver.openInputStream(coverUri)?.use { it.readBytes() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() && it.size <= 24 * 1024 * 1024 }
+    }
+
     /** Saves edited metadata (and an optional new cover) to the library only, not into the file. */
     private suspend fun saveBookMetadataInAppOnly(currentItem: RecentFileItem, metadata: BookMetadataEdit) {
+        // A hand-picked cover is stored as a small JPEG in its own folder: backups always carry
+        // it, and after a restore it is matched back to this book by id.
         val coverPath = metadata.coverImageUri?.toUri()?.let { coverUri ->
             runCatching {
-                val resolver = appContext.contentResolver
-                val bytes = resolver.openInputStream(coverUri)?.use { it.readBytes() }
-                val extension = when (resolver.getType(coverUri)?.lowercase()) {
-                    "image/png" -> "png"
-                    "image/webp" -> "webp"
-                    "image/gif" -> "gif"
-                    "image/bmp" -> "bmp"
-                    else -> "jpg"
-                }
-                val keyUri = currentItem.uriString?.toUri()
-                if (bytes != null && bytes.size <= 16 * 1024 * 1024 && keyUri != null) {
-                    bookArtifactStore.saveEmbeddedCoverToCache(bytes, keyUri, extension)
-                } else {
-                    null
+                readCoverBytes(coverUri)?.let {
+                    com.aryan.reader.data.ManualCoverStore.save(appContext, currentItem.bookId, it)
                 }
             }.getOrNull()
         }
@@ -9798,6 +9807,8 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 showBanner("Could not restore EPUB metadata.", isError = true)
             }.onSuccess { result ->
                 cleanupBookDataLocally(bookId)
+                // Back to the original: the hand-picked cover no longer applies.
+                com.aryan.reader.data.ManualCoverStore.delete(appContext, bookId)
                 val coverPath = result.cover?.let { cover ->
                     currentItem.uriString?.toUri()?.let { uri ->
                         bookArtifactStore.saveEmbeddedCoverToCache(cover.bytes, uri, cover.extension)

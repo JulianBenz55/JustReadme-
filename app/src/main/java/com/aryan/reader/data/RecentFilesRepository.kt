@@ -1101,6 +1101,11 @@ class RecentFilesRepository(
                 .onFailure { Timber.e(it, "Error deleting cached cover for $reason ${item.bookId}") }
         }
 
+        // The hand-picked cover and the web-clip copy belong to this book only.
+        ManualCoverStore.delete(context, item.bookId)
+        runCatching { com.aryan.reader.webimport.WebClipStore.fileFor(context, item.bookId).delete() }
+            .onFailure { Timber.e(it, "Error deleting web clip copy for $reason ${item.bookId}") }
+
         runCatching { pdfAnnotationRepository.getAnnotationFileForSync(item.bookId)?.delete() }
             .onFailure { Timber.e(it, "Error deleting PDF ink sidecar for $reason ${item.bookId}") }
         runCatching { pdfRichTextRepository.getFileForSync(item.bookId).delete() }
@@ -1128,10 +1133,13 @@ class RecentFilesRepository(
 
     override suspend fun saveCoverToCache(bitmap: Bitmap, uri: Uri): String? = withContext(Dispatchers.IO) {
         val cacheDir = getCoverCacheDirInternal()
-        val filename = "cover_${uri.toString().hashCode()}_${System.currentTimeMillis()}.png"
+        // Rendered covers (PDF first pages, thumbnails) are opaque pictures: JPEG is several
+        // times smaller than the PNG that was used before and looks the same at cover size.
+        val filename = "cover_${uri.toString().hashCode()}_${System.currentTimeMillis()}.jpg"
         val file = File(cacheDir, filename)
         var fos: FileOutputStream? = null
         var scaledCopy: Bitmap? = null
+        var flattened: Bitmap? = null
         try {
             deleteCoverCacheVariants(uri)
             val bitmapToSave = bitmap.scaledToCanvasLimit(
@@ -1140,8 +1148,20 @@ class RecentFilesRepository(
             ).also {
                 if (it !== bitmap) scaledCopy = it
             }
+            // JPEG has no alpha channel: paint onto white so transparent pages do not turn black.
+            val opaque = Bitmap.createBitmap(
+                bitmapToSave.width,
+                bitmapToSave.height,
+                Bitmap.Config.ARGB_8888
+            ).also { flattened = it }
+            android.graphics.Canvas(opaque).apply {
+                drawColor(android.graphics.Color.WHITE)
+                drawBitmap(bitmapToSave, 0f, 0f, null)
+            }
             fos = FileOutputStream(file)
-            bitmapToSave.compress(Bitmap.CompressFormat.PNG, 90, fos)
+            if (!opaque.compress(Bitmap.CompressFormat.JPEG, 85, fos)) {
+                throw java.io.IOException("JPEG compression failed")
+            }
             Timber.d("Saved cover image to: ${file.absolutePath}")
             return@withContext file.absolutePath
         } catch (e: Exception) {
@@ -1150,6 +1170,7 @@ class RecentFilesRepository(
             return@withContext null
         } finally {
             fos?.close()
+            flattened?.recycle()
             scaledCopy?.recycle()
         }
     }

@@ -899,14 +899,28 @@ fun UnifiedLibraryScreen(
     if (showWebSources) {
         com.aryan.reader.webimport.WebSourcesDialog(
             onDismiss = { showWebSources = false },
-            onImported = { file -> viewModel.onFilesSelected(listOf(android.net.Uri.fromFile(file))) },
+            onImported = { file ->
+                // Keep a durable copy of web-made EPUBs (the cache file is temporary and a
+                // clipped page often cannot be fetched again), then import as usual.
+                scope.launch {
+                    com.aryan.reader.webimport.WebClipStore.keep(context.applicationContext, file)
+                    viewModel.onFilesSelected(listOf(android.net.Uri.fromFile(file)))
+                }
+            },
         )
     }
     webImportMode?.let { mode ->
         com.aryan.reader.webimport.WebImportDialog(
             mode = mode,
             onDismiss = { webImportMode = null },
-            onImported = { file -> viewModel.onFilesSelected(listOf(android.net.Uri.fromFile(file))) },
+            onImported = { file ->
+                // Keep a durable copy of web-made EPUBs (the cache file is temporary and a
+                // clipped page often cannot be fetched again), then import as usual.
+                scope.launch {
+                    com.aryan.reader.webimport.WebClipStore.keep(context.applicationContext, file)
+                    viewModel.onFilesSelected(listOf(android.net.Uri.fromFile(file)))
+                }
+            },
         )
     }
     if (showAudiobookAddSheet) {

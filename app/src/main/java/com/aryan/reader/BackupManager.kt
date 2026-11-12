@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.aryan.reader.data.AppDatabase
+import com.aryan.reader.data.ManualCoverStore
+import com.aryan.reader.webimport.WebClipStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -23,6 +25,16 @@ import kotlin.system.exitProcess
  * position, bookmarks, tags), all settings, annotations and other app files, and optionally the
  * book files themselves. Restoring is done in two steps: the zip is unpacked into a staging
  * folder, and the next app start swaps the files in before anything opens the database.
+ *
+ * What is deliberately NOT in the zip:
+ *  - Automatically extracted covers (`cover_cache`). They are rebuilt from the books after a
+ *    restore ([CoverRebuilder]), so they would only make the backup bigger.
+ *  - Any book payload (EPUB, PDF, audio, ...) unless "include books" is on. This is decided by
+ *    file extension as well as by folder, because books also live outside `books/`
+ *    (`metadata_backups/`, the cloud-folder mirror, ...).
+ *
+ * What is always in it: covers the user picked by hand (`manual_covers`, small JPEGs) and,
+ * unless switched off, the EPUBs made from the web (`web_clips`).
  */
 object BackupManager {
     private const val FORMAT_VERSION = 1
@@ -33,23 +45,58 @@ object BackupManager {
     private const val PREFS_PREFIX = "shared_prefs/"
     private const val FILES_PREFIX = "files/"
 
-    /** Top-level folders inside `files/` that hold the book files themselves. */
-    private val BOOK_DIRS = setOf("books", "audiobooks")
+    /**
+     * Top-level folders inside `files/` that hold book files (or full copies of them, such as the
+     * originals `metadata_backups/` keeps before an EPUB's metadata is edited).
+     */
+    private val BOOK_DIRS = setOf("books", "audiobooks", "metadata_backups")
 
     /**
-     * Caches that can be rebuilt; they would only make the backup larger. Covers are
-     * deliberately included: they are small, and restoring without them leaves the
-     * library showing blank covers until every book has been opened again.
+     * Anything with one of these extensions is a book payload wherever it sits below `files/`
+     * (the cloud-folder mirror keeps real EPUB/PDF files in its own tree, for example).
      */
-    private val SKIPPED_FILE_DIRS = setOf("TTS_Cache", "derived")
+    private val BOOK_EXTENSIONS = setOf(
+        "epub", "kepub", "pdf", "mobi", "azw", "azw3", "fb2", "cbz", "cbr", "cb7", "cbt",
+        "docx", "odt", "fodt", "pptx", "txt", "md", "html", "htm", "zip",
+        "mp3", "m4a", "m4b", "aac", "ogg", "opus", "flac", "wav",
+    )
 
-    /** Databases that belong to the system's job scheduler, not to the user's data. */
-    private fun isSkippedDatabase(name: String) = name.startsWith("androidx.work")
+    /**
+     * Caches that can be rebuilt; they would only make the backup larger. Automatically
+     * extracted covers are rebuilt from the books after a restore, so they stay out too; covers
+     * chosen by hand live in `manual_covers` and are always included.
+     */
+    private val SKIPPED_FILE_DIRS = setOf("TTS_Cache", "derived", "cover_cache")
 
-    suspend fun export(context: Context, target: Uri, includeBooks: Boolean) = withContext(Dispatchers.IO) {
+    /** Databases that are generated caches or belong to the system's job scheduler, not to the user's data. */
+    private fun isSkippedDatabase(name: String) =
+        name.startsWith("androidx.work") ||
+            name.startsWith("book_cache_database") ||
+            name.startsWith("pdf_text_cache_db")
+
+    private fun isBookPayload(relative: String): Boolean {
+        if (relative.substringBefore('/') in BOOK_DIRS) return true
+        return relative.substringAfterLast('/').substringAfterLast('.', "").lowercase() in BOOK_EXTENSIONS
+    }
+
+    suspend fun export(
+        context: Context,
+        target: Uri,
+        includeBooks: Boolean,
+        includeWebClips: Boolean = true,
+    ) = withContext(Dispatchers.IO) {
+        val database = AppDatabase.getDatabase(context)
         // Write everything still waiting in the write-ahead log into the main database file.
-        AppDatabase.getDatabase(context).openHelper.writableDatabase
+        database.openHelper.writableDatabase
             .query("PRAGMA wal_checkpoint(TRUNCATE)").use { it.moveToFirst() }
+
+        // Only clips of books that are still in the library go into the backup: a clip left
+        // behind by a deleted book is dead weight.
+        val liveBookIds = if (includeWebClips) {
+            database.recentFileDao().getAllFiles().filterNot { it.isDeleted }.mapTo(HashSet()) { it.bookId }
+        } else {
+            emptySet<String>()
+        }
 
         val output = context.contentResolver.openOutputStream(target)
             ?: throw IOException("Cannot write to the chosen file")
@@ -59,6 +106,7 @@ object BackupManager {
                 .put("createdAt", System.currentTimeMillis())
                 .put("versionName", BuildConfig.VERSION_NAME)
                 .put("includesBooks", includeBooks)
+                .put("includesWebClips", includeWebClips)
             zip.putNextEntry(ZipEntry(MANIFEST))
             zip.write(manifest.toString().toByteArray(Charsets.UTF_8))
             zip.closeEntry()
@@ -68,8 +116,16 @@ object BackupManager {
             }
             addTree(zip, File(context.dataDir, "shared_prefs"), PREFS_PREFIX) { true }
             addTree(zip, context.filesDir, FILES_PREFIX) { relative ->
-                val top = relative.substringBefore('/')
-                top !in SKIPPED_FILE_DIRS && (includeBooks || top !in BOOK_DIRS)
+                when (relative.substringBefore('/')) {
+                    in SKIPPED_FILE_DIRS -> false
+                    // Hand-picked covers exist nowhere else, so they always go in.
+                    ManualCoverStore.DIR -> true
+                    WebClipStore.DIR -> {
+                        val name = relative.substringAfter('/')
+                        includeWebClips && name.endsWith(".epub") && name.removeSuffix(".epub") in liveBookIds
+                    }
+                    else -> includeBooks || !isBookPayload(relative)
+                }
             }
         }
     }

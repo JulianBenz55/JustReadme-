@@ -123,6 +123,12 @@ internal object AndroidBackupRestoreCoordinator {
         scope.launch {
             runCatching { reconcileDatabase(appContext) }
                 .onFailure { Timber.tag(TAG).e(it, "Backup restore reconciliation failed") }
+            // Read the first page / embedded cover of every PDF and EPUB that still has none.
+            // Backups carry no automatic covers, so after a restore this is what fills the
+            // library again. It runs after the (fast) reconciliation so availability is correct
+            // first, and it is idempotent: an interrupted run simply continues at the next start.
+            runCatching { com.aryan.reader.CoverRebuilder.rebuildMissing(appContext) }
+                .onFailure { Timber.tag(TAG).e(it, "Cover rebuild failed") }
         }
     }
 
@@ -200,9 +206,17 @@ internal object AndroidBackupRestoreCoordinator {
     }
 
     private suspend fun reconcileDatabase(context: Context) {
+        // Order matters: clips first (so the rows point at real files again), then the covers
+        // the user picked by hand, then whatever is still missing is read from the books.
+        val relinkedClips = runCatching { relinkWebClips(context) }
+            .onFailure { Timber.tag(TAG).e(it, "Web clip relink failed") }
+            .getOrDefault(0)
+        runCatching { ManualCoverStore.relinkMissingCovers(context) }
+            .onFailure { Timber.tag(TAG).e(it, "Manual cover relink failed") }
         val clearedCovers = runCatching { repairMissingCovers(context) }
             .onFailure { Timber.tag(TAG).e(it, "Cover repair failed") }
             .getOrDefault(0)
+        if (relinkedClips > 0) Timber.tag(TAG).i("Re-linked $relinkedClips web clip(s)")
         if (clearedCovers > 0) {
             // Re-extract the cleared covers in the background (folders whose grant is
             // still missing are skipped by the worker and picked up after re-granting).
@@ -256,6 +270,30 @@ internal object AndroidBackupRestoreCoordinator {
                 "available=${repairs.count { it is Repair.UpdateUri }} " +
                 "missing=${repairs.count { it is Repair.MarkUnavailable }}",
         )
+    }
+
+    /**
+     * Books made from web clips live as app-private files that a backup without book files does
+     * not carry. If the backup brought the clip along (`web_clips/<book id>.epub`), copy it back
+     * into the book folder and point the library row at it. Returns how many rows were fixed.
+     */
+    private suspend fun relinkWebClips(context: Context): Int {
+        if (!com.aryan.reader.webimport.WebClipStore.dir(context).isDirectory) return 0
+        val database = AppDatabase.getDatabase(context)
+        val importer = com.aryan.reader.BookImporter(context)
+        val now = System.currentTimeMillis()
+        var relinked = 0
+        database.recentFileDao().getAllFiles().filterNot { it.isDeleted }.forEach { entity ->
+            if (!isMissingExcludedPrivateFile(context.filesDir, entity.uriString)) return@forEach
+            val restored = com.aryan.reader.webimport.WebClipStore.restoreIntoBooks(
+                context,
+                entity.bookId,
+                importer::createBookFile,
+            ) ?: return@forEach
+            database.recentFileDao().updateBookUri(entity.bookId, Uri.fromFile(restored).toString(), now)
+            relinked++
+        }
+        return relinked
     }
 
     private fun reflowRepair(filesDir: File, entity: RecentFileEntity): Repair.UpdateUri? {

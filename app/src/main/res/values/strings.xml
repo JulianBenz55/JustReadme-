@@ -2728,8 +2728,9 @@
     <string name="web_sources_toggle_hint">Show or hide the explanation</string>
     <string name="reorder_folders_title">Arrange folders</string>
     <string name="backup_title">Backup</string>
-    <string name="backup_description">Saves everything in one file: settings, shelves with their contents, reading progress, bookmarks and annotations. Restoring replaces the current data and restarts the app.</string>
+    <string name="backup_description">Saves everything in one file: settings, shelves with their contents, reading progress, bookmarks, annotations and covers you set yourself. Other covers are read from your books again after restoring. Restoring replaces the current data and restarts the app.</string>
     <string name="backup_include_books">Include book files (larger file)</string>
+    <string name="backup_include_web_clips">Include web clips (EPUBs saved from the browser)</string>
     <string name="backup_create">Create backup</string>
     <string name="backup_restore">Restore from backup</string>
     <string name="backup_created">Backup saved.</string>
