@@ -1169,8 +1169,8 @@ fun UnifiedLibraryScreen(
             BulkMetadataDialog(
                 bookCount = orderedIds.size,
                 onDismiss = { showBulkMetadata = false },
-                onApply = { author, series, startIndex ->
-                    viewModel.updateBooksMetadata(orderedIds, author, series, startIndex)
+                onApply = { author, series, startIndex, coverUri ->
+                    viewModel.updateBooksMetadata(orderedIds, author, series, startIndex, coverUri)
                     showBulkMetadata = false
                     viewModel.clearContextualAction()
                 },

@@ -85,15 +85,17 @@ internal object WebImporters {
         }
     }
 
-    private fun buildPageEpub(dir: File, doc: Document, pageUrl: String): File {
+    /** [bookTitle] replaces the page title as the book's name (used for numbered clips like "Overgeared 3"). */
+    private fun buildPageEpub(dir: File, doc: Document, pageUrl: String, bookTitle: String? = null): File {
         val page = ContentExtractor.extract(doc)
         if (page.textLength < 200) {
             throw IOException("No readable text found (the page may load its content with JavaScript)")
         }
-        val target = File(dir, safeFileName(page.title) + ".epub")
+        val title = bookTitle?.trim()?.takeIf { it.isNotEmpty() } ?: page.title
+        val target = File(dir, safeFileName(title) + ".epub")
         EpubWriter.write(
             target = target,
-            title = page.title,
+            title = title,
             author = URL(pageUrl).host,
             language = doc.selectFirst("html")?.attr("lang")?.takeIf { it.isNotBlank() } ?: "en",
             identifier = "urn:uuid:" + UUID.nameUUIDFromBytes(pageUrl.toByteArray()),
@@ -103,8 +105,13 @@ internal object WebImporters {
     }
 
     /** "Clip page": turns the HTML currently shown in the in-app browser (login and scripts included) into an EPUB. */
-    suspend fun clipHtml(context: Context, html: String, pageUrl: String): File = withContext(Dispatchers.Default) {
-        buildPageEpub(outputDir(context), Jsoup.parse(html, pageUrl), pageUrl)
+    suspend fun clipHtml(
+        context: Context,
+        html: String,
+        pageUrl: String,
+        bookTitle: String? = null,
+    ): File = withContext(Dispatchers.Default) {
+        buildPageEpub(outputDir(context), Jsoup.parse(html, pageUrl), pageUrl, bookTitle)
     }
 
     /** Downloads a file the in-app browser was asked to save, using the browser's cookies so logins keep working. */

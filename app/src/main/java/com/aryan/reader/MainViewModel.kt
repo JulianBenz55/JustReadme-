@@ -9653,15 +9653,19 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     /**
      * Applies the same author / series change to several books one after the other, with a single
      * banner at the end. A null value leaves that field as it is on each book; [seriesStartIndex]
-     * numbers the books in the given order (start, start + 1, ...).
+     * numbers the books in the given order (start, start + 1, ...). A [coverImageUri] becomes the
+     * cover of every book.
      */
     fun updateBooksMetadata(
         bookIds: List<String>,
         author: String?,
         seriesName: String?,
         seriesStartIndex: Double?,
+        coverImageUri: String? = null,
     ) {
-        if (bookIds.isEmpty() || (author == null && seriesName == null && seriesStartIndex == null)) return
+        if (bookIds.isEmpty() ||
+            (author == null && seriesName == null && seriesStartIndex == null && coverImageUri == null)
+        ) return
         viewModelScope.launch {
             var done = 0
             bookIds.forEachIndexed { position, bookId ->
@@ -9673,6 +9677,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                     seriesName = seriesName ?: current.seriesName,
                     seriesIndex = seriesStartIndex?.let { it + position } ?: current.seriesIndex,
                     description = current.description,
+                    coverImageUri = coverImageUri,
                 )
                 if (applyBookMetadataEdit(bookId, edit, showBanners = false)) done++
             }

@@ -106,6 +106,22 @@ internal object WebSourcesStore {
         sources.forEach { array.put(JSONObject().put("name", it.name).put("url", it.url)) }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, array.toString()).apply()
     }
+
+    private const val CLIP_COUNTS = "web_clip_counts_prefs"
+
+    private fun clipKey(sourceName: String) = sourceName.trim().lowercase()
+
+    /** The name the next clip of this saved link gets, e.g. "Overgeared 3". Does not count yet. */
+    fun nextClipTitle(context: Context, sourceName: String): String {
+        val done = context.getSharedPreferences(CLIP_COUNTS, Context.MODE_PRIVATE).getInt(clipKey(sourceName), 0)
+        return "${sourceName.trim()} ${done + 1}"
+    }
+
+    /** Call after a clip worked, so a failed clip does not use up a number. */
+    fun markClipDone(context: Context, sourceName: String) {
+        val prefs = context.getSharedPreferences(CLIP_COUNTS, Context.MODE_PRIVATE)
+        prefs.edit().putInt(clipKey(sourceName), prefs.getInt(clipKey(sourceName), 0) + 1).apply()
+    }
 }
 
 private fun defaultSourceName(url: String): String {
@@ -129,6 +145,13 @@ internal fun WebSourcesDialog(
     var nameInput by rememberSaveable { mutableStateOf("") }
     var inputError by remember { mutableStateOf<String?>(null) }
     var browsingUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    var browsingName by rememberSaveable { mutableStateOf<String?>(null) }
+
+    /** Opens the browser; clips are numbered after the saved name ("Overgeared 1, 2, ...") if there is one. */
+    fun startBrowsing(url: String, name: String?) {
+        browsingName = name?.trim()?.takeIf { it.isNotEmpty() } ?: sources.firstOrNull { it.url == url }?.name
+        browsingUrl = url
+    }
 
     fun normalized(): String? {
         return try {
@@ -141,7 +164,12 @@ internal fun WebSourcesDialog(
 
     val openUrl = browsingUrl
     if (openUrl != null) {
-        WebBrowserScreen(startUrl = openUrl, onClose = { browsingUrl = null }, onImported = onImported)
+        WebBrowserScreen(
+            startUrl = openUrl,
+            sourceName = browsingName,
+            onClose = { browsingUrl = null; browsingName = null },
+            onImported = onImported,
+        )
         return
     }
     val errorMessage = inputError
@@ -190,7 +218,7 @@ internal fun WebSourcesDialog(
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { browsingUrl = source.url },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { startBrowsing(source.url, source.name) },
                         ) {
                             Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.OpenInNew, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -219,7 +247,7 @@ internal fun WebSourcesDialog(
                         isError = errorMessage != null,
                         supportingText = if (errorMessage != null) ({ Text(errorMessage) }) else null,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(onGo = { normalized()?.let { browsingUrl = it } }),
+                        keyboardActions = KeyboardActions(onGo = { normalized()?.let { startBrowsing(it, nameInput) } }),
                         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     )
                     OutlinedTextField(
@@ -234,7 +262,7 @@ internal fun WebSourcesDialog(
                 // so its label never wraps letter by letter.
                 Button(
                     enabled = urlInput.isNotBlank(),
-                    onClick = { normalized()?.let { browsingUrl = it } },
+                    onClick = { normalized()?.let { startBrowsing(it, nameInput) } },
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 ) { Text(stringResource(R.string.web_sources_browse), maxLines = 1, softWrap = false) }
                 Row(
@@ -266,6 +294,7 @@ internal fun WebSourcesDialog(
 @Composable
 internal fun WebBrowserScreen(
     startUrl: String,
+    sourceName: String? = null,
     onClose: () -> Unit,
     onImported: (File) -> Unit,
 ) {
@@ -289,7 +318,11 @@ internal fun WebBrowserScreen(
             scope.launch {
                 try {
                     val html = JSONTokener(raw).nextValue() as? String ?: throw IOException("The page could not be read")
-                    val file = WebImporters.clipHtml(context.applicationContext, html, view.url ?: currentUrl)
+                    // A saved link name gives every clip a running number: "Overgeared 1", "Overgeared 2", ...
+                    val numberedTitle = sourceName?.takeIf { it.isNotBlank() }
+                        ?.let { WebSourcesStore.nextClipTitle(context, it) }
+                    val file = WebImporters.clipHtml(context.applicationContext, html, view.url ?: currentUrl, numberedTitle)
+                    if (sourceName != null && numberedTitle != null) WebSourcesStore.markClipDone(context, sourceName)
                     onImported(file)
                     toast(context.getString(R.string.web_browser_clipped))
                 } catch (e: CancellationException) {

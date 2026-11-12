@@ -2025,4 +2025,7 @@
     <string name="bulk_meta_number_start">Beginnen bei</string>
     <string name="bulk_meta_apply">Auf %1$d Bücher anwenden</string>
     <string name="bulk_meta_done">Metadaten für %1$d Bücher aktualisiert.</string>
+    <string name="bulk_meta_cover">Cover für alle wählen</string>
+    <string name="bulk_meta_cover_selected">Cover für alle %1$d Bücher gewählt</string>
+    <string name="bulk_meta_cover_remove">Cover-Auswahl entfernen</string>
 </resources>

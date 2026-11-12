@@ -2804,4 +2804,7 @@
     <string name="bulk_meta_number_start">Start at</string>
     <string name="bulk_meta_apply">Apply to %1$d books</string>
     <string name="bulk_meta_done">Metadata updated for %1$d books.</string>
+    <string name="bulk_meta_cover">Choose one cover for all</string>
+    <string name="bulk_meta_cover_selected">Cover selected for all %1$d books</string>
+    <string name="bulk_meta_cover_remove">Remove cover selection</string>
 </resources>
