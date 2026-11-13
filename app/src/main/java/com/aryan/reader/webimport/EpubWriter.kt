@@ -29,7 +29,19 @@ internal fun escapeXml(text: String?): String {
     return out.toString()
 }
 
-/** Writes a plain text-only EPUB 3 file. */
+/** Cover image bytes plus their MIME type (png, jpeg, gif or webp). */
+internal class EpubCover(val bytes: ByteArray, val mime: String) {
+    val extension: String
+        get() = when (mime.lowercase()) {
+            "image/jpeg", "image/jpg" -> "jpg"
+            "image/png" -> "png"
+            "image/gif" -> "gif"
+            "image/webp" -> "webp"
+            else -> "img"
+        }
+}
+
+/** Writes a text-only EPUB 3 file, optionally with a cover image. */
 internal object EpubWriter {
     private const val CONTAINER_XML =
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
@@ -52,6 +64,7 @@ internal object EpubWriter {
         language: String,
         identifier: String,
         chapters: List<EpubChapter>,
+        cover: EpubCover? = null,
     ) {
         require(chapters.isNotEmpty()) { "No chapters to write" }
         target.parentFile?.mkdirs()
@@ -70,7 +83,12 @@ internal object EpubWriter {
 
             put(zip, "META-INF/container.xml", CONTAINER_XML)
             put(zip, "OEBPS/style.css", STYLE_CSS)
-            put(zip, "OEBPS/content.opf", buildOpf(title, author, language, identifier, chapters.size))
+            put(zip, "OEBPS/content.opf", buildOpf(title, author, language, identifier, chapters.size, cover))
+            if (cover != null) {
+                zip.putNextEntry(ZipEntry("OEBPS/cover.${cover.extension}"))
+                zip.write(cover.bytes)
+                zip.closeEntry()
+            }
             put(zip, "OEBPS/nav.xhtml", buildNav(title, language, chapters))
             chapters.forEachIndexed { index, chapter ->
                 put(zip, "OEBPS/c${index + 1}.xhtml", buildChapter(chapter, language))
@@ -84,7 +102,14 @@ internal object EpubWriter {
         zip.closeEntry()
     }
 
-    private fun buildOpf(title: String, author: String, language: String, identifier: String, count: Int): String {
+    private fun buildOpf(
+        title: String,
+        author: String,
+        language: String,
+        identifier: String,
+        count: Int,
+        cover: EpubCover?,
+    ): String {
         val modified = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("UTC")
         }.format(Date())
@@ -102,10 +127,14 @@ internal object EpubWriter {
             "    <dc:creator>${escapeXml(author)}</dc:creator>\n" +
             "    <dc:language>${escapeXml(language)}</dc:language>\n" +
             "    <meta property=\"dcterms:modified\">$modified</meta>\n" +
+            (if (cover != null) "    <meta name=\"cover\" content=\"cover-image\"/>\n" else "") +
             "  </metadata>\n" +
             "  <manifest>\n" +
             "    <item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n" +
             "    <item id=\"css\" href=\"style.css\" media-type=\"text/css\"/>\n" +
+            (if (cover != null) {
+                "    <item id=\"cover-image\" href=\"cover.${cover.extension}\" media-type=\"${escapeXml(cover.mime)}\" properties=\"cover-image\"/>\n"
+            } else "") +
             manifest +
             "  </manifest>\n" +
             "  <spine>\n" +

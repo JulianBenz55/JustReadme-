@@ -85,9 +85,23 @@ private fun AddMenuRow(icon: ImageVector, title: Int, hint: Int, onClick: () -> 
     )
 }
 
-/** Asks for a web address, runs the matching importer and hands the resulting book file back. */
+/** Entry point for the library: web novels get their own multi-step dialog, the rest a plain URL prompt. */
 @Composable
 internal fun WebImportDialog(
+    mode: WebImportMode,
+    onDismiss: () -> Unit,
+    onImported: (File) -> Unit,
+) {
+    if (mode == WebImportMode.NOVEL) {
+        NovelImportDialog(onDismiss = onDismiss, onImported = onImported)
+    } else {
+        SimpleWebImportDialog(mode = mode, onDismiss = onDismiss, onImported = onImported)
+    }
+}
+
+/** Asks for a web address, runs the matching importer and hands the resulting book file back. */
+@Composable
+private fun SimpleWebImportDialog(
     mode: WebImportMode,
     onDismiss: () -> Unit,
     onImported: (File) -> Unit,
@@ -113,10 +127,7 @@ internal fun WebImportDialog(
                 val appContext = context.applicationContext
                 val file = when (mode) {
                     WebImportMode.BROWSER -> WebImporters.importWebPage(appContext, url)
-                    WebImportMode.NOVEL -> WebImporters.importNovel(appContext, url) { finished, count ->
-                        done = finished
-                        total = count
-                    }
+                    WebImportMode.NOVEL -> error("Web novels are handled by NovelImportDialog")
                     WebImportMode.FEED -> WebImporters.importFeed(appContext, url)
                 }
                 onImported(file)

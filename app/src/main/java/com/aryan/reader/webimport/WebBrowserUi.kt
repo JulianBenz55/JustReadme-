@@ -297,6 +297,13 @@ internal fun WebBrowserScreen(
     sourceName: String? = null,
     onClose: () -> Unit,
     onImported: (File) -> Unit,
+    /**
+     * When set, the browser is a way to get past a login or challenge for an import: the top bar
+     * shows [captureLabel], and tapping it hands over the rendered page (HTML, URL, WebView
+     * User-Agent) instead of clipping it as a book.
+     */
+    captureLabel: String? = null,
+    onCapture: ((html: String, url: String, userAgent: String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -332,6 +339,23 @@ internal fun WebBrowserScreen(
                 } finally {
                     busy = false
                 }
+            }
+        }
+    }
+
+    fun capturePage() {
+        val view = webView ?: return
+        val handler = onCapture ?: return
+        if (busy) return
+        busy = true
+        view.evaluateJavascript("(function(){return document.documentElement.outerHTML;})()") { raw ->
+            try {
+                val html = JSONTokener(raw).nextValue() as? String ?: throw IOException("The page could not be read")
+                handler(html, view.url ?: currentUrl, view.settings.userAgentString)
+            } catch (e: Exception) {
+                toast(e.message ?: e.javaClass.simpleName)
+            } finally {
+                busy = false
             }
         }
     }
@@ -384,6 +408,9 @@ internal fun WebBrowserScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                    }
+                    if (onCapture != null && captureLabel != null) {
+                        TextButton(onClick = { capturePage() }, enabled = !busy) { Text(captureLabel) }
                     }
                     Box {
                         IconButton(onClick = { menuOpen = true }) {

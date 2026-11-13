@@ -68,6 +68,25 @@ internal object ContentExtractor {
         return ExtractedPage(title, cleaned, length)
     }
 
+    /**
+     * Tries a list of known content selectors in order and returns the first one that holds at
+     * least [minText] characters, or `null`. Unlike [extract] this never falls back to a
+     * best-guess block or `<body>`, so callers can tell "found the chapter body" from "guessed".
+     */
+    fun extractBySelectors(source: Document, selectors: List<String>, minText: Int): ExtractedPage? {
+        val working = source.clone()
+        working.select(NOISE).remove()
+        for (selector in selectors) {
+            val element = working.selectFirst(selector) ?: continue
+            val cleaned = cleanToXhtml(element.html())
+            val length = Jsoup.parse(cleaned).text().length
+            if (length >= minText) {
+                return ExtractedPage(pageTitle(source).ifBlank { "Webpage" }, cleaned, length)
+            }
+        }
+        return null
+    }
+
     private fun pickRoot(doc: Document): Element {
         for (selector in CONTENT_SELECTORS) {
             val found = doc.select(selector).maxByOrNull { it.text().length }

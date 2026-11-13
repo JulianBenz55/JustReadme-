@@ -5,7 +5,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -19,18 +18,15 @@ import java.io.IOException
 import java.net.URL
 import java.net.URLDecoder
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * Web imports that need no server of our own: a page or file by URL, a webnovel chapter list,
- * or an RSS/Atom feed. Each importer returns a file that the library then imports as a book.
+ * Web imports that need no server of our own: a page or file by URL or an RSS/Atom feed. Each importer
+ * returns a file that the library then imports as a book. Webnovel imports live in [NovelImporter].
  */
 internal object WebImporters {
-    private const val MAX_NOVEL_CHAPTERS = 2000
     private const val MAX_FEED_ITEMS = 100
     private const val CHAPTER_CONCURRENCY = 4
-    private const val MIN_CHAPTER_TEXT = 100
 
     fun normalizeUrl(input: String): String {
         var value = input.trim()
@@ -46,9 +42,9 @@ internal object WebImporters {
         return value
     }
 
-    private fun outputDir(context: Context): File = File(context.cacheDir, "web_import").apply { mkdirs() }
+    internal fun outputDir(context: Context): File = File(context.cacheDir, "web_import").apply { mkdirs() }
 
-    private fun safeFileName(name: String): String {
+    internal fun safeFileName(name: String): String {
         val cleaned = name.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().trim('.')
         return cleaned.take(80).ifBlank { "web-import" }
     }
@@ -135,110 +131,6 @@ internal object WebImporters {
         } finally {
             connection.disconnect()
         }
-        target
-    }
-
-    // ---------------------------------------------------------------- web novel
-
-    private class NovelLink(val url: String, val title: String)
-
-    private class Candidate(val link: NovelLink, val container: Element?)
-
-    private val CHAPTER_TEXT = Regex(
-        "(?i)(chapter|chap\\.?|\\bch\\.?\\s*\\d|episode|\\bep\\.?\\s*\\d|kapitel|prologue|epilogue|volume|vol\\.?\\s*\\d|第.{1,8}[章话話节節卷])",
-    )
-
-    private fun findChapterLinks(doc: Document, baseUrl: String): List<NovelLink> {
-        val host = URL(baseUrl).host
-        val self = baseUrl.substringBefore('#')
-        val candidates = ArrayList<Candidate>()
-        val seen = HashSet<String>()
-        for (anchor in doc.select("a[href]")) {
-            val href = anchor.absUrl("href").substringBefore('#')
-            val text = anchor.text().trim()
-            if (href.isBlank() || !href.startsWith("http") || text.isEmpty() || text.length > 150) continue
-            if (href == self || !seen.add(href)) continue
-            val sameHost = try {
-                URL(href).host == host
-            } catch (e: Exception) {
-                false
-            }
-            if (!sameHost) continue
-            val container = anchor.closest("ul, ol, table") ?: anchor.parent()?.parent() ?: anchor.parent()
-            candidates.add(Candidate(NovelLink(href, text), container))
-        }
-        val byText = candidates.filter { CHAPTER_TEXT.containsMatchIn(it.link.title) }
-        val chosen: List<NovelLink> = if (byText.size >= 3) {
-            byText.map { it.link }
-        } else {
-            val groups = candidates.groupBy { it.container }
-            val biggest = groups.values.maxByOrNull { it.size }
-            if (biggest != null && biggest.size >= 3) biggest.map { it.link } else emptyList()
-        }
-        // Some sites list the newest chapter first; read from chapter 1.
-        val numbers = chosen.mapNotNull { Regex("\\d+").find(it.title)?.value?.toIntOrNull() }
-        return if (numbers.size >= 2 && numbers.first() > numbers.last()) chosen.reversed() else chosen
-    }
-
-    private suspend fun fetchChapter(link: NovelLink, index: Int): EpubChapter {
-        var lastError: String? = null
-        for (attempt in 0..2) {
-            try {
-                val page = HttpFetcher.fetch(link.url, maxBytes = 8L * 1024 * 1024)
-                val extracted = ContentExtractor.extract(parseHtml(page))
-                if (extracted.textLength >= MIN_CHAPTER_TEXT) {
-                    return EpubChapter(link.title.ifBlank { extracted.title }, extracted.bodyXhtml)
-                }
-                lastError = "too little text"
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                lastError = e.message ?: e.javaClass.simpleName
-            }
-            delay(800L * (attempt + 1))
-        }
-        val title = link.title.ifBlank { "Chapter ${index + 1}" }
-        return EpubChapter(title, "<p>(Could not load this chapter: ${escapeXml(lastError)})</p>")
-    }
-
-    /** "From web novel": reads a table-of-contents page, downloads every chapter and builds one EPUB. */
-    suspend fun importNovel(
-        context: Context,
-        url: String,
-        onProgress: (done: Int, total: Int) -> Unit,
-    ): File = withContext(Dispatchers.IO) {
-        val tocPage = HttpFetcher.fetch(url)
-        val tocDoc = parseHtml(tocPage)
-        val links = findChapterLinks(tocDoc, tocPage.finalUrl).take(MAX_NOVEL_CHAPTERS)
-        if (links.isEmpty()) {
-            throw IOException("No chapter list found. Please enter the page that lists all chapters.")
-        }
-        val total = links.size
-        val done = AtomicInteger(0)
-        onProgress(0, total)
-        val semaphore = Semaphore(CHAPTER_CONCURRENCY)
-        val chapters = coroutineScope {
-            links.mapIndexed { index, link ->
-                async {
-                    semaphore.withPermit {
-                        val chapter = fetchChapter(link, index)
-                        onProgress(done.incrementAndGet(), total)
-                        chapter
-                    }
-                }
-            }.awaitAll()
-        }
-        val title = ContentExtractor.pageTitle(tocDoc).ifBlank { URL(tocPage.finalUrl).host }
-        val author = tocDoc.selectFirst("meta[name=author]")?.attr("content")?.trim().orEmpty().ifBlank { "Web novel" }
-        val target = File(outputDir(context), safeFileName(title) + ".epub")
-        EpubWriter.write(
-            target = target,
-            title = title,
-            author = author,
-            language = tocDoc.selectFirst("html")?.attr("lang")?.takeIf { it.isNotBlank() } ?: "en",
-            identifier = "urn:uuid:" + UUID.nameUUIDFromBytes((tocPage.finalUrl + total).toByteArray()),
-            chapters = chapters,
-        )
         target
     }
 
