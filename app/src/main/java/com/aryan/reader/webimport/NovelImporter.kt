@@ -56,12 +56,12 @@ internal class NovelBook(
  */
 internal object NovelImporter {
     /** Hard cap: a runaway TOC heuristic must not schedule tens of thousands of requests. */
-    const val MAX_NOVEL_CHAPTERS = 2000
+    const val MAX_NOVEL_CHAPTERS = 5000
 
     private const val PAGE_FETCH_TIMEOUT_MS = 15_000
     private const val MAX_PAGE_BYTES = 8L * 1024 * 1024
     private const val MAX_COVER_BYTES = 5L * 1024 * 1024
-    private const val CHAPTER_CONCURRENCY = 4
+    private const val CHAPTER_CONCURRENCY = 6
 
     /** Below this many characters the "chapter" is a JS-challenge stub or an extraction miss. */
     private const val CHAPTER_QUALITY_FLOOR = 100
@@ -174,6 +174,12 @@ internal object NovelImporter {
         sessionUserAgent: String? = null,
         fetcher: PageFetcher = browserFetcher(sessionUserAgent),
         renderer: PageRenderer? = null,
+        /**
+         * Fill in a weak title/author from the first chapter before returning. Costs one more request
+         * (a full render on protected sites), so the UI passes `false` and calls [completeMetadata]
+         * in the background after the list is already on screen.
+         */
+        backfill: Boolean = true,
     ): NovelToc =
         withContext(Dispatchers.IO) {
             val fetch = withTransientRetry(fetcher)
@@ -182,55 +188,88 @@ internal object NovelImporter {
             suspend fun render(target: String): FetchedPage {
                 NovelUrlGuard.assertAllowed(target)
                 rendered = true
-                return renderer!!(target)
+                return renderer!!(target, null)
             }
 
-            var page = preloaded ?: try {
-                fetch(url)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (renderer != null && isBlocked(e)) render(url) else throw e
-            }
-            NovelUrlGuard.assertAllowed(page.finalUrl)
-            var toc = NovelTocParser.parseChapterList(page.html, page.finalUrl)
-            // Plain HTML without a chapter list: the list is probably drawn by JavaScript.
-            if (toc == null && renderer != null && !rendered && preloaded == null) {
-                page = render(page.finalUrl)
-                NovelUrlGuard.assertAllowed(page.finalUrl)
-                toc = NovelTocParser.parseChapterList(page.html, page.finalUrl)
-            }
-            if (toc == null && renderer != null) {
-                val catalogUrl = catalogFallbackUrl(page.finalUrl)
-                if (catalogUrl != null) {
-                    page = render(catalogUrl)
-                    NovelUrlGuard.assertAllowed(page.finalUrl)
-                    toc = NovelTocParser.parseChapterList(page.html, page.finalUrl)
+            var page: FetchedPage? = null
+            var toc: NovelToc? = null
+
+            // webnovel.com keeps its list on /catalog and blocks plain requests: go there directly
+            // instead of a blocked fetch plus a render of a book page that has no list.
+            val direct = if (preloaded == null && renderer != null) catalogFallbackUrl(url) else null
+            if (direct != null) {
+                try {
+                    val candidate = render(direct)
+                    NovelUrlGuard.assertAllowed(candidate.finalUrl)
+                    toc = NovelTocParser.parseChapterList(candidate.html, candidate.finalUrl)
+                    page = candidate
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // fall back to the regular path below
                 }
+            }
+
+            if (toc == null) {
+                var current = preloaded ?: try {
+                    fetch(url)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (renderer != null && isBlocked(e)) render(url) else throw e
+                }
+                NovelUrlGuard.assertAllowed(current.finalUrl)
+                toc = NovelTocParser.parseChapterList(current.html, current.finalUrl)
+                // Plain HTML without a chapter list: the list is probably drawn by JavaScript.
+                if (toc == null && renderer != null && !rendered && preloaded == null) {
+                    current = render(current.finalUrl)
+                    NovelUrlGuard.assertAllowed(current.finalUrl)
+                    toc = NovelTocParser.parseChapterList(current.html, current.finalUrl)
+                }
+                if (toc == null && renderer != null && direct == null) {
+                    val catalogUrl = catalogFallbackUrl(current.finalUrl)
+                    if (catalogUrl != null) {
+                        current = render(catalogUrl)
+                        NovelUrlGuard.assertAllowed(current.finalUrl)
+                        toc = NovelTocParser.parseChapterList(current.html, current.finalUrl)
+                    }
+                }
+                page = current
             }
             val parsed = toc ?: throw NovelImportException(
                 "No chapter list found on this page. Open the novel's table-of-contents page and try again.",
                 NovelImportException.Kind.PARSE_FAILED,
             )
-            // Metadata backfill needs the same render fallback as the TOC itself.
-            val metadataFetch: PageFetcher = if (rendered && renderer != null) {
-                val plain = fetch
-                val withRender: PageFetcher = { target ->
-                    try {
-                        plain(target)
-                    } catch (e: NovelImportException) {
-                        if (isBlocked(e)) renderer(target) else throw e
-                    }
-                }
-                withRender
-            } else {
-                fetch
-            }
-            backfillMetadata(
-                parsed.copy(chapters = parsed.chapters.take(MAX_NOVEL_CHAPTERS), rendered = rendered),
-                metadataFetch,
-            )
+            val result = parsed.copy(chapters = parsed.chapters.take(MAX_NOVEL_CHAPTERS), rendered = rendered)
+            if (backfill) completeMetadata(result, sessionUserAgent, fetcher, renderer) else result
         }
+
+    /**
+     * Public entry for the metadata backfill (see [backfillMetadata]); safe to call after the list is
+     * shown. Returns [toc] unchanged when nothing better is found.
+     */
+    suspend fun completeMetadata(
+        toc: NovelToc,
+        sessionUserAgent: String? = null,
+        fetcher: PageFetcher = browserFetcher(sessionUserAgent),
+        renderer: PageRenderer? = null,
+    ): NovelToc = withContext(Dispatchers.IO) {
+        if (!toc.weakTitle && !toc.weakAuthor) return@withContext toc
+        val plain = withTransientRetry(fetcher)
+        // Metadata backfill needs the same render fallback as the TOC itself.
+        val metadataFetch: PageFetcher = if (toc.rendered && renderer != null) {
+            { target ->
+                try {
+                    plain(target)
+                } catch (e: NovelImportException) {
+                    if (isBlocked(e)) renderer(target, CHAPTER_READY_SELECTOR) else throw e
+                }
+            }
+        } else {
+            plain
+        }
+        backfillMetadata(toc, metadataFetch)
+    }
 
     /**
      * A chapter-index page is often just a list of links, with the work's real title and author
@@ -269,6 +308,9 @@ internal object NovelImporter {
         ".content",
     )
 
+    /** The same selectors as one CSS list: lets the renderer return as soon as the chapter text is there. */
+    private val CHAPTER_READY_SELECTOR = CHAPTER_CONTENT_SELECTORS.joinToString(",")
+
     private fun normalizeTitle(s: String): String = s.replace(Regex("\\s+"), " ").trim().lowercase()
 
     /**
@@ -290,21 +332,39 @@ internal object NovelImporter {
     /**
      * @param renderer browser render used when the plain fetch is blocked (HTTP 403 …) or returns a
      *   JavaScript shell without chapter text.
-     * @param renderFirst skip the plain fetch: an earlier chapter already proved the site blocks it.
-     *   Set to `true` by this function the first time a block is seen.
+     * @param renderFirst skip the plain fetch: an earlier chapter already proved the site blocks it
+     *   (or only serves a JavaScript shell). Set to `true` by this function the first time that is seen.
+     * @param plainProbe one-time flag: when the TOC needed a render, a single plain request is still
+     *   tried for the first chapter. The clearance cookie from the render is often enough, and a plain
+     *   request is many times faster than a WebView render.
      */
     private suspend fun loadChapter(
         link: NovelChapterLink,
         fetch: PageFetcher,
         renderer: PageRenderer?,
         renderFirst: AtomicBoolean,
+        plainProbe: AtomicBoolean,
     ): String? {
         return try {
             NovelUrlGuard.assertAllowed(link.url)
+            if (renderer != null && renderFirst.get() && plainProbe.compareAndSet(false, true)) {
+                val probed = try {
+                    val page = fetch(link.url)
+                    extractChapterHtml(page.html, link.title, page.finalUrl)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (probed != null) {
+                    renderFirst.set(false)
+                    return probed
+                }
+            }
             var rendered = false
             var page = if (renderer != null && renderFirst.get()) {
                 rendered = true
-                renderer(link.url)
+                renderer(link.url, CHAPTER_READY_SELECTOR)
             } else {
                 try {
                     fetch(link.url)
@@ -315,7 +375,7 @@ internal object NovelImporter {
                         renderer != null && isBlocked(e) -> {
                             renderFirst.set(true)
                             rendered = true
-                            renderer(link.url)
+                            renderer(link.url, CHAPTER_READY_SELECTOR)
                         }
                         // A transient failure was already retried with backoff: don't double up.
                         // Anything else gets one more immediate try.
@@ -325,11 +385,13 @@ internal object NovelImporter {
                 }
             }
             var html = extractChapterHtml(page.html, link.title, page.finalUrl)
-            // Server-rendered shell without prose: the text is drawn by JavaScript.
+            // Server-rendered shell without prose: the text is drawn by JavaScript. Remember it, so
+            // the remaining chapters go straight to the renderer instead of fetching twice each.
             if (html == null && renderer != null && !rendered) {
                 NovelUrlGuard.assertAllowed(page.finalUrl)
-                page = renderer(page.finalUrl)
+                page = renderer(page.finalUrl, CHAPTER_READY_SELECTOR)
                 html = extractChapterHtml(page.html, link.title, page.finalUrl)
+                if (html != null) renderFirst.set(true)
             }
             html
         } catch (e: CancellationException) {
@@ -436,6 +498,7 @@ internal object NovelImporter {
         val failures = AtomicInteger(0)
         // The TOC already needed a browser render, so every chapter will too: don't waste 403s.
         val renderFirst = AtomicBoolean(toc.rendered)
+        val plainProbe = AtomicBoolean(false)
         onProgress(0, total)
 
         coroutineScope {
@@ -446,7 +509,7 @@ internal object NovelImporter {
                         val index = cursor.getAndIncrement()
                         if (index >= total) return@launch
                         val link = links[index]
-                        val body = loadChapter(link, fetch, renderer, renderFirst)
+                        val body = loadChapter(link, fetch, renderer, renderFirst, plainProbe)
                         if (body != null) {
                             loaded[index] = true
                             results[index] = EpubChapter(link.title, body)
