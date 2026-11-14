@@ -62,6 +62,8 @@ internal fun NovelImportDialog(
     var sessionUa by remember { mutableStateOf<String?>(null) }
 
     val placeholderText = stringResource(R.string.novel_chapter_failed)
+    // Fallback for sites that answer a plain request with HTTP 403: render the page in a hidden WebView.
+    val renderer: PageRenderer = { target -> WebViewRenderer.render(context, target) }
 
     fun describe(e: Exception): String {
         if (e is NovelImportException) {
@@ -84,7 +86,14 @@ internal fun NovelImportDialog(
             error = null
             try {
                 val url = page?.finalUrl ?: WebImporters.normalizeUrl(input)
-                val parsed = NovelImporter.fetchNovelToc(url, preloaded = page, sessionUserAgent = sessionUa)
+                val parsed = NovelImporter.fetchNovelToc(
+                    url,
+                    preloaded = page,
+                    sessionUserAgent = sessionUa,
+                    renderer = renderer,
+                )
+                // Clearance cookies from the render are bound to the WebView's User-Agent.
+                if (parsed.rendered) sessionUa = WebViewRenderer.lastUserAgent ?: sessionUa
                 toc = parsed
                 sourceUrl = url
                 bookTitle = parsed.title
@@ -117,6 +126,7 @@ internal fun NovelImportDialog(
                     outputDir = WebImporters.outputDir(appContext),
                     placeholderText = placeholderText,
                     sessionUserAgent = sessionUa,
+                    renderer = renderer,
                 ) { finished, count ->
                     done = finished
                     total = count

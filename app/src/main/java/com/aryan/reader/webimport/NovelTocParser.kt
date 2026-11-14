@@ -27,6 +27,8 @@ internal data class NovelToc(
     val weakAuthor: Boolean,
     /** `<html lang>` of the TOC page, used as a language fallback for Latin-script novels. */
     val htmlLang: String?,
+    /** The site only answered to a real browser render; chapter downloads should render first. */
+    val rendered: Boolean = false,
 )
 
 internal class WorkMetadata(val title: String?, val author: String?)
