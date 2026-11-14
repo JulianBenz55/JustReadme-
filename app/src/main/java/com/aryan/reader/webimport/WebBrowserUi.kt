@@ -29,7 +29,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ContentCopy
@@ -111,11 +112,21 @@ internal object WebSourcesStore {
 
     private fun clipKey(sourceName: String) = sourceName.trim().lowercase()
 
-    /** The name the next clip of this saved link gets, e.g. "Overgeared 3". Does not count yet. */
-    fun nextClipTitle(context: Context, sourceName: String): String {
+    /** The number the next clip of this saved link gets (the stored value is "last number used"). */
+    fun nextClipNumber(context: Context, sourceName: String): Int {
         val done = context.getSharedPreferences(CLIP_COUNTS, Context.MODE_PRIVATE).getInt(clipKey(sourceName), 0)
-        return "${sourceName.trim()} ${done + 1}"
+        return done + 1
     }
+
+    /** Lets the user decide which number the next clip gets, e.g. after deleting chapters. */
+    fun setNextClipNumber(context: Context, sourceName: String, number: Int) {
+        val last = (number - 1).coerceAtLeast(-1)
+        context.getSharedPreferences(CLIP_COUNTS, Context.MODE_PRIVATE).edit().putInt(clipKey(sourceName), last).apply()
+    }
+
+    /** The name the next clip of this saved link gets, e.g. "Overgeared 3". Does not count yet. */
+    fun nextClipTitle(context: Context, sourceName: String): String =
+        "${sourceName.trim()} ${nextClipNumber(context, sourceName)}"
 
     /** Call after a clip worked, so a failed clip does not use up a number. */
     fun markClipDone(context: Context, sourceName: String) {
@@ -134,6 +145,53 @@ private fun defaultSourceName(url: String): String {
     return lastSegment.ifBlank { parsed.host.removePrefix("www.") }
 }
 
+/** "Next name": shows which number the next clip of [source] gets and lets the user change it. */
+@Composable
+private fun NextClipNumberDialog(
+    source: WebSource,
+    initialNumber: Int,
+    onDismiss: () -> Unit,
+    onSave: (Int) -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf(initialNumber.toString()) }
+    val number = text.toIntOrNull()?.takeIf { it >= 0 }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.web_sources_next_name)) },
+        text = {
+            Column {
+                Text(
+                    stringResource(R.string.web_sources_next_name_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { input -> text = input.filter { it.isDigit() }.take(6) },
+                    label = { Text(stringResource(R.string.web_sources_next_number)) },
+                    singleLine = true,
+                    isError = number == null,
+                    supportingText = {
+                        Text(
+                            if (number != null) stringResource(R.string.web_sources_next_preview, "${source.name.trim()} $number")
+                            else stringResource(R.string.web_sources_next_invalid),
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { number?.let(onSave) }),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = number != null, onClick = { number?.let(onSave) }) {
+                Text(stringResource(R.string.web_sources_next_save))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.web_sources_cancel)) } },
+    )
+}
+
 @Composable
 internal fun WebSourcesDialog(
     onDismiss: () -> Unit,
@@ -146,6 +204,8 @@ internal fun WebSourcesDialog(
     var inputError by remember { mutableStateOf<String?>(null) }
     var browsingUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var browsingName by rememberSaveable { mutableStateOf<String?>(null) }
+    var menuSourceUrl by remember { mutableStateOf<String?>(null) }
+    var numberSourceUrl by remember { mutableStateOf<String?>(null) }
 
     /** Opens the browser; clips are numbered after the saved name ("Overgeared 1, 2, ...") if there is one. */
     fun startBrowsing(url: String, name: String?) {
@@ -173,6 +233,18 @@ internal fun WebSourcesDialog(
         return
     }
     val errorMessage = inputError
+
+    sources.firstOrNull { it.url == numberSourceUrl }?.let { source ->
+        NextClipNumberDialog(
+            source = source,
+            initialNumber = WebSourcesStore.nextClipNumber(context, source.name),
+            onDismiss = { numberSourceUrl = null },
+            onSave = { number ->
+                WebSourcesStore.setNextClipNumber(context, source.name, number)
+                numberSourceUrl = null
+            },
+        )
+    }
 
     var hintExpanded by rememberSaveable { mutableStateOf(true) }
     val maxDialogHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
@@ -232,10 +304,33 @@ internal fun WebSourcesDialog(
                                         overflow = TextOverflow.Ellipsis,
                                     )
                                 }
-                                IconButton(onClick = {
-                                    sources.remove(source)
-                                    WebSourcesStore.save(context, sources.toList())
-                                }) { Icon(Icons.Default.Close, contentDescription = stringResource(R.string.web_import_close)) }
+                                Box {
+                                    IconButton(onClick = { menuSourceUrl = source.url }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.web_sources_more))
+                                    }
+                                    DropdownMenu(
+                                        expanded = menuSourceUrl == source.url,
+                                        onDismissRequest = { menuSourceUrl = null },
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.web_sources_next_name)) },
+                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                            onClick = {
+                                                menuSourceUrl = null
+                                                numberSourceUrl = source.url
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.web_sources_delete)) },
+                                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                                            onClick = {
+                                                menuSourceUrl = null
+                                                sources.remove(source)
+                                                WebSourcesStore.save(context, sources.toList())
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

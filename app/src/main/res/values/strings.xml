@@ -2824,4 +2824,13 @@
     <string name="bulk_meta_cover">Choose one cover for all</string>
     <string name="bulk_meta_cover_selected">Cover selected for all %1$d books</string>
     <string name="bulk_meta_cover_remove">Remove cover selection</string>
+    <string name="web_sources_more">More options</string>
+    <string name="web_sources_delete">Delete</string>
+    <string name="web_sources_next_name">Next name</string>
+    <string name="web_sources_next_name_hint">Choose the number the next clip of this link gets. It counts up from there on its own.</string>
+    <string name="web_sources_next_number">Number</string>
+    <string name="web_sources_next_preview">Next clip will be named: %1$s</string>
+    <string name="web_sources_next_invalid">Enter a number</string>
+    <string name="web_sources_next_save">Save</string>
+    <string name="web_sources_cancel">Cancel</string>
 </resources>

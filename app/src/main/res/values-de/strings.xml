@@ -2045,4 +2045,13 @@
     <string name="bulk_meta_cover">Cover für alle wählen</string>
     <string name="bulk_meta_cover_selected">Cover für alle %1$d Bücher gewählt</string>
     <string name="bulk_meta_cover_remove">Cover-Auswahl entfernen</string>
+    <string name="web_sources_more">Weitere Optionen</string>
+    <string name="web_sources_delete">Löschen</string>
+    <string name="web_sources_next_name">Nächster Name</string>
+    <string name="web_sources_next_name_hint">Lege fest, welche Nummer der nächste Clip dieses Links bekommt. Danach zählt es von allein weiter.</string>
+    <string name="web_sources_next_number">Nummer</string>
+    <string name="web_sources_next_preview">Nächster Clip heißt: %1$s</string>
+    <string name="web_sources_next_invalid">Gib eine Zahl ein</string>
+    <string name="web_sources_next_save">Speichern</string>
+    <string name="web_sources_cancel">Abbrechen</string>
 </resources>
