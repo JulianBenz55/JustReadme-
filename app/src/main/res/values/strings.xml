@@ -2845,4 +2845,14 @@
     <string name="web_sources_next_invalid">Enter a number</string>
     <string name="web_sources_next_save">Save</string>
     <string name="web_sources_cancel">Cancel</string>
+    <string name="smart_list_authors">Authors</string>
+    <string name="smart_list_series">Series</string>
+    <string name="shelf_section_smart">Smart lists</string>
+    <string name="shelf_section_own">Your shelves</string>
+    <string name="shelf_section_device_folders">Device folders</string>
+    <string name="section_series">Series</string>
+    <string name="section_single_books">Standalone books</string>
+    <string name="author_photo_choose">Choose profile picture</string>
+    <string name="author_photo_remove">Remove profile picture</string>
+
 </resources>

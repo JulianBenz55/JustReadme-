@@ -1,6 +1,8 @@
 package com.aryan.reader
 
 import android.view.View
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +28,9 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -52,6 +57,20 @@ import com.aryan.reader.shared.ui.AppIcon
 
 @Composable
 internal fun unifiedShelfCountLabel(shelf: Shelf): String {
+    if (shelf.id == SMART_AUTHORS_ID) {
+        return pluralStringResource(R.plurals.author_count, shelf.childShelfCount, shelf.childShelfCount)
+    }
+    if (shelf.id == SMART_SERIES_ID) {
+        return pluralStringResource(R.plurals.series_count, shelf.childShelfCount, shelf.childShelfCount)
+    }
+    if (isAuthorShelfId(shelf.id)) {
+        val books = pluralStringResource(R.plurals.book_count, shelf.bookCount, shelf.bookCount)
+        return if (shelf.childShelfCount > 0) {
+            pluralStringResource(R.plurals.series_count, shelf.childShelfCount, shelf.childShelfCount) + " · " + books
+        } else {
+            books
+        }
+    }
     val isFolder = shelf.type == ShelfType.FOLDER
     val folderCount = pluralStringResource(R.plurals.folder_count, shelf.childShelfCount, shelf.childShelfCount)
     val directCount = pluralStringResource(R.plurals.book_count, shelf.directBookCount, shelf.directBookCount)
@@ -351,14 +370,47 @@ internal fun UnifiedShelvesSection(
     onBookTitleClick: (RecentFileItem) -> Unit = onBookClick,
     sortOrder: SortOrder = SortOrder.RECENT,
     onReorderShelf: (shelfId: String, orderedBookIds: List<String>) -> Unit = { _, _ -> },
+    /** The two smart lists (Authors, Series) shown at the top; their shelves are part of [shelves]. */
+    smartListRoots: List<Shelf> = emptyList(),
 ) {
     val selectedShelf = shelves.find { it.id == selectedShelfId }
     val context = androidx.compose.ui.platform.LocalContext.current
     val storedOrders = ShelfOrderStore.orders
     // The sort chosen in the library menu also orders shelves, folders and the books inside them.
+    // Smart lists (authors, series) have their own section; real series shelves would only duplicate it.
     val visibleShelves = remember(shelves, sortOrder) {
-        shelves.filter { it.type != ShelfType.TAG && it.parentShelfId == null }.sortedForLibrary(sortOrder)
+        shelves
+            .filter { !isVirtualShelfId(it.id) && it.type != ShelfType.TAG && it.type != ShelfType.SERIES && it.parentShelfId == null }
+            .sortedForLibrary(sortOrder)
     }
+    val smartLabel = stringResource(R.string.shelf_section_smart)
+    val ownLabel = stringResource(R.string.shelf_section_own)
+    val deviceLabel = stringResource(R.string.shelf_section_device_folders)
+    val topLevelSections = remember(visibleShelves, smartListRoots, smartLabel, ownLabel, deviceLabel) {
+        listOf(
+            com.aryan.reader.shared.ui.UnifiedShelfSection(smartLabel, smartListRoots),
+            com.aryan.reader.shared.ui.UnifiedShelfSection(ownLabel, visibleShelves.filter { it.type != ShelfType.FOLDER }),
+            com.aryan.reader.shared.ui.UnifiedShelfSection(deviceLabel, visibleShelves.filter { it.type == ShelfType.FOLDER }),
+        )
+    }
+    val scope = rememberCoroutineScope()
+    var pendingAuthorKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val pickAuthorPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        val key = pendingAuthorKey
+        pendingAuthorKey = null
+        if (uri != null && key != null) {
+            scope.launch {
+                if (AuthorAvatarStore.save(context, key, uri)) AuthorAvatarStore.bump()
+            }
+        }
+    }
+    fun pickPhotoFor(shelf: Shelf) {
+        pendingAuthorKey = authorKeyOfShelfId(shelf.id)
+        pickAuthorPhoto.launch("image/*")
+    }
+    val isAuthorView = selectedShelf != null && isAuthorShelfId(selectedShelf.id)
+    val foldersLabel = if (isAuthorView) stringResource(R.string.section_series) else stringResource(R.string.section_folders)
+    val filesLabel = if (isAuthorView) stringResource(R.string.section_single_books) else stringResource(R.string.section_files)
     val childShelves = remember(shelves, selectedShelf, sortOrder, storedOrders) {
         val children = (selectedShelf?.childShelfIds?.mapNotNull { childId -> shelves.find { it.id == childId } } ?: emptyList())
             .sortedForLibrary(sortOrder)
@@ -371,6 +423,8 @@ internal fun UnifiedShelvesSection(
     val orderedBooks = remember(selectedShelf, sortOrder, storedOrders) {
         val direct = selectedShelf?.directBooks.orEmpty()
         when {
+            // Series volumes always stay in volume order, whatever the library sort is.
+            selectedShelf != null && isVirtualSeriesShelfId(selectedShelf.id) -> direct
             // Own shelves keep their stored database order; shelves built from files use the saved order.
             sortOrder != SortOrder.MANUAL -> sortFiles(direct, sortOrder)
             selectedShelf == null || selectedShelf.type == ShelfType.MANUAL -> direct
@@ -453,28 +507,48 @@ internal fun UnifiedShelvesSection(
         childShelves = childShelves,
         onChildShelfSelected = onShelfSelected,
         selectedShelfActions = { shelf ->
-            UnifiedShelfActionsMenu(
-                canMutate = shelf.type == ShelfType.MANUAL &&
-                    com.aryan.reader.shared.SharedLibraryEditor.canMutateShelf(shelf.id),
-                onAddBooks = { onAddBooks(shelf.id) },
-                onReorder = if (shelf.type != ShelfType.TAG && shelf.type != ShelfType.SMART && shelf.directBooks.size > 1) ({ reorderBooksShelfId = shelf.id }) else null,
-                onReorderFolders = if (shelf.childShelfIds.size > 1) ({ reorderFoldersShelfId = shelf.id }) else null,
-                onRename = { onRenameShelf(shelf.id) },
-                onDelete = { onDeleteShelf(shelf.id) },
-            )
+            when {
+                isAuthorShelfId(shelf.id) -> {
+                    val key = authorKeyOfShelfId(shelf.id)
+                    AuthorShelfActionsMenu(
+                        hasPhoto = AuthorAvatarStore.version >= 0 && AuthorAvatarStore.has(context, key),
+                        onPickPhoto = { pickPhotoFor(shelf) },
+                        onRemovePhoto = { AuthorAvatarStore.remove(context, key) },
+                    )
+                }
+                // The other smart lists are computed from metadata: nothing to add, rename or reorder.
+                isVirtualShelfId(shelf.id) -> Unit
+                else -> UnifiedShelfActionsMenu(
+                    canMutate = shelf.type == ShelfType.MANUAL &&
+                        com.aryan.reader.shared.SharedLibraryEditor.canMutateShelf(shelf.id),
+                    onAddBooks = { onAddBooks(shelf.id) },
+                    onReorder = if (shelf.type != ShelfType.TAG && shelf.type != ShelfType.SMART && shelf.directBooks.size > 1) ({ reorderBooksShelfId = shelf.id }) else null,
+                    onReorderFolders = if (shelf.childShelfIds.size > 1) ({ reorderFoldersShelfId = shelf.id }) else null,
+                    onRename = { onRenameShelf(shelf.id) },
+                    onDelete = { onDeleteShelf(shelf.id) },
+                )
+            }
         },
-        shelfPreview = { shelf -> FolderCoverCollage(shelf) },
-        foldersSectionLabel = stringResource(R.string.section_folders),
-        filesSectionLabel = stringResource(R.string.section_files),
+        shelfPreview = { shelf ->
+            if (isAuthorShelfId(shelf.id)) AuthorShelfPreview(shelf) else FolderCoverCollage(shelf)
+        },
+        topLevelSections = topLevelSections,
+        foldersSectionLabel = foldersLabel,
+        filesSectionLabel = filesLabel,
         emptyShelfLabel = stringResource(R.string.shelf_empty),
         breadcrumbContent = {
             if (selectedShelf != null) {
-                com.aryan.reader.shared.ui.SharedMobileShelfBreadcrumb(
-                    entries = breadcrumbEntries,
-                    onNavigate = { entry -> onBreadcrumbNavigate(entry.id) },
-                    homeContentDescription = stringResource(R.string.tab_shelves),
-                    modifier = Modifier.padding(horizontal = 20.dp).padding(top = 12.dp),
-                )
+                androidx.compose.foundation.layout.Column {
+                    com.aryan.reader.shared.ui.SharedMobileShelfBreadcrumb(
+                        entries = breadcrumbEntries,
+                        onNavigate = { entry -> onBreadcrumbNavigate(entry.id) },
+                        homeContentDescription = stringResource(R.string.tab_shelves),
+                        modifier = Modifier.padding(horizontal = 20.dp).padding(top = 12.dp),
+                    )
+                    if (isAuthorView) {
+                        AuthorShelfHeader(selectedShelf, onPickPhoto = { pickPhotoFor(selectedShelf) })
+                    }
+                }
             }
         },
         bookCard = { item ->

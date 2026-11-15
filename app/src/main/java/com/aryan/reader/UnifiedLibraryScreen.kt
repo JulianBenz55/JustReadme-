@@ -418,8 +418,16 @@ fun UnifiedLibraryScreen(
     val advancedFilterCount = uiState.libraryFilters.activeFilterCount()
     val selectedItems = uiState.contextualActionItems
 
+    // Real shelves plus the virtual author/series shelves derived from metadata.
+    val authorsLabel = stringResource(R.string.smart_list_authors)
+    val seriesLabel = stringResource(R.string.smart_list_series)
+    val virtualShelves = remember(uiState.rawLibraryFiles, authorsLabel, seriesLabel) {
+        buildAuthorSeriesShelves(uiState.rawLibraryFiles, authorsLabel, seriesLabel)
+    }
+    val allShelves = remember(uiState.shelves, virtualShelves) { uiState.shelves + virtualShelves.all }
+
     fun navigateShelfUp() {
-        val parentId = selectedShelfId?.let { id -> uiState.shelves.find { it.id == id } }?.parentShelfId
+        val parentId = selectedShelfId?.let { id -> allShelves.find { it.id == id } }?.parentShelfId
         selectedShelfId = parentId
     }
 
@@ -648,7 +656,7 @@ fun UnifiedLibraryScreen(
                 } else {
                     UnifiedLibraryTopBar(
                         section = section,
-                        selectedShelf = selectedShelfId?.let { id -> uiState.shelves.find { it.id == id } },
+                        selectedShelf = selectedShelfId?.let { id -> allShelves.find { it.id == id } },
                         onMenuClick = { scope.launch { drawerState.open() } },
                         onBackFromShelf = ::navigateShelfUp,
                         uiState = uiState,
@@ -776,7 +784,8 @@ fun UnifiedLibraryScreen(
                     } else {
                         UnifiedShelvesSection(
                             modifier = Modifier.padding(padding),
-                            shelves = uiState.shelves,
+                            shelves = allShelves,
+                            smartListRoots = virtualShelves.roots,
                             selectedShelfId = selectedShelfId,
                             selectedBookIds = uiState.contextualActionItems.mapTo(mutableSetOf()) { it.bookId },
                             downloadingBookIds = uiState.downloadingBookIds,
@@ -1090,7 +1099,7 @@ fun UnifiedLibraryScreen(
         )
     }
     if (showRemoveSelectedFromShelfConfirmation) {
-        val shelf = selectedShelfId?.let { id -> uiState.shelves.find { it.id == id } }
+        val shelf = selectedShelfId?.let { id -> allShelves.find { it.id == id } }
         ShelfRemoveSelectedDialog(
             count = selectedItems.size,
             shelfName = shelf?.name ?: "",

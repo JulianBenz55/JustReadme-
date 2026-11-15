@@ -2066,4 +2066,14 @@
     <string name="web_sources_next_invalid">Gib eine Zahl ein</string>
     <string name="web_sources_next_save">Speichern</string>
     <string name="web_sources_cancel">Abbrechen</string>
+    <string name="smart_list_authors">Autoren</string>
+    <string name="smart_list_series">Reihen</string>
+    <string name="shelf_section_smart">Smart-Listen</string>
+    <string name="shelf_section_own">Deine Regale</string>
+    <string name="shelf_section_device_folders">Geräte-Ordner</string>
+    <string name="section_series">Reihen</string>
+    <string name="section_single_books">Einzelbände</string>
+    <string name="author_photo_choose">Profilbild wählen</string>
+    <string name="author_photo_remove">Profilbild entfernen</string>
+
 </resources>

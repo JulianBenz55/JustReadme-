@@ -150,4 +150,13 @@
         <item quantity="one">%1$d Element</item>
         <item quantity="other">%1$d Elemente</item>
     </plurals>
+    <plurals name="author_count">
+        <item quantity="one">%1$d Autor</item>
+        <item quantity="other">%1$d Autoren</item>
+    </plurals>
+    <plurals name="series_count">
+        <item quantity="one">%1$d Reihe</item>
+        <item quantity="other">%1$d Reihen</item>
+    </plurals>
+
 </resources>

@@ -33,6 +33,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** A titled group of top-level shelves (e.g. smart lists, own shelves, device folders). */
+class UnifiedShelfSection<S>(val title: String?, val shelves: List<S>)
+
 @Composable
 fun <S, B> SharedAndroidUnifiedShelves(
     visibleShelves: List<S>,
@@ -67,9 +70,15 @@ fun <S, B> SharedAndroidUnifiedShelves(
      * are drawn as cover-sized tiles in the grid, like books.
      */
     shelfPreview: (@Composable (S) -> Unit)? = null,
+    /**
+     * Optional grouping of the top level. When set (and not all empty) the root list is drawn as
+     * titled sections instead of one flat list; [visibleShelves] is then only used as fallback.
+     */
+    topLevelSections: List<UnifiedShelfSection<S>>? = null,
 ) {
+    val hasSections = topLevelSections != null && topLevelSections.any { it.shelves.isNotEmpty() }
     if (selectedShelf == null) {
-        if (visibleShelves.isEmpty()) {
+        if (visibleShelves.isEmpty() && !hasSections) {
             Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(noShelvesLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -79,13 +88,30 @@ fun <S, B> SharedAndroidUnifiedShelves(
                 contentPadding = PaddingValues(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(visibleShelves, key = shelfKey) { shelf ->
-                    UnifiedShelfCard(
-                        name = shelfName(shelf),
-                        countLabel = shelfBookCountLabel(shelf),
-                        onClick = { onShelfSelected(shelf) },
-                        leading = shelfPreview?.let { preview -> { preview(shelf) } },
-                    )
+                if (hasSections) {
+                    topLevelSections!!.forEach { section ->
+                        if (section.shelves.isEmpty()) return@forEach
+                        if (section.title != null) {
+                            item(key = "section::${section.title}") { UnifiedShelfSectionLabel(section.title) }
+                        }
+                        items(section.shelves, key = shelfKey) { shelf ->
+                            UnifiedShelfCard(
+                                name = shelfName(shelf),
+                                countLabel = shelfBookCountLabel(shelf),
+                                onClick = { onShelfSelected(shelf) },
+                                leading = shelfPreview?.let { preview -> { preview(shelf) } },
+                            )
+                        }
+                    }
+                } else {
+                    items(visibleShelves, key = shelfKey) { shelf ->
+                        UnifiedShelfCard(
+                            name = shelfName(shelf),
+                            countLabel = shelfBookCountLabel(shelf),
+                            onClick = { onShelfSelected(shelf) },
+                            leading = shelfPreview?.let { preview -> { preview(shelf) } },
+                        )
+                    }
                 }
             }
         }
