@@ -347,6 +347,13 @@ fun OpdsTab(
 ) {
     val uiState by opdsViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val requestedCatalogId by com.aryan.reader.server.ServerOpenRequests.catalogId.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(Unit) { opdsViewModel.reloadCatalogs() }
+    androidx.compose.runtime.LaunchedEffect(requestedCatalogId) {
+        val id = requestedCatalogId ?: return@LaunchedEffect
+        opdsViewModel.openCatalogById(id)
+        com.aryan.reader.server.ServerOpenRequests.consume()
+    }
     val coverImageLoader = rememberOpdsCoverImageLoader(uiState.currentCatalog)
     val sharedLibraryBooks = remember(localLibraryFiles) {
         localLibraryFiles.map(RecentFileItem::toSharedBookItem)

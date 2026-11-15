@@ -213,6 +213,9 @@ fun UnifiedLibraryScreen(
     var showAudiobookAddSheet by rememberSaveable { mutableStateOf(false) }
     var showAddBookMenu by rememberSaveable { mutableStateOf(false) }
     var showBackupDialog by rememberSaveable { mutableStateOf(false) }
+    var showServerSheet by rememberSaveable { mutableStateOf(false) }
+    val serverConnections by com.aryan.reader.server.ServerConnectionStore.get(context).connections.collectAsStateWithLifecycle()
+    val serverConnected = serverConnections.any { it.status == com.aryan.reader.server.ServerStatus.CONNECTED }
     var overviewBookId by rememberSaveable { mutableStateOf<String?>(null) }
     var showBulkMetadata by rememberSaveable { mutableStateOf(false) }
     var webImportMode by remember { mutableStateOf<com.aryan.reader.webimport.WebImportMode?>(null) }
@@ -478,6 +481,11 @@ fun UnifiedLibraryScreen(
                             scope.launch { accountDrawerState.close() }
                             showBackupDialog = true
                         },
+                        onServerClick = {
+                            scope.launch { accountDrawerState.close() }
+                            showServerSheet = true
+                        },
+                        serverConnected = serverConnected,
                         navController = navController,
                         onFolderSyncSettingsClick = {
                             scope.launch {
@@ -870,6 +878,17 @@ fun UnifiedLibraryScreen(
                 showAdvancedFilters = true
             },
             onDismiss = { showLibraryControls = false }
+        )
+    }
+    if (showServerSheet) {
+        com.aryan.reader.server.ServerConnectSheet(
+            onDismiss = { showServerSheet = false },
+            onOpenLibrary = { catalogId ->
+                showServerSheet = false
+                selectedShelfId = null
+                com.aryan.reader.server.ServerOpenRequests.request(catalogId)
+                viewModel.setUnifiedLibrarySection(UnifiedLibrarySection.CATALOGS.persistedValue)
+            },
         )
     }
     if (showBackupDialog) {

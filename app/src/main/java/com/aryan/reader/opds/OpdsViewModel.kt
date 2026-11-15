@@ -229,6 +229,17 @@ class OpdsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Picks up catalogs added elsewhere (e.g. by the "Connect server" sheet). */
+    fun reloadCatalogs() {
+        emitState(controller.reloadCatalogs())
+    }
+
+    /** Opens the catalog with [id] (after reloading the list), e.g. the library of a connected server. */
+    fun openCatalogById(id: String) {
+        emitState(controller.reloadCatalogs())
+        repository.loadCatalogs().firstOrNull { it.id == id }?.let { openCatalog(it) }
+    }
+
     fun openFeedUrl(url: String) {
         viewModelScope.launch {
             controller.openFeedUrl(url, ::emitState)

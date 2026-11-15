@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.FolderSpecial
@@ -176,6 +177,8 @@ internal fun AppDrawerContent(
     showAiSettings: Boolean = true,
     showSupportProject: Boolean = false,
     onBackupClick: (() -> Unit)? = null,
+    onServerClick: (() -> Unit)? = null,
+    serverConnected: Boolean = false,
 ) {
     val isOss = BuildConfig.FLAVOR == "oss"
 
@@ -335,6 +338,25 @@ internal fun AppDrawerContent(
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
                     label = { Text(stringResource(R.string.backup_title)) },
+                    selected = false,
+                    onClick = onClick,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+
+            onServerClick?.let { onClick ->
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Cloud, contentDescription = null) },
+                    label = { Text(stringResource(if (serverConnected) R.string.server_title else R.string.server_connect)) },
+                    badge = {
+                        if (serverConnected) {
+                            Text(
+                                stringResource(R.string.server_connected),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    },
                     selected = false,
                     onClick = onClick,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
