@@ -18,7 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -402,7 +402,7 @@ internal fun AuthorShelfHeader(shelf: Shelf, onPickPhoto: () -> Unit, modifier: 
             if (avatar != null) {
                 Image(avatar, shelf.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
-                Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Outlined.AccountCircle, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Spacer(Modifier.width(16.dp))
