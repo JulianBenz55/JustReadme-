@@ -732,7 +732,8 @@ fun AppThemeBottomSheet(
         onSeedColorChanged = onSeedColorChanged,
         onCustomThemeAdded = onCustomThemeAdded,
         onCustomThemeDeleted = onCustomThemeDeleted,
-        onDismiss = onDismiss
+        onDismiss = onDismiss,
+        extraControls = { AppBackgroundStyleControls() },
     )
 }
 

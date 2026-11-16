@@ -128,6 +128,7 @@ open class MainActivity : AppCompatActivity() {
         }
 
         LibraryColumnsStore.load(this)
+        AppBackgroundStore.load(this)
         ShelfOrderStore.load(this)
         BookReviewStore.load(this)
 

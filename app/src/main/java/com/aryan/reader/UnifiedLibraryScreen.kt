@@ -540,19 +540,23 @@ fun UnifiedLibraryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
-                    Brush.verticalGradient(
-                        colorStops = arrayOf(
-                            0.0f to MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            0.42f to MaterialTheme.colorScheme.tertiary.copy(alpha = 0.07f),
-                            1.0f to MaterialTheme.colorScheme.background,
-                        ),
+                    appBackgroundBrush(
+                        style = AppBackgroundStore.style,
+                        scheme = MaterialTheme.colorScheme,
+                        dark = MaterialTheme.colorScheme.isDarkScheme(),
                     ),
                 )
-                // Lune-style soft colour drifting behind the glass cards.
-                .luneAmbientBlobs(
-                    primary = MaterialTheme.colorScheme.primary,
-                    secondary = MaterialTheme.colorScheme.secondary,
-                    tertiary = MaterialTheme.colorScheme.tertiary,
+                // Lune-style soft colour drifting behind the glass cards (only with the default background).
+                .then(
+                    if (AppBackgroundStore.style == AppBackgroundStyle.GRADIENT || !MaterialTheme.colorScheme.isDarkScheme()) {
+                        Modifier.luneAmbientBlobs(
+                            primary = MaterialTheme.colorScheme.primary,
+                            secondary = MaterialTheme.colorScheme.secondary,
+                            tertiary = MaterialTheme.colorScheme.tertiary,
+                        )
+                    } else {
+                        Modifier
+                    },
                 ),
             section = section,
             showingShelf = selectedShelfId != null,

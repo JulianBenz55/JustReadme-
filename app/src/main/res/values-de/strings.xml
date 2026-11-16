@@ -2114,4 +2114,9 @@
     <string name="server_error_certificate">Dem Zertifikat des Servers wird nicht vertraut. Installiere zuerst seine Zertifizierungsstelle auf diesem Gerät.</string>
     <string name="server_error_not_opds">Der Server antwortet, aber nicht mit einem Bücherkatalog. Prüfe die Adresse.</string>
     <string name="server_error_not_found">Unter dieser Adresse wurde kein Bücherkatalog gefunden. Prüfe die Adresse oder wähle \"OPDS-Katalog\" und gib die genaue OPDS-Adresse ein.</string>
+    <string name="app_background_title">Hintergrund</string>
+    <string name="app_background_gradient">Verlauf</string>
+    <string name="app_background_black">Schwarz</string>
+    <string name="app_background_color_to_black">Farbe zu Schwarz</string>
+    <string name="app_background_hint">Die Schwarz-Optionen gelten im dunklen Modus.</string>
 </resources>

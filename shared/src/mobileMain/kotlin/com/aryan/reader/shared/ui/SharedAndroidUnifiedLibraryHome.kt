@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -88,95 +90,111 @@ fun <T> SharedAndroidUnifiedLibraryHome(
     modifier: Modifier = Modifier,
 ) {
     val gridCells = widthClass.libraryGridCells()
+    val fullWidth: LazyGridItemSpanScope.() -> GridItemSpan = { GridItemSpan(maxLineSpan) }
 
-    Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        openTabsContent()
-
-        continueReading?.let {
-            continueCard(it, Modifier.padding(top = 16.dp))
+    // One grid for everything: the open-tabs row, the "continue reading" card and the filter chips
+    // are its first items, so they scroll away with the books instead of staying pinned on top.
+    // The books use the same grid metrics as the shelves, with no container behind them.
+    LazyVerticalGrid(
+        columns = gridCells,
+        modifier = modifier.fillMaxSize().padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(bottom = 96.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item(key = "home_open_tabs", span = fullWidth) {
+            openTabsContent()
         }
 
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            contentPadding = PaddingValues(horizontal = 2.dp),
-        ) {
-            items(MobileUnifiedLibraryFilter.entries) { option ->
-                FilterChip(
-                    selected = filter == option,
-                    onClick = { onFilterChange(option) },
-                    label = {
-                        Text(strings.filterLabels.getValue(option))
-                    },
-                )
+        continueReading?.let { current ->
+            item(key = "home_continue_reading", span = fullWidth) {
+                continueCard(current, Modifier)
             }
+        }
 
-            item {
-                AssistChip(
-                    onClick = onControls,
-                    label = { Text(sortLabel) },
-                )
-            }
+        item(key = "home_filters", span = fullWidth) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                contentPadding = PaddingValues(horizontal = 2.dp),
+            ) {
+                items(MobileUnifiedLibraryFilter.entries) { option ->
+                    FilterChip(
+                        selected = filter == option,
+                        onClick = { onFilterChange(option) },
+                        label = {
+                            Text(strings.filterLabels.getValue(option))
+                        },
+                    )
+                }
 
-            item {
-                BadgedBox(
-                    badge = {
-                        if (advancedFilterCount > 0) {
-                            Badge {
-                                Text(advancedFilterCount.toString())
+                item {
+                    AssistChip(
+                        onClick = onControls,
+                        label = { Text(sortLabel) },
+                    )
+                }
+
+                item {
+                    BadgedBox(
+                        badge = {
+                            if (advancedFilterCount > 0) {
+                                Badge {
+                                    Text(advancedFilterCount.toString())
+                                }
                             }
-                        }
-                    },
-                ) {
-                    IconButton(onClick = onAdvancedFilters) {
-                        Icon(
-                            Icons.Default.FilterList,
-                            contentDescription = strings.filterBooks,
-                        )
-                    }
-                }
-            }
-
-            item {
-                var viewMenuOpen by remember {
-                    mutableStateOf(false)
-                }
-
-                Box {
-                    IconButton(onClick = { viewMenuOpen = true }) {
-                        LibraryGridViewIcon(
-                            contentDescription = strings.viewOptions.ifEmpty {
-                                strings.gridView
-                            },
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = viewMenuOpen,
-                        onDismissRequest = {
-                            viewMenuOpen = false
                         },
                     ) {
-                        for (count in LibraryColumnsMin..LibraryColumnsMax) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(strings.booksPerRow(count))
-                                },
-                                leadingIcon = {
-                                    if (count == columns) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = null,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    viewMenuOpen = false
-                                    onColumnsChange?.invoke(count)
-                                    onListViewChange(false)
+                        IconButton(onClick = onAdvancedFilters) {
+                            Icon(
+                                Icons.Default.FilterList,
+                                contentDescription = strings.filterBooks,
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    var viewMenuOpen by remember {
+                        mutableStateOf(false)
+                    }
+
+                    Box {
+                        IconButton(onClick = { viewMenuOpen = true }) {
+                            LibraryGridViewIcon(
+                                contentDescription = strings.viewOptions.ifEmpty {
+                                    strings.gridView
                                 },
                             )
+                        }
+
+                        DropdownMenu(
+                            expanded = viewMenuOpen,
+                            onDismissRequest = {
+                                viewMenuOpen = false
+                            },
+                        ) {
+                            for (count in LibraryColumnsMin..LibraryColumnsMax) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(strings.booksPerRow(count))
+                                    },
+                                    leadingIcon = {
+                                        if (count == columns) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = null,
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        viewMenuOpen = false
+                                        onColumnsChange?.invoke(count)
+                                        onListViewChange(false)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -184,42 +202,21 @@ fun <T> SharedAndroidUnifiedLibraryHome(
         }
 
         if (books.isEmpty()) {
-            Box(
-                Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    strings.noBooks,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            item(key = "home_empty", span = fullWidth) {
+                Box(
+                    Modifier.fillMaxWidth().padding(vertical = 64.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        strings.noBooks,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         } else {
-            Surface(
-                Modifier.weight(1f).padding(top = 16.dp),
-                shape = RoundedCornerShape(
-                    topStart = 24.dp,
-                    topEnd = 24.dp,
-                ),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 1.dp,
-            ) {
-                // The old list view is replaced by the "1 per row" card of the grid.
-                LazyVerticalGrid(
-                    columns = gridCells,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        12.dp,
-                        16.dp,
-                        12.dp,
-                        96.dp,
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    items(books, key = itemKey) {
-                        bookCard(it)
-                    }
-                }
+            // The old list view is replaced by the "1 per row" card of the grid.
+            items(books, key = itemKey) {
+                bookCard(it)
             }
         }
     }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -298,7 +299,9 @@ fun SharedAppThemeBottomSheet(
     onSeedColorChanged: (Color?) -> Unit,
     onCustomThemeAdded: (CustomAppTheme) -> Unit,
     onCustomThemeDeleted: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Platform-specific extra settings shown below the colour schemes (e.g. the background style). */
+    extraControls: @Composable ColumnScope.() -> Unit = {},
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -333,6 +336,7 @@ fun SharedAppThemeBottomSheet(
                 onCustomThemeAdded = onCustomThemeAdded,
                 onCustomThemeDeleted = onCustomThemeDeleted,
             )
+            extraControls()
             Spacer(Modifier.height(16.dp))
             TextButton(
                 onClick = onDismiss,

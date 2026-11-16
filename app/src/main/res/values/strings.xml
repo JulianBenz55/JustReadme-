@@ -2893,4 +2893,9 @@
     <string name="server_error_certificate">The server\'s certificate is not trusted. Install its certificate authority on this device first.</string>
     <string name="server_error_not_opds">The server answered, but not with a book catalog. Check the address.</string>
     <string name="server_error_not_found">No book catalog found at this address. Check the address or choose \"OPDS catalog\" and enter the exact OPDS address.</string>
+    <string name="app_background_title">Background</string>
+    <string name="app_background_gradient">Gradient</string>
+    <string name="app_background_black">Black</string>
+    <string name="app_background_color_to_black">Color to black</string>
+    <string name="app_background_hint">The black options apply in dark mode.</string>
 </resources>
