@@ -245,6 +245,10 @@ open class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        if (intent?.action == com.aryan.reader.stats.ReadingGoalNotifier.ACTION_OPEN_STATS) {
+            com.aryan.reader.stats.ReadingStatsDeepLink.request()
+            return
+        }
         // TTS handoff is extras-only (no IPC) so it stays synchronous.
         val ttsRequest = intent?.toMobileTtsHandoffRequest()
         if (ttsRequest != null) {

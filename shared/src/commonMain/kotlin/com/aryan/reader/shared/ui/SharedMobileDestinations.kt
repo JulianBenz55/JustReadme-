@@ -12,7 +12,9 @@ enum class SharedMobileAppDestination(val route: String) {
     AI_SETTINGS("ai_settings_screen_route"),
     SETTINGS("settings_screen_route"),
     /** Dedicated cloud-folder policy surface reachable from Home and Library Beta. */
-    FOLDER_SYNC_SETTINGS("folder_sync_settings_route");
+    FOLDER_SYNC_SETTINGS("folder_sync_settings_route"),
+    /** Android-only reading statistics and daily goal. */
+    READING_STATS("reading_stats_route");
 
     val isReader: Boolean
         get() = this == PDF_VIEWER || this == EPUB_READER

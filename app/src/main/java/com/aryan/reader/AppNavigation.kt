@@ -79,6 +79,11 @@ import com.aryan.reader.shared.PdfSplitPaneState
 import com.aryan.reader.shared.TTS_PLAYBACK_SOURCE_AUDIOBOOK
 import com.aryan.reader.shared.samePdfDocument
 import com.aryan.reader.shared.ui.SharedMobileAppDestination
+import com.aryan.reader.shared.reader.plainTextCharacterCount
+import com.aryan.reader.stats.ReadingSessionEffect
+import com.aryan.reader.stats.ReadingSessionTracker
+import com.aryan.reader.stats.ReadingStatsDeepLink
+import com.aryan.reader.stats.ReadingStatsScreen
 import com.aryan.reader.shared.SharedReaderTtsMiniBarState
 import com.aryan.reader.tts.toSharedReaderTtsMiniBarState
 import com.aryan.reader.shared.sharedReaderTtsMiniBarBottomPaddingDp
@@ -188,6 +193,14 @@ fun AppNavigation(
     val ttsState by ttsController.ttsState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var showPdfSplitPicker by remember { mutableStateOf(false) }
+    val openReadingStats by ReadingStatsDeepLink.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(openReadingStats) {
+        if (openReadingStats) {
+            navController.awaitReadyForBackStackChange()
+            navController.navigateIfReady(SharedMobileAppDestination.READING_STATS)
+            ReadingStatsDeepLink.consume()
+        }
+    }
     var pendingIncomingBindPrompt by remember {
         mutableStateOf<CloudFolderIncomingFolderPrompt?>(null)
     }
@@ -314,6 +327,7 @@ fun AppNavigation(
         // PDF Viewer Screen Composable
         composable(route = SharedMobileAppDestination.PDF_VIEWER.route) {
             Timber.d("Navigating to PDF Viewer Screen (${SharedMobileAppDestination.PDF_VIEWER.route}).")
+            ReadingSessionEffect()
             val pdfUri = uiState.selectedPdfUri
             val initialPage = uiState.initialPageInBook
             val initialBookmarksJson = uiState.initialBookmarksJson
@@ -458,6 +472,7 @@ fun AppNavigation(
         // EPUB Reader Screen Composable
         composable(route = SharedMobileAppDestination.EPUB_READER.route) {
             Timber.d("Navigating to EPUB Reader Screen (${SharedMobileAppDestination.EPUB_READER.route}).")
+            ReadingSessionEffect()
             val epubBook = uiState.selectedEpubBook
             val isLoading = uiState.isLoading
             val errorMessage = uiState.errorMessage
@@ -490,6 +505,9 @@ fun AppNavigation(
                             onSavePosition = { locator, cfiForWebView, progress ->
                                 Timber.d("Auto-saving EPUB position: Locator $locator, Progress $progress%")
                                 epubUri?.let { uri ->
+                                    ReadingSessionTracker.onEpubProgress(
+                                        uri.toString(), progress, epubBook.chapters.sumOf { it.plainTextCharacterCount() },
+                                    )
                                     viewModel.saveEpubReadingPosition(uri, locator, cfiForWebView, progress)
                                 }
                             },
@@ -560,6 +578,10 @@ fun AppNavigation(
                 viewModel = viewModel,
                 onBackClick = { navController.popBackStackIfReady() }
             )
+        }
+
+        composable(route = SharedMobileAppDestination.READING_STATS.route) {
+            ReadingStatsScreen(onBackClick = { navController.popBackStackIfReady() })
         }
 
         composable(route = SharedMobileAppDestination.AI_SETTINGS.route) {

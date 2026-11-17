@@ -532,7 +532,11 @@ fun UnifiedLibraryScreen(
                 onAiSettingsClick = {
                     scope.launch { drawerState.close() }
                     navController.navigateIfReady(com.aryan.reader.shared.ui.SharedMobileAppDestination.AI_SETTINGS)
-                }
+                },
+                onReadingStatsClick = {
+                    scope.launch { drawerState.close() }
+                    navController.navigateIfReady(com.aryan.reader.shared.ui.SharedMobileAppDestination.READING_STATS)
+                },
             )
         }
     ) {
@@ -1275,6 +1279,7 @@ private fun UnifiedLibraryDrawer(
     onSettingsClick: () -> Unit,
     onFontsClick: () -> Unit,
     onAiSettingsClick: () -> Unit,
+    onReadingStatsClick: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.fillMaxHeight()) {
         Column(modifier = Modifier.fillMaxHeight()) {
@@ -1378,6 +1383,14 @@ private fun UnifiedLibraryDrawer(
                     )
                 }
             }
+
+            NavigationDrawerItem(
+                icon = { Icon(com.aryan.reader.stats.ReadingStatsIcon, null) },
+                label = { Text(stringResource(R.string.stats_drawer_title)) },
+                selected = false,
+                onClick = onReadingStatsClick,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+            )
 
             Spacer(modifier = Modifier.weight(1f))
         }
