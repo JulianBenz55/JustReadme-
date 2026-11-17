@@ -50,6 +50,8 @@ class MyApplication : Application(), ImageLoaderFactory, Configuration.Provider 
         BackupManager.applyPendingRestore(this)
         super.onCreate()
         registerSharedAndroidMobileApplicationContext(this)
+        // Lesestatistik sofort aus dem Speicher laden, nicht erst beim Öffnen eines Buchs.
+        com.aryan.reader.stats.ReadingStatsStore.init(this)
         // Pro installs Play Integrity (debug: debug provider); OSS is a no-op.
         installAppCheck()
         installSharedAndroidMobileEpubTtsFactory(

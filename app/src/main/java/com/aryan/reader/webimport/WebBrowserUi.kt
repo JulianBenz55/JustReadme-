@@ -402,6 +402,8 @@ internal fun WebBrowserScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Normales Lesen im Browser zählt für die Lesestatistik (nicht beim Login/Challenge-Modus).
+    if (captureLabel == null) com.aryan.reader.stats.ReadingSessionEffect()
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pageTitle by remember { mutableStateOf("") }
     var currentUrl by remember { mutableStateOf(startUrl) }
@@ -584,6 +586,13 @@ internal fun WebBrowserScreen(
                             }
                             setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
                                 downloadAndImport(url, userAgent, contentDisposition, mimeType)
+                            }
+                            if (captureLabel == null) {
+                                setOnScrollChangeListener { v, _, scrollY, _, _ ->
+                                    com.aryan.reader.stats.ReadingSessionTracker.onWebScroll(
+                                        (v as? WebView)?.url.orEmpty(), scrollY, v.height,
+                                    )
+                                }
                             }
                             loadUrl(startUrl)
                             webView = this

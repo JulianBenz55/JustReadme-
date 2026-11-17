@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -96,6 +97,7 @@ val ReadingStatsIcon: ImageVector by lazy {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReadingStatsScreen(onBackClick: () -> Unit) {
+    ReadingStatsStore.init(LocalContext.current)
     val snapshot by ReadingStatsStore.state.collectAsStateWithLifecycle()
     val today = remember { LocalDate.now() }
     var period by remember { mutableStateOf(StatsPeriod.WEEK) }
@@ -467,9 +469,25 @@ private fun RecordsCard(snapshot: ReadingStatsSnapshot, today: LocalDate, locale
 
 @Composable
 private fun StatRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-        Text(value, style = MaterialTheme.typography.bodyLarge)
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        // Das Label behält seine natürliche Breite (nie senkrecht umbrechen), der Wert nimmt den Rest.
+        Text(
+            label,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.widthIn(min = 64.dp),
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

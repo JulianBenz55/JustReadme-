@@ -121,6 +121,28 @@ object ReadingSessionTracker {
         }
     }
 
+    /**
+     * Webbrowser-Ansicht: eine Bildschirmhöhe Scrollen zählt als eine Seite.
+     * [scrollY] und [viewportHeight] in Pixeln; [key] ist die aktuelle URL.
+     */
+    private var webHighWater = 0f
+
+    fun onWebScroll(key: String, scrollY: Int, viewportHeight: Int) {
+        if (viewportHeight <= 0) return
+        synchronized(lock) {
+            if (tickJob == null) return
+            touchLocked()
+            val screens = scrollY.coerceAtLeast(0) / viewportHeight.toFloat()
+            if (pageKey != key) { pageKey = key; webHighWater = screens; return }
+            val delta = screens - webHighWater
+            when {
+                delta > 0f && delta <= MAX_FORWARD_STEP * 2 -> { webHighWater = screens; addPagesLocked(delta.toDouble()) }
+                delta > MAX_FORWARD_STEP * 2 -> webHighWater = screens   // Sprung ans Seitenende
+                delta < 0f -> webHighWater = screens                     // zurückscrollen zählt nicht
+            }
+        }
+    }
+
     private fun touchLocked() {
         val now = System.currentTimeMillis()
         // Flush the time up to now first (it may still count as active), then mark activity.
