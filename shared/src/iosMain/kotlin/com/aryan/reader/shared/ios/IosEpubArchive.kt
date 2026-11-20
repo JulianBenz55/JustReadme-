@@ -653,7 +653,7 @@ private fun String.iosReaderPlainText(): String {
 }
 
 private const val IosFb2CssStyle = """
-    body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+    body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
     p { margin-bottom: 1em; text-indent: 1.5em; text-align: justify; }
     h1, h2, h3, h4 { text-align: center; margin-top: 1.5em; margin-bottom: 1em; }
     .empty-line { height: 1.5em; }
@@ -665,7 +665,7 @@ private const val IosFb2CssStyle = """
 """
 
 private const val IosOdtCssStyle = """
-    body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+    body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
     p { margin-bottom: 1em; text-align: justify; }
     h1, h2, h3, h4, h5, h6 { text-align: center; margin-top: 1.5em; margin-bottom: 1em; }
     ul, ol { margin-bottom: 1em; padding-left: 2em; }
@@ -676,7 +676,7 @@ private const val IosOdtCssStyle = """
 """
 
 private const val IosMarkdownCssStyle = """
-    body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+    body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
     table { border-collapse: collapse; width: 100%; margin: 1em 0; }
     th, td { border: 1px solid currentColor; padding: 0.5em; text-align: left; }
     blockquote { border-left: 4px solid currentColor; padding-left: 1em; margin-left: 0; opacity: 0.8; }

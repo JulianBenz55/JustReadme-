@@ -201,6 +201,7 @@ import com.aryan.reader.loadGlobalTextureTransparency
 import com.aryan.reader.loadBookReplacementPreferences
 import com.aryan.reader.loadReaderBrightnessSettings
 import com.aryan.reader.loadReaderScreenOrientationMode
+import com.aryan.reader.nextInToggleCycle
 import com.aryan.reader.loadEpubRightToLeftPagination
 import com.aryan.reader.loadReaderThemeId
 import com.aryan.reader.loadReaderSliderToggled
@@ -6126,6 +6127,12 @@ fun EpubReaderHost(
                         }
                     },
                     onOpenScreenOrientation = { prefs.showScreenOrientationSheet = true },
+                    screenOrientationMode = prefs.screenOrientationMode,
+                    onCycleScreenOrientation = {
+                        val nextMode = prefs.screenOrientationMode.nextInToggleCycle()
+                        prefs.screenOrientationMode = nextMode
+                        saveReaderScreenOrientationMode(context, nextMode)
+                    },
                     onToggleFormat = {
                         navigation.showFormatAdjustmentBars = !navigation.showFormatAdjustmentBars
                         if (navigation.showFormatAdjustmentBars) {

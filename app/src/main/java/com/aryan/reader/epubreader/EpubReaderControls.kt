@@ -120,6 +120,7 @@ import androidx.compose.ui.zIndex
 import androidx.media3.common.util.UnstableApi
 import com.aryan.reader.BuildConfig
 import com.aryan.reader.R
+import com.aryan.reader.ReaderScreenOrientationMode
 import com.aryan.reader.RenderMode
 import com.aryan.reader.shared.ReaderMotionPolicy
 import com.aryan.reader.shared.formatMicrosUsd
@@ -170,8 +171,17 @@ val ReaderTool.titleRes: Int
         ReaderTool.BOOK_REPLACEMENTS -> R.string.menu_book_word_replacements
     }
 
-internal val epubToolbarTools = setOf(
+// DICTIONARY, TTS_CONTROLS and SCREEN_ORIENTATION are intentionally not configurable toolbar tools
+// any more: the dictionary shortcut was dropped, read-aloud lives in the three-dot menu, and the
+// bottom-right slot is a fixed one-tap screen orientation button (see EpubReaderBottomBar).
+/** Tools that are no longer offered in the EPUB toolbar customization (see [epubToolbarTools]). */
+internal val epubToolsRemovedFromToolbar = setOf(
     ReaderTool.DICTIONARY,
+    ReaderTool.TTS_CONTROLS,
+    ReaderTool.SCREEN_ORIENTATION,
+)
+
+internal val epubToolbarTools = setOf(
     ReaderTool.THEME,
     ReaderTool.BRIGHTNESS,
     ReaderTool.SLIDER,
@@ -179,8 +189,6 @@ internal val epubToolbarTools = setOf(
     ReaderTool.FORMAT,
     ReaderTool.SEARCH,
     ReaderTool.AI_FEATURES,
-    ReaderTool.TTS_CONTROLS,
-    ReaderTool.SCREEN_ORIENTATION
 )
 
 internal typealias EpubOverflowMenuSection = com.aryan.reader.shared.EpubOverflowMenuSection
@@ -202,7 +210,6 @@ internal fun epubOverflowMenuSections(
 )
 
 internal fun defaultReaderHiddenTools(): Set<String> = setOf(
-    ReaderTool.SCREEN_ORIENTATION.name,
     ReaderTool.BRIGHTNESS.name
 )
 
@@ -303,6 +310,12 @@ fun EpubReaderTopBar(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
+                    )
+                    // Fixed top-left tool slot (where the dictionary button used to be):
+                    // one tap starts auto scroll without opening the three-dot menu.
+                    com.aryan.reader.ReaderAutoScrollButton(
+                        onClick = onStartAutoScroll,
+                        enabled = !isTtsActive && currentRenderMode == RenderMode.VERTICAL_SCROLL,
                     )
                     com.aryan.reader.shared.ui.sharedEpubToolbarTools(
                         toolOrder = toolOrder,
@@ -451,14 +464,31 @@ fun EpubReaderTopBar(
                             val hiddenToolbarTools = toolOrder.filter { it in epubToolbarTools && hiddenTools.contains(it.name) }
                             val showTtsVoiceSettings = !hiddenTools.contains(ReaderTool.TTS_SETTINGS.name)
                             val showTtsReplacements = !hiddenTools.contains(ReaderTool.TTS_REPLACEMENTS.name)
+                            // Read-aloud start/stop moved out of the bottom bar into the TTS section of
+                            // this menu, so that section must exist even when both of its settings
+                            // entries are hidden.
+                            val baseOverflowSections = epubOverflowMenuSections(
+                                hiddenTools = hiddenTools,
+                                hasHiddenToolbarTools = hiddenToolbarTools.isNotEmpty(),
+                                hasToggleReflow = onToggleReflow != null,
+                                hasDeleteReflow = onDeleteReflow != null,
+                                hasExportAnnotations = onExportAnnotations != null,
+                            )
+                            val overflowSections = if (EpubOverflowMenuSection.TTS_SETTINGS in baseOverflowSections) {
+                                baseOverflowSections
+                            } else {
+                                val insertAt = baseOverflowSections
+                                    .indexOfFirst {
+                                        it == EpubOverflowMenuSection.EXPORT_ANNOTATIONS ||
+                                            it == EpubOverflowMenuSection.FILE_INFO
+                                    }
+                                    .let { if (it < 0) baseOverflowSections.size else it }
+                                baseOverflowSections.toMutableList().apply {
+                                    add(insertAt, EpubOverflowMenuSection.TTS_SETTINGS)
+                                }
+                            }
                             com.aryan.reader.shared.ui.SharedReaderOverflowSectionList(
-                                sections = epubOverflowMenuSections(
-                                    hiddenTools = hiddenTools,
-                                    hasHiddenToolbarTools = hiddenToolbarTools.isNotEmpty(),
-                                    hasToggleReflow = onToggleReflow != null,
-                                    hasDeleteReflow = onDeleteReflow != null,
-                                    hasExportAnnotations = onExportAnnotations != null,
-                                ),
+                                sections = overflowSections,
                             ) { section ->
                                 when (section) {
                                     EpubOverflowMenuSection.CUSTOMIZE_TOOLBAR -> {
@@ -754,6 +784,31 @@ fun EpubReaderTopBar(
                                     }
                                     EpubOverflowMenuSection.TTS_SETTINGS -> {
                                         DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    stringResource(
+                                                        if (isTtsActive) R.string.menu_tts_stop else R.string.menu_tts_start
+                                                    )
+                                                )
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onToggleTts()
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = if (isTtsActive) {
+                                                        painterResource(id = R.drawable.close)
+                                                    } else {
+                                                        painterResource(id = R.drawable.text_to_speech)
+                                                    },
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp),
+                                                    tint = if (isTtsActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        )
+                                        if (showTtsVoiceSettings || showTtsReplacements) DropdownMenuItem(
                                             text = { Text(stringResource(R.string.menu_tts_settings)) },
                                             onClick = { showTtsSettingsExpanded = !showTtsSettingsExpanded },
                                             leadingIcon = {
@@ -950,6 +1005,8 @@ fun EpubReaderBottomBar(
     bottomTools: Set<String>,
     modifier: Modifier = Modifier,
     readerMotionPolicy: ReaderMotionPolicy = ReaderMotionPolicy(),
+    screenOrientationMode: ReaderScreenOrientationMode = ReaderScreenOrientationMode.FOLLOW_SYSTEM,
+    onCycleScreenOrientation: () -> Unit = onOpenScreenOrientation,
 ) {
     com.aryan.reader.shared.ui.SharedReaderBarVisibility(
         visible = isVisible,
@@ -1075,6 +1132,13 @@ fun EpubReaderBottomBar(
                             else -> Unit
                         }
                     }
+                // Fixed bottom-right slot (where read-aloud used to be): one tap cycles
+                // automatic -> fixed landscape -> fixed portrait.
+                com.aryan.reader.ReaderScreenOrientationToggleButton(
+                    mode = screenOrientationMode,
+                    onCycle = onCycleScreenOrientation,
+                    reduceMotion = readerMotionPolicy.reduceMotion,
+                )
             }
         }
     }
@@ -1657,7 +1721,7 @@ fun CustomizeToolsSheet(
         toolOrder = toolOrder,
         bottomToolIds = bottomTools.mapNotNullTo(mutableSetOf()) { ReaderTool.fromId(it)?.id },
         toolbarTools = epubToolbarTools,
-        availableTools = ReaderTool.entries.toSet(),
+        availableTools = ReaderTool.entries.toSet() - epubToolsRemovedFromToolbar,
         labels = com.aryan.reader.shared.ui.SharedEpubToolbarCustomizationLabels(
             title = stringResource(R.string.title_customize_toolbar),
             reset = stringResource(R.string.action_reset),

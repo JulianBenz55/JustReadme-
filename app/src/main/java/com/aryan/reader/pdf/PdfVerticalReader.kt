@@ -176,6 +176,13 @@ class VerticalPdfReaderState {
 
     internal var scrollToPageHandler: (suspend (Int) -> Unit)? = null
     internal var snapToPageHandler: (suspend (Int) -> Unit)? = null
+    internal var snapToAnchorHandler: (suspend (Int, Float) -> Unit)? = null
+
+    /** Seite am oberen Bildschirmrand und Anteil (0..1) darin, für exaktes Wiederherstellen. */
+    var topAnchorPage by mutableIntStateOf(-1)
+        internal set
+    var topAnchorFraction by mutableFloatStateOf(0f)
+        internal set
     internal var scrollByHandler: (suspend (Float) -> Unit)? = null
     internal var scrollToTopHandler: (suspend () -> Unit)? = null
     internal var scrollToBottomHandler: (suspend () -> Unit)? = null
@@ -196,6 +203,11 @@ class VerticalPdfReaderState {
 
     suspend fun snapToPage(pageIndex: Int) {
         snapToPageHandler?.invoke(pageIndex)
+    }
+
+    suspend fun snapToAnchor(pageIndex: Int, fraction: Float) {
+        val handler = snapToAnchorHandler
+        if (handler != null) handler(pageIndex, fraction) else snapToPageHandler?.invoke(pageIndex)
     }
 
     suspend fun scrollBy(delta: Float) {
@@ -470,6 +482,7 @@ internal fun PdfVerticalReader(
         onDispose {
             state.scrollToPageHandler = null
             state.snapToPageHandler = null
+            state.snapToAnchorHandler = null
             state.scrollByHandler = null
             state.scrollToTopHandler = null
             state.scrollToBottomHandler = null
@@ -1192,6 +1205,19 @@ internal fun PdfVerticalReader(
                 if (clampedPanY != null) {
                     panYAnimatable.snapTo(clampedPanY)
                     commitRenderedCamera(cameraZoom, cameraPanX, clampedPanY)
+                }
+            }
+
+            state.snapToAnchorHandler = { index, fraction ->
+                if (index in layoutInfo.indices) {
+                    val page = layoutInfo[index]
+                    val currentZoom = cameraZoom
+                    val docY = page.y + fraction.coerceIn(0f, 1f) * page.height
+                    val zoomedDocHeight = totalDocHeight * currentZoom
+                    val minPanY = (screenHeight - footerHeightPx - zoomedDocHeight).coerceAtMost(headerHeightPx)
+                    val targetPanY = (-docY * currentZoom).coerceIn(minPanY, headerHeightPx)
+                    panYAnimatable.snapTo(targetPanY)
+                    commitRenderedCamera(currentZoom, cameraPanX, targetPanY)
                 }
             }
 
@@ -2794,6 +2820,20 @@ internal fun PdfVerticalReader(
                             )
                         }
                         mostVisibleIndex?.let(state::updateAuthoritativeCurrentPage)
+
+                        // Exakte Position am oberen Bildschirmrand merken (Seite + Anteil).
+                        val docY = -panY / safeZoom
+                        var lo = 0
+                        var hi = fullPagePositions.size - 1
+                        while (lo < hi) {
+                            val mid = (lo + hi + 1) / 2
+                            if (fullPagePositions[mid].top <= docY) lo = mid else hi = mid - 1
+                        }
+                        fullPagePositions.getOrNull(lo)?.let { anchorPage ->
+                            state.topAnchorPage = anchorPage.index
+                            state.topAnchorFraction =
+                                ((docY - anchorPage.top) / anchorPage.height.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        }
                     }
                 }
             }

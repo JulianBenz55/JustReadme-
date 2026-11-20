@@ -99,13 +99,25 @@ val PdfReaderTool.titleRes: Int
 
 internal fun defaultPdfHiddenTools(): Set<String> {
     return setOf(
-        PdfReaderTool.SCREEN_ORIENTATION.name,
         PdfReaderTool.HIGHLIGHT_ALL.name,
         PdfReaderTool.BRIGHTNESS.name
     )
 }
 
+/**
+ * Tools that no longer exist as configurable toolbar entries in the Android PDF reader:
+ * - DICTIONARY: the external-apps shortcut was dropped from the toolbar.
+ * - TTS_CONTROLS: read-aloud start/stop now lives in the three-dot menu.
+ * - SCREEN_ORIENTATION: replaced by a fixed one-tap orientation button in the bottom bar.
+ */
+private val pdfToolsRemovedFromToolbar = setOf(
+    PdfReaderTool.DICTIONARY,
+    PdfReaderTool.TTS_CONTROLS,
+    PdfReaderTool.SCREEN_ORIENTATION,
+)
+
 internal fun isPdfReaderToolAvailable(tool: PdfReaderTool): Boolean {
+    if (tool in pdfToolsRemovedFromToolbar) return false
     return BuildConfig.IS_PRO || tool != PdfReaderTool.OCR_LANGUAGE
 }
 
@@ -151,22 +163,23 @@ internal fun restorePdfToolOrderNames(toolNames: Collection<String>): List<PdfRe
     // Tools introduced after an order was persisted (for example split_view)
     // surface next to their canonical neighbour instead of trailing the bar.
     return pdfToolsIntroducedAfterOrderPersistence().fold(order) { migrated, (tool, anchor) ->
-        if (tool in restoredTools) migrated else migrated.insertedAfter(anchor, tool)
+        if (tool in restoredTools) migrated else migrated.insertedBefore(anchor, tool)
     }
 }
 
 private fun pdfToolsIntroducedAfterOrderPersistence(): List<Pair<PdfReaderTool, PdfReaderTool>> {
-    return listOf(PdfReaderTool.SPLIT_VIEW to PdfReaderTool.DICTIONARY)
+    // Split view used to sit right after the dictionary tool, which has since been removed from
+    // the toolbar; it now takes the dictionary's old slot, in front of the theme tool.
+    return listOf(PdfReaderTool.SPLIT_VIEW to PdfReaderTool.THEME)
 }
 
-private fun List<PdfReaderTool>.insertedAfter(anchor: PdfReaderTool, tool: PdfReaderTool): List<PdfReaderTool> {
-    val anchorIndex = indexOf(anchor)
+private fun List<PdfReaderTool>.insertedBefore(anchor: PdfReaderTool, tool: PdfReaderTool): List<PdfReaderTool> {
     // A missing anchor means sanitized() already appended the tool at the end.
-    if (anchorIndex < 0) return this
+    if (anchor !in this) return this
     return toMutableList().apply {
         // sanitized() appends missing tools at the end; relocate that copy.
         remove(tool)
-        add(anchorIndex + 1, tool)
+        add(indexOf(anchor), tool)
     }
 }
 

@@ -37,7 +37,6 @@ class PdfReaderPreferencesTest {
         assertEquals(
             setOf(
                 PdfReaderTool.PRINT.name,
-                PdfReaderTool.SCREEN_ORIENTATION.name,
                 PdfReaderTool.HIGHLIGHT_ALL.name,
                 PdfReaderTool.BRIGHTNESS.name
             ),
@@ -46,7 +45,7 @@ class PdfReaderPreferencesTest {
     }
 
     @Test
-    fun `persisted orders gain the split view tool beside the dictionary tool`() {
+    fun `persisted orders gain the split view tool at the front of the toolbar`() {
         val legacyOrder = PdfReaderTool.entries
             .filter { it != PdfReaderTool.SPLIT_VIEW }
             .joinToString(",") { it.name }
@@ -56,8 +55,9 @@ class PdfReaderPreferencesTest {
         val order = loadPdfToolOrder(context)
         val expectedTools = PdfReaderTool.entries.filter(::isPdfReaderToolAvailable)
 
-        assertEquals(PdfReaderTool.DICTIONARY, order.first())
-        assertEquals(PdfReaderTool.SPLIT_VIEW, order[1])
+        assertEquals(PdfReaderTool.SPLIT_VIEW, order.first())
+        assertEquals(PdfReaderTool.THEME, order[1])
+        assertFalse(PdfReaderTool.DICTIONARY in order)
         assertEquals(expectedTools.size, order.size)
         assertEquals(expectedTools.toSet(), order.toSet())
     }

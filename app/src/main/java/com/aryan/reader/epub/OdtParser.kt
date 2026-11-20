@@ -67,7 +67,7 @@ class OdtParser(private val context: Context) {
         var chapterCount = 0
 
         val cssStyle = """
-            body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+            body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
             p { margin-bottom: 1em; text-align: justify; }
             h1, h2, h3, h4, h5, h6 { text-align: center; margin-top: 1.5em; margin-bottom: 1em; }
             ul, ol { margin-bottom: 1em; padding-left: 2em; }

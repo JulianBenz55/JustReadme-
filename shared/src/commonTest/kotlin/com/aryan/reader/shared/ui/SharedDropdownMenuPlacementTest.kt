@@ -173,4 +173,35 @@ class SharedDropdownMenuPlacementTest {
         )
         assertTrue(height > 0, "height=$height")
     }
+
+    @Test
+    fun clampKeepsAStaleLandscapePlacementInsideThePortraitWindow() {
+        // After landscape -> portrait the anchor/size can still describe the 2400px-wide window.
+        val clamped = sharedDropdownMenuClampOffset(
+            offset = IntOffset(2000, 120),
+            menuSize = IntSize(500, 900),
+            windowSize = IntSize(1080, 2263),
+        )
+        assertEquals(IntOffset(580, 120), clamped)
+    }
+
+    @Test
+    fun clampLeavesAnAlreadyVisiblePlacementUntouched() {
+        val clamped = sharedDropdownMenuClampOffset(
+            offset = IntOffset(300, 240),
+            menuSize = IntSize(500, 900),
+            windowSize = IntSize(1080, 2263),
+        )
+        assertEquals(IntOffset(300, 240), clamped)
+    }
+
+    @Test
+    fun clampPinsAMenuLargerThanTheWindowToTheOrigin() {
+        val clamped = sharedDropdownMenuClampOffset(
+            offset = IntOffset(50, 50),
+            menuSize = IntSize(2000, 3000),
+            windowSize = IntSize(1080, 2263),
+        )
+        assertEquals(IntOffset(0, 0), clamped)
+    }
 }

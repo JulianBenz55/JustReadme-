@@ -152,7 +152,7 @@ object SharedPdfReflowHtml {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-        body { font-family: sans-serif; line-height: 1.65; padding: 1em; max-width: 100%; margin: 0; }
+        body { line-height: 1.65; padding: 1em; max-width: 100%; margin: 0; }
         h1 { font-size: 1.9em; font-weight: bold; margin: 1.2em 0 0.4em; }
         h2 { font-size: 1.55em; font-weight: bold; margin: 1.1em 0 0.35em; }
         h3 { font-size: 1.3em; font-weight: bold; margin: 1.0em 0 0.3em; }

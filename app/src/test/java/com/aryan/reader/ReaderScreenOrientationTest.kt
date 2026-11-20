@@ -36,12 +36,28 @@ class ReaderScreenOrientationTest {
             ReaderScreenOrientationMode.FOLLOW_SYSTEM.toRequestedOrientation()
         )
         assertEquals(
-            ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT,
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
             ReaderScreenOrientationMode.PORTRAIT.toRequestedOrientation()
         )
         assertEquals(
-            ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE,
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
             ReaderScreenOrientationMode.LANDSCAPE.toRequestedOrientation()
+        )
+    }
+
+    @Test
+    fun `orientation button cycles automatic then landscape then portrait then automatic`() {
+        assertEquals(
+            ReaderScreenOrientationMode.LANDSCAPE,
+            ReaderScreenOrientationMode.FOLLOW_SYSTEM.nextInToggleCycle()
+        )
+        assertEquals(
+            ReaderScreenOrientationMode.PORTRAIT,
+            ReaderScreenOrientationMode.LANDSCAPE.nextInToggleCycle()
+        )
+        assertEquals(
+            ReaderScreenOrientationMode.FOLLOW_SYSTEM,
+            ReaderScreenOrientationMode.PORTRAIT.nextInToggleCycle()
         )
     }
 

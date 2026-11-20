@@ -683,7 +683,8 @@ fun AboutDialog(onDismiss: () -> Unit) {
     com.aryan.reader.shared.ui.SharedAndroidAboutDialog(
         strings = com.aryan.reader.shared.ui.SharedAndroidAboutStrings(
             appName = stringResource(R.string.about_app_name),
-            flavorLabel = if (isOss) stringResource(R.string.about_oss_version) else stringResource(R.string.about_play_version),
+            flavorLabel = stringResource(R.string.about_based_on_episteme) + " · " +
+                if (isOss) stringResource(R.string.about_oss_version) else stringResource(R.string.about_play_version),
             versionLabel = stringResource(R.string.about_version_name, BuildConfig.VERSION_NAME),
             buildLabel = stringResource(R.string.about_build_code, BuildConfig.VERSION_CODE.toString()),
             githubTitle = stringResource(R.string.about_github),

@@ -136,6 +136,23 @@ internal fun sharedDropdownMenuPlacement(
 }
 
 /**
+ * Keeps the menu inside the drawable area no matter what the anchor math produced.
+ *
+ * The placement rules assume the anchor and window size describe the same orientation. If either
+ * is stale (a rotation that has not been laid out yet) the candidates can all fall outside the
+ * window; this last step guarantees the menu is never positioned off-screen. A menu larger than
+ * the window is pinned to the top/start edge.
+ */
+internal fun sharedDropdownMenuClampOffset(
+    offset: IntOffset,
+    menuSize: IntSize,
+    windowSize: IntSize,
+): IntOffset = IntOffset(
+    x = offset.x.coerceIn(0, maxOf(0, windowSize.width - menuSize.width)),
+    y = offset.y.coerceIn(0, maxOf(0, windowSize.height - menuSize.height)),
+)
+
+/**
  * The point the menu scales out of, so the open animation appears to grow from the
  * anchor rather than from the menu's own centre. Android benchmark
  * (`calculateTransformOrigin` in material3's `Menu.kt`).

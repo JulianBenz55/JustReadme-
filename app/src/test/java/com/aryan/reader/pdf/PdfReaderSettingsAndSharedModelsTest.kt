@@ -396,7 +396,6 @@ class PdfReaderSettingsAndSharedModelsTest {
     fun `pdf toolbar reset defaults match first-run toolbar defaults`() {
         assertEquals(
             setOf(
-                PdfReaderTool.SCREEN_ORIENTATION.name,
                 PdfReaderTool.HIGHLIGHT_ALL.name,
                 PdfReaderTool.BRIGHTNESS.name
             ),
@@ -419,10 +418,10 @@ class PdfReaderSettingsAndSharedModelsTest {
             availableTools = defaultPdfToolOrder().toSet(),
         )
 
-        assertEquals(
-            SharedToolbarSection.HIDDEN,
-            defaultItems.single { it.toolId == PdfReaderTool.SCREEN_ORIENTATION.id }.section
-        )
+        // Dictionary, read-aloud and screen orientation are no longer toolbar tools.
+        assertTrue(defaultItems.none { it.toolId == PdfReaderTool.SCREEN_ORIENTATION.id })
+        assertTrue(defaultItems.none { it.toolId == PdfReaderTool.DICTIONARY.id })
+        assertTrue(defaultItems.none { it.toolId == PdfReaderTool.TTS_CONTROLS.id })
         assertEquals(
             SharedToolbarSection.HIDDEN,
             defaultItems.single { it.toolId == PdfReaderTool.HIGHLIGHT_ALL.id }.section

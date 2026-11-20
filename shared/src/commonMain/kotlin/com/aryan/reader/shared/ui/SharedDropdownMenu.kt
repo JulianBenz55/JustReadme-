@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -120,6 +122,10 @@ fun SharedDropdownMenu(
     // `DropdownMenu` measures itself against. A zero-size child reports its parent's
     // window bounds without affecting layout.
     var anchorBounds by remember { mutableStateOf(IntRect.Zero) }
+    // The live coordinates of the anchor. `anchorBounds` is only a snapshot taken the last time
+    // the probe was positioned; after a rotation that snapshot can still describe the previous
+    // orientation, so the placement below re-reads the bounds from these coordinates instead.
+    var anchorCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var menuSize by remember { mutableStateOf(IntSize.Zero) }
 
     /**
@@ -142,25 +148,13 @@ fun SharedDropdownMenu(
         right = safeInsets.getRight(density, layoutDirection),
         bottom = safeInsets.getBottom(density),
     )
-    // Everything below works in popup-content coordinates, so the card's offset needs no
-    // correction and the fit checks are measured against the area the menu can actually use.
-    val popupSpace = sharedDropdownMenuPopupSpace(anchorBounds, windowSize, popupSpaceInsets)
-    val placement = sharedDropdownMenuPlacement(
-        anchorBounds = popupSpace.anchor,
-        menuSize = menuSize,
-        windowSize = popupSpace.drawableSize,
-        contentOffset = offset,
-        density = density,
-        layoutDirection = layoutDirection,
-    )
-    val maxMenuHeight = sharedDropdownMenuMaxHeight(popupSpace.anchor, popupSpace.drawableSize, density)
-
     // Zero-size probe: reports the anchor (this node's parent in the layout) in window
     // coordinates, which is the same box `DropdownMenu` measures itself against.
     Box(
         Modifier
             .size(0.dp)
             .onGloballyPositioned { coordinates ->
+                anchorCoordinates = coordinates
                 anchorBounds = (coordinates.parentLayoutCoordinates?.boundsInWindow()
                     ?: coordinates.boundsInWindow()).roundToIntRect()
             },
@@ -175,9 +169,45 @@ fun SharedDropdownMenu(
         // (hardware back / escape) and would let those reach the surface behind.
         properties = SharedDropdownMenuPopupProperties,
     ) {
-        Box(
+        BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
         ) {
+            // Everything below works in popup-content coordinates, so the card's offset needs no
+            // correction and the fit checks are measured against the area the menu can actually use.
+            //
+            // The popup's own constraints are the only size that is guaranteed to describe the
+            // window the menu is painted in *right now*. `LocalWindowInfo.containerSize` and the
+            // remembered anchor snapshot can both lag a rotation, and a menu placed from the
+            // previous orientation's numbers ends up outside the screen (the three-dot menu bug
+            // after landscape -> portrait). So the drawable area comes from the constraints, the
+            // anchor is re-read from its live coordinates, and the final offset is clamped.
+            val popupWidth = constraints.maxWidth
+            val popupHeight = constraints.maxHeight
+            // Reading the snapshot keeps this scope subscribed to anchor moves, so a rotation that
+            // relocates the button recomposes the placement even when the live read succeeds.
+            val anchorSnapshot = anchorBounds
+            val liveAnchorBounds = anchorCoordinates.sharedLiveAnchorBounds() ?: anchorSnapshot
+            val measuredSpace = sharedDropdownMenuPopupSpace(liveAnchorBounds, windowSize, popupSpaceInsets)
+            val popupSpace = if (popupWidth > 0 && popupHeight > 0) {
+                measuredSpace.copy(drawableSize = IntSize(popupWidth, popupHeight))
+            } else {
+                measuredSpace
+            }
+            val placement = sharedDropdownMenuPlacement(
+                anchorBounds = popupSpace.anchor,
+                menuSize = menuSize,
+                windowSize = popupSpace.drawableSize,
+                contentOffset = offset,
+                density = density,
+                layoutDirection = layoutDirection,
+            )
+            val menuOffset = sharedDropdownMenuClampOffset(
+                offset = placement.offset,
+                menuSize = menuSize,
+                windowSize = popupSpace.drawableSize,
+            )
+            val maxMenuHeight = sharedDropdownMenuMaxHeight(popupSpace.anchor, popupSpace.drawableSize, density)
+
             // Scrim is a *sibling behind* the card, never its parent: a `clickable`
             // ancestor merges its descendants' semantics, which collapsed the entire
             // menu into one screen-sized accessibility node.
@@ -193,7 +223,7 @@ fun SharedDropdownMenu(
             Card(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .offset { placement.offset }
+                    .offset { menuOffset }
                     .heightIn(max = with(density) { maxMenuHeight.toDp() })
                     .width(IntrinsicSize.Max)
                     .graphicsLayer {
@@ -216,6 +246,18 @@ fun SharedDropdownMenu(
             }
         }
     }
+}
+
+/**
+ * The anchor's bounds read from its live coordinates, or null when the node is gone or detached
+ * (for example mid-rotation), in which case the caller falls back to its last snapshot.
+ */
+private fun LayoutCoordinates?.sharedLiveAnchorBounds(): IntRect? {
+    val coordinates = this ?: return null
+    if (!coordinates.isAttached) return null
+    val anchor = coordinates.parentLayoutCoordinates ?: coordinates
+    if (!anchor.isAttached) return null
+    return anchor.boundsInWindow().roundToIntRect()
 }
 
 private val SharedDropdownMenuShape = RoundedCornerShape(12.dp)

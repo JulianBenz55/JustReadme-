@@ -270,6 +270,7 @@ import com.aryan.reader.loadGlobalTextureTransparency
 import com.aryan.reader.loadPdfRightToLeftPagination
 import com.aryan.reader.loadReaderBrightnessSettings
 import com.aryan.reader.loadReaderScreenOrientationMode
+import com.aryan.reader.nextInToggleCycle
 import com.aryan.reader.loadReaderSliderToggled
 import com.aryan.reader.loadTtsReplacementPreferences
 import com.aryan.reader.logCloudAnnotationSyncTrace
@@ -1253,6 +1254,32 @@ private fun PdfViewerScreenContent(
         }
     }
 
+    val anchorContext = androidx.compose.ui.platform.LocalContext.current
+    // Exakte Leseposition (Seite + Anteil) speichern, damit das PDF genau dort wieder aufgeht.
+    LaunchedEffect(verticalReaderState.topAnchorPage, verticalReaderState.topAnchorFraction, initialScrollDone) {
+        if (initialScrollDone && displayMode == DisplayMode.VERTICAL_SCROLL && verticalReaderState.topAnchorPage >= 0) {
+            delay(700)
+            PdfReadingAnchorStore.save(
+                anchorContext, pdfUri.toString(),
+                verticalReaderState.topAnchorPage, verticalReaderState.topAnchorFraction,
+            )
+        }
+    }
+    DisposableEffect(lifecycleOwner) {
+        val anchorObserver = LifecycleEventObserver { _, event ->
+            if ((event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) &&
+                initialScrollDone && displayMode == DisplayMode.VERTICAL_SCROLL && verticalReaderState.topAnchorPage >= 0
+            ) {
+                PdfReadingAnchorStore.save(
+                    anchorContext, pdfUri.toString(),
+                    verticalReaderState.topAnchorPage, verticalReaderState.topAnchorFraction,
+                )
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(anchorObserver)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(anchorObserver) }
+    }
+
     val allAnnotationsProvider = remember { { currentVisibleAllAnnotations } }
 
     LaunchedEffect(Unit) {
@@ -2146,7 +2173,12 @@ private fun PdfViewerScreenContent(
                         if (verticalReaderState.snapToPageHandler != null) {
                             if (!isScrollLocked) {
                                 Timber.tag("PdfPositionDebug").d("UI: Executing Vertical snapToPage($targetPage)")
-                                verticalReaderState.snapToPage(targetPage)
+                                val savedAnchor = PdfReadingAnchorStore.load(anchorContext, pdfUri.toString())
+                                if (savedAnchor != null && kotlin.math.abs(savedAnchor.page - targetPage) <= 1) {
+                                    verticalReaderState.snapToAnchor(savedAnchor.page, savedAnchor.fraction)
+                                } else {
+                                    verticalReaderState.snapToPage(targetPage)
+                                }
                             } else {
                                 Timber.tag("PdfLockDiagnostic").d("UI: Skipping snapToPage request because Scroll is Locked.")
                             }
@@ -9357,6 +9389,7 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.PdfViewer
         val navBarHeight = surfaceState.navBarHeight.value
         var showBrightnessSheet by surfaceState.showBrightnessSheet
         var showScreenOrientationSheet by surfaceState.showScreenOrientationSheet
+        var screenOrientationMode by surfaceState.screenOrientationMode
         var showBubbleZoomDownloadDialog by surfaceState.showBubbleZoomDownloadDialog
         var showBars by surfaceState.showBars
         var isBottomToolbarEnabled by surfaceState.isBottomToolbarEnabled
@@ -9534,6 +9567,14 @@ private fun androidx.compose.foundation.layout.BoxWithConstraintsScope.PdfViewer
         onToggleEditMode = togglePdfEditMode,
         onToggleTts = togglePdfTts,
         onShowScreenOrientation = { if (ownsPaneGlobals) showScreenOrientationSheet = true },
+        screenOrientationMode = screenOrientationMode,
+        onCycleScreenOrientation = {
+            if (ownsPaneGlobals) {
+                val nextMode = screenOrientationMode.nextInToggleCycle()
+                screenOrientationMode = nextMode
+                saveReaderScreenOrientationMode(context, nextMode)
+            }
+        },
         showBubbleZoom = isComicFile,
         isBubbleZoomModeActive = isBubbleZoomModeActive,
         onToggleBubbleZoom = {

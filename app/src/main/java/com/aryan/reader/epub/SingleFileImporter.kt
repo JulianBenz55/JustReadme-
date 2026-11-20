@@ -363,7 +363,7 @@ class SingleFileImporter(private val context: Context) {
 
         // Shared CSS
         val style = """
-            body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+            body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
             table { border-collapse: collapse; width: 100%; margin: 1em 0; }
             th, td { border: 1px solid currentColor; padding: 0.5em; text-align: left; }
             blockquote { border-left: 4px solid currentColor; padding-left: 1em; margin-left: 0; opacity: 0.8; }
@@ -643,7 +643,7 @@ class SingleFileImporter(private val context: Context) {
         var chapterCounter = 1
 
         val cssStyle = """
-            body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+            body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
             p { margin-bottom: 1em; text-indent: 0; white-space: pre-wrap; }
             .$TXT_PREFORMATTED_CLASS { white-space: pre-wrap !important; text-indent: 0 !important; }
         """.trimIndent()

@@ -459,9 +459,9 @@
     <!-- Feedback -->
     <string name="get_in_touch">Get in Touch</string>
     <!-- Feedback screen intro sentence; invites bugs, feature requests, and general contact via GitHub or email. -->
-    <string name="feedback_desc">Found a bug, have a feature request, or just want to say hi? Let us know on GitHub or email us.</string>
+    <string name="feedback_desc">Vellum is based on Episteme. Found a bug, have a feature request, or just want to say hi? Let the Episteme project know on GitHub or by email.</string>
     <string name="github_issues">GitHub Issues</string>
-    <string name="github_issues_desc">Report bugs, request features, and track development progress.</string>
+    <string name="github_issues_desc">Report bugs, request features, and track development progress in the Episteme repository.</string>
     <string name="email_support">Email Support</string>
     <string name="email_support_desc">Contact us directly via email for any other inquiries.</string>
 
@@ -1088,6 +1088,8 @@
     <!-- "Vellum" is the app brand name — do not translate. -->
     <string name="about_app_name" translatable="false">Vellum</string>
     <!-- OSS = Open Source Software. -->
+    <!-- "Episteme" is the name of the upstream project — do not translate. -->
+    <string name="about_based_on_episteme" translatable="false">Based on Episteme</string>
     <string name="about_oss_version">Open Source Version</string>
     <string name="about_play_version">Playstore Version</string>
     <!-- About screen version label. %1$s = version string. Example: "Version 1.0.41". -->
@@ -1097,7 +1099,7 @@
     <!-- "GitHub" is a brand name — do not translate. -->
     <string name="about_github" translatable="false">GitHub</string>
     <!-- "GitHub" is a brand name — do not translate. -->
-    <string name="about_github_desc">Browse source code, star, fork, and report issues.</string>
+    <string name="about_github_desc">Based on Episteme by Aryan Raj. Browse the original source code, star, fork, and report issues.</string>
     <string name="about_privacy_desc">How we handle your data.</string>
     <string name="about_terms_desc">Usage terms and conditions.</string>
     <string name="about_licenses_desc">Open source libraries used.</string>
@@ -1334,7 +1336,7 @@
     <string name="settings_hub_literal_103">Reader tabs</string>
     <string name="settings_hub_literal_104">Reader AI visibility</string>
     <string name="settings_hub_literal_105">Help and feedback</string>
-    <string name="settings_hub_literal_106">Send feedback or report an issue</string>
+    <string name="settings_hub_literal_106">Send feedback or report an issue (Vellum is based on Episteme)</string>
     <string name="settings_hub_literal_107">Support project</string>
     <string name="settings_hub_literal_108">Open support options for the project</string>
     <string name="settings_hub_literal_109">About</string>
@@ -2898,4 +2900,10 @@
     <string name="app_background_black">Black</string>
     <string name="app_background_color_to_black">Color to black</string>
     <string name="app_background_hint">The black options apply in dark mode.</string>
+    <string name="tooltip_orientation_auto">Rotation: automatic</string>
+    <string name="tooltip_orientation_landscape">Rotation: locked to landscape</string>
+    <string name="tooltip_orientation_portrait">Rotation: locked to portrait</string>
+    <string name="tooltip_orientation_cycle_desc">Tap to switch between automatic, landscape and portrait</string>
+    <string name="menu_tts_start">Start text-to-speech</string>
+    <string name="menu_tts_stop">Stop text-to-speech</string>
 </resources>

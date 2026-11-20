@@ -61,6 +61,20 @@ object ReadingSessionTracker {
     private var pdfHighWater = Int.MIN_VALUE
     private var epubHighWater = -1f
     private var pageCarry = 0.0
+    private var lastPageEventMs = 0L
+    private const val SECONDS_PER_PAGE_FASTEST = 8.0
+
+    /**
+     * Wie viele Seiten seit der letzten Meldung noch als echtes Lesen gelten.
+     * Wird nur selten gemeldet (z.B. beim Kapitelwechsel), ist ein großer Sprung nach langer Zeit normal,
+     * ein großer Sprung nach wenigen Sekunden dagegen Navigation (Slider, Inhaltsverzeichnis).
+     */
+    private fun plausiblePages(base: Double): Double {
+        val now = System.currentTimeMillis()
+        val elapsedSec = ((now - lastPageEventMs) / 1000.0).coerceAtLeast(0.0)
+        lastPageEventMs = now
+        return maxOf(base, elapsedSec / SECONDS_PER_PAGE_FASTEST)
+    }
 
     fun start(context: Context) {
         synchronized(lock) {
@@ -94,11 +108,12 @@ object ReadingSessionTracker {
         synchronized(lock) {
             if (tickJob == null) return
             touchLocked()
-            if (pageKey != key) { pageKey = key; pdfHighWater = page; return }
+            if (pageKey != key) { pageKey = key; pdfHighWater = page; lastPageEventMs = System.currentTimeMillis(); return }
             val delta = page - pdfHighWater
+            val limit = plausiblePages(MAX_FORWARD_STEP.toDouble())
             when {
-                delta in 1..MAX_FORWARD_STEP -> { pdfHighWater = page; addPagesLocked(delta.toDouble()) }
-                delta > MAX_FORWARD_STEP -> pdfHighWater = page      // slider jump: navigation, not reading
+                delta >= 1 && delta <= limit -> { pdfHighWater = page; addPagesLocked(delta.toDouble()) }
+                delta > limit -> pdfHighWater = page      // slider jump: navigation, not reading
                 delta < -MAX_FORWARD_STEP -> pdfHighWater = page     // deliberate jump back
             }
         }
@@ -110,12 +125,13 @@ object ReadingSessionTracker {
             if (tickJob == null) return
             touchLocked()
             val p = progressPercent.coerceIn(0f, 100f)
-            if (pageKey != key) { pageKey = key; epubHighWater = p; return }
+            if (pageKey != key) { pageKey = key; epubHighWater = p; lastPageEventMs = System.currentTimeMillis(); return }
             val pagesInBook = totalChars / CHARS_PER_PAGE
             val deltaPages = (p - epubHighWater) / 100.0 * pagesInBook
+            val limit = plausiblePages(MAX_FORWARD_STEP * 2.0)
             when {
-                deltaPages > 0 && deltaPages <= MAX_FORWARD_STEP * 2 -> { epubHighWater = p; addPagesLocked(deltaPages) }
-                deltaPages > MAX_FORWARD_STEP * 2 -> epubHighWater = p
+                deltaPages > 0 && deltaPages <= limit -> { epubHighWater = p; addPagesLocked(deltaPages) }
+                deltaPages > limit -> epubHighWater = p
                 deltaPages < -MAX_FORWARD_STEP * 2 -> epubHighWater = p
             }
         }
@@ -133,11 +149,12 @@ object ReadingSessionTracker {
             if (tickJob == null) return
             touchLocked()
             val screens = scrollY.coerceAtLeast(0) / viewportHeight.toFloat()
-            if (pageKey != key) { pageKey = key; webHighWater = screens; return }
+            if (pageKey != key) { pageKey = key; webHighWater = screens; lastPageEventMs = System.currentTimeMillis(); return }
             val delta = screens - webHighWater
+            val limit = plausiblePages(MAX_FORWARD_STEP * 2.0)
             when {
-                delta > 0f && delta <= MAX_FORWARD_STEP * 2 -> { webHighWater = screens; addPagesLocked(delta.toDouble()) }
-                delta > MAX_FORWARD_STEP * 2 -> webHighWater = screens   // Sprung ans Seitenende
+                delta > 0f && delta <= limit -> { webHighWater = screens; addPagesLocked(delta.toDouble()) }
+                delta > limit -> webHighWater = screens   // Sprung ans Seitenende
                 delta < 0f -> webHighWater = screens                     // zurückscrollen zählt nicht
             }
         }

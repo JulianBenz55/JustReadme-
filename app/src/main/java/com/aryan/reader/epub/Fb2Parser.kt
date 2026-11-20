@@ -70,7 +70,7 @@ class Fb2Parser(private val context: Context) {
             val titleBuilder = java.lang.StringBuilder() // Buffer to handle <p> tags inside <title>
 
             val cssStyle = """
-                body { font-family: sans-serif; line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
+                body { line-height: 1.6; padding: 1em; max-width: 800px; margin: 0 auto; }
                 p { margin-bottom: 1em; text-indent: 1.5em; text-align: justify; }
                 h1, h2, h3, h4 { text-align: center; margin-top: 1.5em; margin-bottom: 1em; }
                 .empty-line { height: 1.5em; }

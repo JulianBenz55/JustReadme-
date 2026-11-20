@@ -204,9 +204,9 @@
     <string name="dialog_delete_font">Schriftart löschen?</string>
     <string name="dialog_delete_font_desc">Sind Sie sicher, dass Sie \'%1$s\' löschen möchten? Dies wird sie von allen Ihren Geräten entfernen, wenn die Synchronisierung aktiviert ist.</string>
     <string name="get_in_touch">Nehmen Sie Kontakt auf</string>
-    <string name="feedback_desc">Haben Sie einen Fehler gefunden, haben eine Feature-Anfrage oder wollen einfach Hallo sagen? Lassen Sie es uns über GitHub wissen oder schreiben Sie uns eine E-Mail.</string>
+    <string name="feedback_desc">Vellum basiert auf Episteme. Haben Sie einen Fehler gefunden, haben eine Feature-Anfrage oder wollen einfach Hallo sagen? Lassen Sie es das Episteme-Projekt über GitHub oder per E-Mail wissen.</string>
     <string name="github_issues">GitHub Issues</string>
-    <string name="github_issues_desc">Melden Sie Fehler, schlagen Sie Funktionen vor und verfolgen Sie den Verlauf der Entwicklung.</string>
+    <string name="github_issues_desc">Melden Sie Fehler, schlagen Sie Funktionen vor und verfolgen Sie den Verlauf der Entwicklung im Episteme-Repository.</string>
     <string name="email_support">E-Mail Support</string>
     <string name="email_support_desc">Kontaktieren Sie uns direkt per E-Mail für andere Angelegenheiten.</string>
     <string name="dialog_unlock_pro">Vellum Pro freischalten</string>
@@ -518,11 +518,12 @@
     <string name="error_opening_dictionary">Fehler beim Öffnen des Wörterbuches</string>
     <string name="error_opening_translate">Fehler beim Öffnen der Übersetzungs-App</string>
     <string name="error_opening_search">Fehler beim Öffnen der Such-App</string>
+    <string name="about_based_on_episteme" translatable="false">Basiert auf Episteme</string>
     <string name="about_oss_version">Quelloffene Version</string>
     <string name="about_play_version">Playstore-Version</string>
     <string name="about_version_name">Version %1$s</string>
     <string name="about_build_code">Build %1$s</string>
-    <string name="about_github_desc">Quellcode durchsuchen, Sterne vergeben, Forken und Fehler berichten.</string>
+    <string name="about_github_desc">Basiert auf Episteme von Aryan Raj. Originalen Quellcode durchsuchen, Sterne vergeben, Forken und Fehler berichten.</string>
     <string name="about_privacy_desc">Wie wir Ihre Daten verarbeiten.</string>
     <string name="about_terms_desc">Nutzungsbedingungen.</string>
     <string name="about_licenses_desc">Benutzte quelloffene Bibliotheken.</string>
@@ -1842,7 +1843,7 @@
     <string name="settings_hub_literal_103">Leser-Tabs</string>
     <string name="settings_hub_literal_104">Sichtbarkeit der Leser-KI</string>
     <string name="settings_hub_literal_105">Hilfe und Feedback</string>
-    <string name="settings_hub_literal_106">Senden Sie Feedback oder melden Sie ein Problem</string>
+    <string name="settings_hub_literal_106">Senden Sie Feedback oder melden Sie ein Problem (Vellum basiert auf Episteme)</string>
     <string name="settings_hub_literal_107">Projekt unterstützen</string>
     <string name="settings_hub_literal_108">Öffnen Sie die Supportoptionen des Projekts</string>
     <string name="settings_hub_literal_109">Über</string>
@@ -2119,4 +2120,10 @@
     <string name="app_background_black">Schwarz</string>
     <string name="app_background_color_to_black">Farbe zu Schwarz</string>
     <string name="app_background_hint">Die Schwarz-Optionen gelten im dunklen Modus.</string>
+    <string name="tooltip_orientation_auto">Drehung: automatisch</string>
+    <string name="tooltip_orientation_landscape">Drehung: fest horizontal</string>
+    <string name="tooltip_orientation_portrait">Drehung: fest vertikal</string>
+    <string name="tooltip_orientation_cycle_desc">Tippen, um zwischen automatisch, horizontal und vertikal zu wechseln</string>
+    <string name="menu_tts_start">Text-zu-Sprache starten</string>
+    <string name="menu_tts_stop">Text-zu-Sprache stoppen</string>
 </resources>

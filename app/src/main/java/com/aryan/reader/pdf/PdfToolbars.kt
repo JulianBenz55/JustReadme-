@@ -197,7 +197,8 @@ internal fun PdfTopBar(
                             bottomToolNamesOrIds = bottomTools,
                             placement = com.aryan.reader.shared.ui.SharedReaderToolbarPlacement.TOP,
                         )
-                        val hasTopToolbarContent = topToolbarTools.isNotEmpty() || includeDebugActions
+                        // The fixed auto-scroll button always occupies the tool row, so it always has content.
+                        val hasTopToolbarContent = true
                         Text(
                             text = titleText,
                             style = MaterialTheme.typography.titleMedium,
@@ -227,6 +228,13 @@ internal fun PdfTopBar(
                                     modifier = Modifier.horizontalScroll(topToolbarScrollState),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    // Fixed first tool slot (where the dictionary button used to be):
+                                    // one tap starts auto scroll without opening the three-dot menu.
+                                    com.aryan.reader.ReaderAutoScrollButton(
+                                        onClick = onStartAutoScroll,
+                                        enabled = !isTtsSessionActive && displayMode == DisplayMode.VERTICAL_SCROLL,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
                                     topToolbarTools.forEach { tool ->
                                         when (tool) {
                                             PdfReaderTool.THEME -> TooltipIconButton(
@@ -379,14 +387,28 @@ internal fun PdfTopBar(
                                 val showShareAction = !hiddenTools.contains(PdfReaderTool.SHARE.name)
                                 val showSaveCopyAction = effectiveFileType == FileType.PDF && !hiddenTools.contains(PdfReaderTool.SAVE_COPY.name)
                                 val showPrintAction = effectiveFileType == FileType.PDF && canPrintDocument && !hiddenTools.contains(PdfReaderTool.PRINT.name)
+                                // Read-aloud start/stop moved out of the bottom bar into the TTS section of
+                                // this menu, so that section must exist even when both of its settings
+                                // entries are hidden.
+                                val basePdfOverflowSections = pdfOverflowMenuSections(
+                                    hiddenTools = hiddenTools,
+                                    hasHiddenToolbarTools = hiddenToolbarTools.isNotEmpty(),
+                                    isPro = BuildConfig.IS_PRO,
+                                    effectiveFileType = effectiveFileType,
+                                    canPrintDocument = canPrintDocument,
+                                )
+                                val pdfOverflowSections = if (PdfOverflowMenuSection.TTS_SETTINGS in basePdfOverflowSections) {
+                                    basePdfOverflowSections
+                                } else {
+                                    val insertAt = basePdfOverflowSections
+                                        .indexOfFirst { it == PdfOverflowMenuSection.BOOKMARK }
+                                        .let { if (it < 0) basePdfOverflowSections.size else it }
+                                    basePdfOverflowSections.toMutableList().apply {
+                                        add(insertAt, PdfOverflowMenuSection.TTS_SETTINGS)
+                                    }
+                                }
                                 com.aryan.reader.shared.ui.SharedReaderOverflowSectionList(
-                                    sections = pdfOverflowMenuSections(
-                                        hiddenTools = hiddenTools,
-                                        hasHiddenToolbarTools = hiddenToolbarTools.isNotEmpty(),
-                                        isPro = BuildConfig.IS_PRO,
-                                        effectiveFileType = effectiveFileType,
-                                        canPrintDocument = canPrintDocument,
-                                    ),
+                                    sections = pdfOverflowSections,
                                 ) { section ->
                                     when (section) {
                                         PdfOverflowMenuSection.CUSTOMIZE_TOOLBAR -> {
@@ -561,6 +583,24 @@ internal fun PdfTopBar(
                                         }
                                         PdfOverflowMenuSection.TTS_SETTINGS -> {
                                             DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        stringResource(
+                                                            if (isTtsSessionActive) R.string.menu_tts_stop else R.string.menu_tts_start
+                                                        )
+                                                    )
+                                                },
+                                                onClick = { showMoreMenu = false; onToggleTts() },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        painter = if (isTtsSessionActive) painterResource(id = R.drawable.close) else painterResource(id = R.drawable.text_to_speech),
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(20.dp),
+                                                        tint = if (isTtsSessionActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+                                            )
+                                            if (showTtsVoiceSettings || showTtsReplacements) DropdownMenuItem(
                                                 text = { Text(stringResource(R.string.menu_tts_settings)) },
                                                 onClick = { showTtsSettingsExpanded = !showTtsSettingsExpanded },
                                                 leadingIcon = { Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(20.dp)) },
@@ -886,7 +926,9 @@ fun PdfBottomBar(
     onShowScreenOrientation: () -> Unit,
     showBubbleZoom: Boolean,
     isBubbleZoomModeActive: Boolean,
-    onToggleBubbleZoom: () -> Unit
+    onToggleBubbleZoom: () -> Unit,
+    screenOrientationMode: com.aryan.reader.ReaderScreenOrientationMode = com.aryan.reader.ReaderScreenOrientationMode.FOLLOW_SYSTEM,
+    onCycleScreenOrientation: () -> Unit = onShowScreenOrientation,
 ) {
     com.aryan.reader.shared.ui.SharedReaderBarVisibility(
         visible = showStandardBars && !searchStateActive,
@@ -1027,6 +1069,15 @@ fun PdfBottomBar(
                             else -> Unit
                         }
                     }
+
+                // Fixed bottom-right slot (where read-aloud used to be): one tap cycles
+                // automatic -> fixed landscape -> fixed portrait.
+                com.aryan.reader.ReaderScreenOrientationToggleButton(
+                    mode = screenOrientationMode,
+                    onCycle = onCycleScreenOrientation,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    reduceMotion = com.aryan.reader.shared.ui.rememberReaderMotionPolicy().reduceMotion,
+                )
 
                 if (BuildConfig.FLAVOR != "oss" && showBubbleZoom) {
                     TooltipIconButton(

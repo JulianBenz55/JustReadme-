@@ -286,7 +286,7 @@ class EpubReaderBridgeAndControlsTest {
     @Test
     fun `reader toolbar reset defaults match first-run toolbar defaults`() {
         assertEquals(
-            setOf(ReaderTool.SCREEN_ORIENTATION.name, ReaderTool.BRIGHTNESS.name),
+            setOf(ReaderTool.BRIGHTNESS.name),
             defaultReaderHiddenTools()
         )
         assertEquals(ReaderTool.entries.toList(), defaultReaderToolOrder())
@@ -302,13 +302,13 @@ class EpubReaderBridgeAndControlsTest {
                 bottomToolIds = defaultReaderBottomTools().mapNotNullTo(mutableSetOf()) { ReaderTool.fromId(it)?.id },
             ),
             toolbarTools = epubToolbarTools,
-            availableTools = ReaderTool.entries.toSet(),
+            availableTools = ReaderTool.entries.toSet() - epubToolsRemovedFromToolbar,
         )
 
-        assertEquals(
-            SharedToolbarSection.HIDDEN,
-            defaultItems.single { it.toolId == ReaderTool.SCREEN_ORIENTATION.id }.section
-        )
+        // Dictionary, read-aloud and screen orientation are no longer toolbar tools.
+        assertTrue(defaultItems.none { it.toolId == ReaderTool.SCREEN_ORIENTATION.id })
+        assertTrue(defaultItems.none { it.toolId == ReaderTool.DICTIONARY.id })
+        assertTrue(defaultItems.none { it.toolId == ReaderTool.TTS_CONTROLS.id })
         assertEquals(
             SharedToolbarSection.HIDDEN,
             defaultItems.single { it.toolId == ReaderTool.BRIGHTNESS.id }.section
