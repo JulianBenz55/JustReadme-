@@ -118,6 +118,25 @@ internal fun File.isInsideOrSame(root: File): Boolean {
 
 fun Document.selectFirstTag(tag: String): Node? = getElementsByTagName(tag).item(0)
 fun Node.selectFirstChildTag(tag: String) = childElements.find { it.tagName == tag }
+
+/**
+ * First element in the document whose local name matches, whatever namespace prefix it carries.
+ * The OPF is parsed namespace-unaware, so a package written by a tool that serialises the OPF
+ * namespace under a generated prefix (Python's ElementTree writes `<ns0:package>`,
+ * `<ns0:metadata>`, ...) has no element literally called `metadata`, `manifest` or `spine`.
+ */
+fun Document.selectFirstTagByLocalName(localName: String): Node? {
+    val all = getElementsByTagName("*")
+    for (index in 0 until all.length) {
+        val node = all.item(index) as? Element ?: continue
+        if (node.tagName.substringAfter(':') == localName) return node
+    }
+    return null
+}
+
+/** First direct child whose local name matches, ignoring any namespace prefix. */
+fun Node.selectFirstChildTagByLocalName(localName: String): Element? =
+    childElements.find { it.tagName.substringAfter(':') == localName }
 fun Node.selectChildTag(tag: String) = childElements.filter { it.tagName == tag }
 
 /**

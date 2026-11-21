@@ -499,10 +499,10 @@ class EpubParser(private val context: Context) {
         }.toList()
         val metadata = resolveMobileEpubMetadata(
             sourceFileName = originalFilePathOrKey,
-            title = document.metadata.selectFirstChildTag("dc:title")?.textContent,
-            author = document.metadata.selectFirstChildTag("dc:creator")?.textContent,
-            language = document.metadata.selectFirstChildTag("dc:language")?.textContent,
-            description = document.metadata.selectFirstChildTag("dc:description")?.textContent,
+            title = (document.metadata.selectFirstChildTag("dc:title") ?: document.metadata.selectFirstChildTagByLocalName("title"))?.textContent,
+            author = (document.metadata.selectFirstChildTag("dc:creator") ?: document.metadata.selectFirstChildTagByLocalName("creator"))?.textContent,
+            language = (document.metadata.selectFirstChildTag("dc:language") ?: document.metadata.selectFirstChildTagByLocalName("language"))?.textContent,
+            description = (document.metadata.selectFirstChildTag("dc:description") ?: document.metadata.selectFirstChildTagByLocalName("description"))?.textContent,
             metaElements = metaElements
         )
         val metadataCoverId = getMetadataCoverId(document.metadata)
@@ -780,7 +780,7 @@ class EpubParser(private val context: Context) {
             ?: throw EpubParserException("META-INF/container.xml file missing")
 
         val rawOpfPath = listOf(
-            parseXMLFile(containerFile.data)?.selectFirstTag("rootfile")
+            parseXMLFile(containerFile.data)?.let { it.selectFirstTag("rootfile") ?: it.selectFirstTagByLocalName("rootfile") }
                 ?.getAttributeValue("full-path")?.decodedURL
         )
         val opfFilePath = resolveMobileEpubOpfPath(rawOpfPath)
@@ -793,12 +793,15 @@ class EpubParser(private val context: Context) {
             ?: throw EpubParserException(".opf file failed to parse data from '$opfFilePath'")
         val metadata = document.selectFirstTag("metadata")
             ?: document.selectFirstTag("opf:metadata")
+            ?: document.selectFirstTagByLocalName("metadata")
             ?: throw EpubParserException(".opf file metadata section missing in '$opfFilePath'")
         val manifest = document.selectFirstTag("manifest")
             ?: document.selectFirstTag("opf:manifest")
+            ?: document.selectFirstTagByLocalName("manifest")
             ?: throw EpubParserException(".opf file manifest section missing in '$opfFilePath'")
         val spine = document.selectFirstTag("spine")
             ?: document.selectFirstTag("opf:spine")
+            ?: document.selectFirstTagByLocalName("spine")
             ?: throw EpubParserException(".opf file spine section missing in '$opfFilePath'")
 
         return EpubDocument(metadata, manifest, spine, opfFilePath)
