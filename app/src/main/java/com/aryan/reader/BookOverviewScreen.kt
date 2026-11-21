@@ -134,9 +134,19 @@ private fun jsonArrayLength(json: String?): Int {
 private fun stripHtml(text: String): String =
     androidx.core.text.HtmlCompat.fromHtml(text, androidx.core.text.HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
 
+private const val MAX_STAGGERED_SECTION_INDEX = 4
+
 /** Fades and slides a section in a little later than the one before it. */
 @Composable
 private fun StaggerIn(index: Int, content: @Composable () -> Unit) {
+    // Only the sections visible when the page opens fade in one after another. Lazy list items
+    // lose their state when scrolled off screen, so animating the lower sections as well made them
+    // fade in again with a delay every time they came back into view, which felt like the page
+    // was slow to scroll.
+    if (index > MAX_STAGGERED_SECTION_INDEX) {
+        content()
+        return
+    }
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(60L * index)
@@ -182,7 +192,12 @@ internal fun BookOverviewScreen(
     val jumpOffsetPx = with(density) { -60.dp.roundToPx() }
 
     // Items before the quick-jump targets: cover, title, quick actions, sticky bar, progress, file.
-    val description = book.description?.takeIf { it.isNotBlank() }?.let { stripHtml(it) }?.takeIf { it.isNotBlank() }
+    // Parsing the HTML is expensive for long descriptions (translated books often carry a huge
+    // one) and this scope recomposes while scrolling, so do it once per description instead of on
+    // every recomposition.
+    val description = remember(book.description) {
+        book.description?.takeIf { it.isNotBlank() }?.let { stripHtml(it) }?.takeIf { it.isNotBlank() }
+    }
     val hasShelvesOrTags = shelfNames.isNotEmpty() || book.tags.isNotEmpty()
     val fileIndex = 5
     val reviewsIndex = 6 + (if (description != null) 1 else 0) + (if (hasShelvesOrTags) 1 else 0)
@@ -551,8 +566,13 @@ internal fun BookOverviewScreen(
                             StaggerIn(5) {
                                 Column {
                                     Text(stringResource(R.string.overview_description), style = MaterialTheme.typography.titleMedium)
+                                    // Never lay out more text than can be shown: measuring a huge
+                                    // description in full is what made this page stutter.
+                                    val shownDescription = remember(description, showFullDescription) {
+                                        description.take(if (showFullDescription) 20_000 else 800)
+                                    }
                                     Text(
-                                        description,
+                                        shownDescription,
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = if (showFullDescription) Int.MAX_VALUE else 6,
                                         overflow = TextOverflow.Ellipsis,
