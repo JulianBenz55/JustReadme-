@@ -54,4 +54,12 @@
     <string name="stats_duration_h">%1$d h</string>
     <string name="stats_duration_min">%1$d min</string>
     <string name="stats_duration_sec">%1$d sec</string>
+    <string name="stats_streak_record">Record: %1$d days</string>
+    <string name="stats_pages_per_hour_unit">Pages / hour</string>
+    <string name="stats_pace_detail">%1$s • %2$s / page</string>
+    <string name="stats_milestones_title">Milestones &amp; records</string>
+    <string name="stats_total_time_short">Total time</string>
+    <string name="stats_total_time_sub">Reading time overall</string>
+    <string name="stats_days_read_sub">Actively read</string>
+    <string name="stats_goal_quote">%1$d %% rate</string>
 </resources>

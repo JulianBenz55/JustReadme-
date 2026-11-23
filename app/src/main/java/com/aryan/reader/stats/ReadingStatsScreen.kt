@@ -223,8 +223,9 @@ fun ReadingStatsScreen(onBackClick: () -> Unit) {
             }
 
             GoalCard(snapshot, today, onEdit = { showGoalDialog = true })
-            PaceCard(snapshot, today)
-            RecordsCard(snapshot, today, locale)
+            StatsHeroRow(snapshot, today, locale)
+            PagesAndPaceCard(snapshot, today)
+            MilestonesCard(snapshot, today, locale)
             Spacer(Modifier.height(16.dp))
         }
     }
@@ -424,74 +425,6 @@ private fun GoalCard(snapshot: ReadingStatsSnapshot, today: LocalDate, onEdit: (
 }
 
 @Composable
-private fun PaceCard(snapshot: ReadingStatsSnapshot, today: LocalDate) {
-    val context = LocalContext.current
-    val day = snapshot.days[today] ?: ReadingDayStat()
-    val week = buildWindow(snapshot, StatsPeriod.WEEK, 0, today)
-    val weekPages = week.bars.sumOf { it.pages }
-    val weekSeconds = week.bars.sumOf { it.seconds }
-    val all = snapshot.days.values
-    val allPages = all.sumOf { it.pages }
-    val allSeconds = all.sumOf { it.seconds }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(stringResource(R.string.stats_pages_title), style = MaterialTheme.typography.titleMedium)
-            StatRow(stringResource(R.string.stats_today), paceLine(context, day.pages, day.seconds))
-            StatRow(stringResource(R.string.stats_week), paceLine(context, weekPages, weekSeconds))
-            StatRow(stringResource(R.string.stats_all_time), paceLine(context, allPages, allSeconds))
-            if (allPages >= 5 && allSeconds > 0) {
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                StatRow(stringResource(R.string.stats_speed), stringResource(R.string.stats_pages_per_hour, allPages * 3600.0 / allSeconds))
-            }
-        }
-    }
-}
-
-@Composable
-private fun RecordsCard(snapshot: ReadingStatsSnapshot, today: LocalDate, locale: Locale) {
-    val context = LocalContext.current
-    val r = remember(snapshot) { computeRecords(snapshot, today) }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(stringResource(R.string.stats_records_title), style = MaterialTheme.typography.titleMedium)
-            StatRow(stringResource(R.string.stats_streak), stringResource(R.string.stats_days_value, r.currentStreak))
-            StatRow(stringResource(R.string.stats_longest_streak), stringResource(R.string.stats_days_value, r.longestStreak))
-            r.bestDay?.let { (d, v) ->
-                val date = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).format(d)
-                StatRow(stringResource(R.string.stats_best_day), "${formatDuration(context, v.seconds)} · $date")
-            }
-            StatRow(stringResource(R.string.stats_total_time), formatDuration(context, r.totalSeconds))
-            StatRow(stringResource(R.string.stats_days_read), stringResource(R.string.stats_days_value, r.daysRead))
-            StatRow(stringResource(R.string.stats_goal_days), stringResource(R.string.stats_days_value, r.goalDays))
-        }
-    }
-}
-
-@Composable
-private fun StatRow(label: String, value: String) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        // Das Label behält seine natürliche Breite (nie senkrecht umbrechen), der Wert nimmt den Rest.
-        Text(
-            label,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.widthIn(min = 64.dp),
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-@Composable
 private fun GoalDialog(
     initial: ReadingGoal,
     notificationsEnabled: Boolean,
@@ -564,12 +497,6 @@ private fun metricText(context: android.content.Context, metric: StatsMetric, va
 
 private fun barValue(context: android.content.Context, seconds: Long, pages: Int, metric: StatsMetric): String =
     if (metric == StatsMetric.TIME) formatDuration(context, seconds) else context.getString(R.string.stats_goal_pages_value, pages)
-
-private fun paceLine(context: android.content.Context, pages: Int, seconds: Long): String {
-    if (pages <= 0) return context.getString(R.string.stats_goal_pages_value, 0)
-    val perPage = formatDuration(context, (seconds.toDouble() / pages).toLong())
-    return context.getString(R.string.stats_pace_line, pages, formatDuration(context, seconds), perPage)
-}
 
 private fun barLabel(b: StatsBar, period: StatsPeriod, locale: Locale): String = when (period) {
     StatsPeriod.WEEK, StatsPeriod.MONTH -> b.start.dayOfWeek.getDisplayName(TextStyle.FULL, locale)

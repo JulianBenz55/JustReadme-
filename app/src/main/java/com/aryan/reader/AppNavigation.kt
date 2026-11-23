@@ -487,6 +487,8 @@ fun AppNavigation(
                     val coverPath = uiState.recentFiles.find { it.uriString == uiState.selectedEpubUri.toString() }?.coverImagePath
                     val epubUri = uiState.selectedEpubUri
                     uiState.recentFiles.find { it.uriString == uiState.selectedEpubUri.toString() }?.bookId
+                    // Used only by the reading statistics' page counter; computed once per book.
+                    val readingTotalChars = remember(epubBook) { epubBook.chapters.sumOf { it.plainTextCharacterCount() } }
                     val customFonts by viewModel.customFonts.collectAsStateWithLifecycle()
 
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -506,7 +508,9 @@ fun AppNavigation(
                                 Timber.d("Auto-saving EPUB position: Locator $locator, Progress $progress%")
                                 epubUri?.let { uri ->
                                     ReadingSessionTracker.onEpubProgress(
-                                        uri.toString(), progress, epubBook.chapters.sumOf { it.plainTextCharacterCount() },
+                                        uiState.selectedBookId ?: uri.toString(),
+                                        progress,
+                                        readingTotalChars,
                                     )
                                     viewModel.saveEpubReadingPosition(uri, locator, cfiForWebView, progress)
                                 }

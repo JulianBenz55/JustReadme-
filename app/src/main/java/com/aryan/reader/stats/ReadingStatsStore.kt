@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.time.LocalDate
+import java.util.BitSet
 
 enum class ReadingGoalType { NONE, TIME, PAGES }
 
@@ -49,8 +50,95 @@ object ReadingStatsStore {
             if (prefs != null) return
             val p = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             prefs = p
+            pagesPrefs = context.applicationContext.getSharedPreferences(PAGES_PREFS, Context.MODE_PRIVATE)
             _state.value = load(p)
         }
+    }
+
+    // ---- Pages read per book -------------------------------------------------------------
+    //
+    // One bit per page for "ever read" and one for "read today", persisted per book. The daily
+    // count only grows for pages that are new that day, so turning back and forth over the same
+    // page, or re-reading a chapter after dinner, does not inflate the day.
+
+    private class BookPages(var total: Int, var ever: BitSet, var day: LocalDate?, var today: BitSet)
+
+    private const val PAGES_PREFS = "reading_pages_v1"
+    private val bookPages = HashMap<String, BookPages>()
+    private var pagesPrefs: android.content.SharedPreferences? = null
+
+    val pageLedger: PageReadLedger = object : PageReadLedger {
+        override fun markRead(bookKey: String, totalPages: Int, first: Int, last: Int, date: LocalDate): Int =
+            markPagesRead(bookKey, totalPages, first, last, date)
+    }
+
+    fun initPages(context: Context) {
+        synchronized(lock) {
+            if (pagesPrefs == null) {
+                pagesPrefs = context.applicationContext.getSharedPreferences(PAGES_PREFS, Context.MODE_PRIVATE)
+            }
+        }
+    }
+
+    /** Distinct pages of [bookKey] read on any day (0 for unknown books). */
+    fun pagesEverRead(bookKey: String): Int = synchronized(lock) { loadBookPages(bookKey)?.ever?.cardinality() ?: 0 }
+
+    internal fun markPagesRead(bookKey: String, totalPages: Int, first: Int, last: Int, date: LocalDate): Int {
+        if (totalPages <= 0 || last < first) return 0
+        synchronized(lock) {
+            var book = loadBookPages(bookKey)
+            // A different page count means a different pagination (another file or edition): the
+            // old bits no longer describe the same pages, so start over rather than mix them.
+            if (book == null || book.total != totalPages) {
+                book = BookPages(totalPages, BitSet(totalPages), null, BitSet(totalPages))
+                bookPages[bookKey] = book
+            }
+            if (book.day != date) {
+                book.day = date
+                book.today = BitSet(totalPages)
+            }
+            var fresh = 0
+            for (page in first.coerceAtLeast(0)..last.coerceAtMost(totalPages - 1)) {
+                book.ever.set(page)
+                if (!book.today.get(page)) {
+                    book.today.set(page)
+                    fresh++
+                }
+            }
+            persistBookPages(bookKey, book)
+            return fresh
+        }
+    }
+
+    private fun loadBookPages(bookKey: String): BookPages? {
+        bookPages[bookKey]?.let { return it }
+        val raw = pagesPrefs?.getString(bookKey, null) ?: return null
+        val parts = raw.split('|')
+        if (parts.size != 4) return null
+        val total = parts[0].toIntOrNull() ?: return null
+        val loaded = BookPages(
+            total = total,
+            ever = hexToBits(parts[2]),
+            day = runCatching { LocalDate.parse(parts[1]) }.getOrNull(),
+            today = hexToBits(parts[3]),
+        )
+        bookPages[bookKey] = loaded
+        return loaded
+    }
+
+    private fun persistBookPages(bookKey: String, book: BookPages) {
+        pagesPrefs?.edit()?.putString(
+            bookKey, "${book.total}|${book.day ?: ""}|${bitsToHex(book.ever)}|${bitsToHex(book.today)}",
+        )?.apply()
+    }
+
+    private fun bitsToHex(bits: BitSet): String =
+        bits.toByteArray().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
+    private fun hexToBits(hex: String): BitSet {
+        if (hex.length % 2 != 0) return BitSet()
+        val bytes = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+        return BitSet.valueOf(bytes)
     }
 
     fun addSeconds(date: LocalDate, seconds: Long) {

@@ -1125,6 +1125,19 @@ private fun PdfViewerScreenContent(
     val currentIsDocumentReady by rememberUpdatedState(isDocumentReady)
     val currentInitialScrollDone by rememberUpdatedState(initialScrollDone)
     val currentPdfUri by rememberUpdatedState(effectivePdfUri)
+
+    // Tell the reading statistics which page is on screen the moment it changes. The save above
+    // only runs now and then (pause, exit), far too rarely to count pages from.
+    LaunchedEffect(currentPage, totalDisplayPages, isDocumentReady, initialScrollDone, ownsPaneGlobals) {
+        if (!isDocumentReady || !initialScrollDone || !ownsPaneGlobals || totalDisplayPages <= 0) {
+            return@LaunchedEffect
+        }
+        com.aryan.reader.stats.ReadingSessionTracker.onPdfPage(
+            key = currentBookId ?: effectivePdfUri.toString(),
+            page = currentPage,
+            totalPages = totalDisplayPages,
+        )
+    }
     val currentVisibleAllAnnotations by rememberUpdatedState(visibleAllAnnotations)
     val currentRichTextController by rememberUpdatedState(richTextController)
 

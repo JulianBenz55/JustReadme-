@@ -8414,7 +8414,6 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     suspend fun savePdfReadingPosition(uri: Uri, page: Int, totalPages: Int) {
-        com.aryan.reader.stats.ReadingSessionTracker.onPdfPage(uri.toString(), page)
         val progress = com.aryan.reader.shared.pdfReadingProgressPercentage(page, totalPages)
         Timber.tag("PdfPositionDebug").i(
             "ViewModel: Save request triggered | Page: $page | Total: $totalPages | Progress: $progress | URI: ${uri.lastPathSegment}"

@@ -2733,6 +2733,49 @@ fun EpubReaderHost(
                 }
             }
     }
+    // Tell the reading statistics which part of the book is on screen. The position autosave
+    // below waits 1.5 s and is skipped while the pager settles, so it cannot be the source for
+    // counting pages: this reports every page (or spread) the moment it is shown, and the page
+    // counter decides from how long it stays whether it was read or only flipped past.
+    LaunchedEffect(
+        paginatedPagerState.currentPage,
+        paginator,
+        currentRenderMode,
+        isPagerInitialized,
+        paginatedPagerState.pageCount,
+        totalBookLengthChars,
+        navigation.isPaginatedReconfigurationRestoring
+    ) {
+        if (currentRenderMode != RenderMode.PAGINATED || !isPagerInitialized ||
+            navigation.isPaginatedReconfigurationRestoring || totalBookLengthChars <= 0L
+        ) return@LaunchedEffect
+        val bookPaginator = paginator as? BookPaginator ?: return@LaunchedEffect
+        val visiblePages = currentSpreadBookPages()
+        if (visiblePages.isEmpty()) return@LaunchedEffect
+
+        fun fractionAtPageStart(bookPage: Int): Double? {
+            val chapter = bookPaginator.findChapterIndexForPage(bookPage) ?: return null
+            val chapterStartPage = bookPaginator.chapterStartPageIndices[chapter] ?: 0
+            val completedChars = chapters.take(chapter).sumOf { it.plainTextCharacterCount().toLong() }
+            val charsInChapter = bookPaginator.getCharactersScrolledInChapter(chapter, bookPage - chapterStartPage)
+            return (completedChars + charsInChapter).toDouble() / totalBookLengthChars
+        }
+
+        val startFraction = fractionAtPageStart(visiblePages.first()) ?: return@LaunchedEffect
+        val lastVisiblePage = visiblePages.last()
+        val endFraction = if (lastVisiblePage + 1 < bookPaginator.totalPageCount) {
+            fractionAtPageStart(lastVisiblePage + 1) ?: startFraction
+        } else {
+            1.0
+        }
+        com.aryan.reader.stats.ReadingSessionTracker.onEpubViewport(
+            key = readerCacheBookId,
+            startFraction = startFraction,
+            endFraction = endFraction,
+            totalChars = totalBookLengthChars.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+        )
+    }
+
     LaunchedEffect(
         paginatedPagerState.currentPage,
         paginator,

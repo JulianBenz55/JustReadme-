@@ -40,14 +40,20 @@ object ReadingStatsDeepLink {
 }
 
 /**
- * Counts reading time while a reader screen is resumed, and pages as the reader reports positions.
- * Time stops counting after [IDLE_LIMIT_MS] without any page movement (phone left open on a table).
+ * Counts reading time while a reader screen is resumed, and pages as the reader reports what is
+ * on screen. Time stops counting after [IDLE_LIMIT_MS] without any page movement (phone left open
+ * on a table). Pages are counted by [PageReadTracker]: a page is read once it stayed on screen
+ * long enough, which is independent of how often a reader happens to save its position.
  */
 object ReadingSessionTracker {
     private const val TICK_MS = 10_000L
     private const val IDLE_LIMIT_MS = 10 * 60_000L
-    private const val MAX_FORWARD_STEP = 4
-    private const val CHARS_PER_PAGE = 1800.0
+
+    /** Paginated EPUB pages are reported directly; progress events in the same window are duplicates. */
+    private const val VIEWPORT_PRIORITY_MS = 8_000L
+
+    /** Scroll positions of web pages are counted as one page per screen height; far more than any book. */
+    private const val WEB_PAGE_SPACE = 100_000
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Any()
@@ -56,24 +62,15 @@ object ReadingSessionTracker {
     private var lastTickMs = 0L
     private var lastActivityMs = 0L
     private var remainderMs = 0L
+    private var lastEpubViewportMs = 0L
 
-    private var pageKey: String? = null
-    private var pdfHighWater = Int.MIN_VALUE
-    private var epubHighWater = -1f
-    private var pageCarry = 0.0
-    private var lastPageEventMs = 0L
-    private const val SECONDS_PER_PAGE_FASTEST = 8.0
-
-    /**
-     * Wie viele Seiten seit der letzten Meldung noch als echtes Lesen gelten.
-     * Wird nur selten gemeldet (z.B. beim Kapitelwechsel), ist ein großer Sprung nach langer Zeit normal,
-     * ein großer Sprung nach wenigen Sekunden dagegen Navigation (Slider, Inhaltsverzeichnis).
-     */
-    private fun plausiblePages(base: Double): Double {
-        val now = System.currentTimeMillis()
-        val elapsedSec = ((now - lastPageEventMs) / 1000.0).coerceAtLeast(0.0)
-        lastPageEventMs = now
-        return maxOf(base, elapsedSec / SECONDS_PER_PAGE_FASTEST)
+    private val pageTracker = PageReadTracker(
+        ledger = ReadingStatsStore.pageLedger,
+        clock = System::currentTimeMillis,
+        today = LocalDate::now,
+    ) { date, pages ->
+        ReadingStatsStore.addPages(date, pages)
+        evaluateGoalLocked()
     }
 
     fun start(context: Context) {
@@ -85,10 +82,14 @@ object ReadingSessionTracker {
             val now = System.currentTimeMillis()
             lastTickMs = now
             lastActivityMs = now
+            pageTracker.resume()
             tickJob = scope.launch {
                 while (true) {
                     delay(TICK_MS)
-                    synchronized(lock) { tickLocked() }
+                    synchronized(lock) {
+                        tickLocked()
+                        pageTracker.checkpoint()
+                    }
                 }
             }
         }
@@ -98,65 +99,62 @@ object ReadingSessionTracker {
         synchronized(lock) {
             if (tickJob == null) return
             tickLocked()
+            pageTracker.pause()
             tickJob?.cancel()
             tickJob = null
-            pageKey = null
         }
     }
 
-    fun onPdfPage(key: String, page: Int) {
+    /** PDF/comic reader: [page] is the 0-based page on screen of [totalPages]. */
+    fun onPdfPage(key: String, page: Int, totalPages: Int) {
         synchronized(lock) {
             if (tickJob == null) return
             touchLocked()
-            if (pageKey != key) { pageKey = key; pdfHighWater = page; lastPageEventMs = System.currentTimeMillis(); return }
-            val delta = page - pdfHighWater
-            val limit = plausiblePages(MAX_FORWARD_STEP.toDouble())
-            when {
-                delta >= 1 && delta <= limit -> { pdfHighWater = page; addPagesLocked(delta.toDouble()) }
-                delta > limit -> pdfHighWater = page      // slider jump: navigation, not reading
-                delta < -MAX_FORWARD_STEP -> pdfHighWater = page     // deliberate jump back
-            }
-        }
-    }
-
-    /** [progressPercent] is 0..100; pages are estimated from the book's text length. */
-    fun onEpubProgress(key: String, progressPercent: Float, totalChars: Int) {
-        synchronized(lock) {
-            if (tickJob == null) return
-            touchLocked()
-            val p = progressPercent.coerceIn(0f, 100f)
-            if (pageKey != key) { pageKey = key; epubHighWater = p; lastPageEventMs = System.currentTimeMillis(); return }
-            val pagesInBook = totalChars / CHARS_PER_PAGE
-            val deltaPages = (p - epubHighWater) / 100.0 * pagesInBook
-            val limit = plausiblePages(MAX_FORWARD_STEP * 2.0)
-            when {
-                deltaPages > 0 && deltaPages <= limit -> { epubHighWater = p; addPagesLocked(deltaPages) }
-                deltaPages > limit -> epubHighWater = p
-                deltaPages < -MAX_FORWARD_STEP * 2 -> epubHighWater = p
-            }
+            pageTracker.onViewport(key, totalPages, page, page)
         }
     }
 
     /**
-     * Webbrowser-Ansicht: eine Bildschirmhöhe Scrollen zählt als eine Seite.
-     * [scrollY] und [viewportHeight] in Pixeln; [key] ist die aktuelle URL.
+     * EPUB reader, any mode: the text between [startFraction] and [endFraction] (0..1 of the whole
+     * book) is on screen. A double-page spread simply reports the range of both pages.
      */
-    private var webHighWater = 0f
+    fun onEpubViewport(key: String, startFraction: Double, endFraction: Double, totalChars: Int) {
+        if (totalChars <= 0) return
+        synchronized(lock) {
+            if (tickJob == null) return
+            touchLocked()
+            lastEpubViewportMs = System.currentTimeMillis()
+            val pages = PageReadTracker.virtualPageCount(totalChars)
+            val range = PageReadTracker.virtualRange(startFraction, endFraction, pages)
+            pageTracker.onViewport(key, pages, range.first, range.last)
+        }
+    }
 
+    /**
+     * Fallback for EPUB modes that only report a progress position ([progressPercent] 0..100):
+     * the page that position falls on counts as the visible one.
+     */
+    fun onEpubProgress(key: String, progressPercent: Float, totalChars: Int) {
+        if (totalChars <= 0) return
+        synchronized(lock) {
+            if (tickJob == null) return
+            touchLocked()
+            if (System.currentTimeMillis() - lastEpubViewportMs < VIEWPORT_PRIORITY_MS) return
+            val pages = PageReadTracker.virtualPageCount(totalChars)
+            val fraction = progressPercent.coerceIn(0f, 100f) / 100.0
+            val range = PageReadTracker.virtualRange(fraction, fraction, pages)
+            pageTracker.onViewport(key, pages, range.first, range.last)
+        }
+    }
+
+    /** Web view: one screen height of scrolling is one page. [key] is the current URL. */
     fun onWebScroll(key: String, scrollY: Int, viewportHeight: Int) {
         if (viewportHeight <= 0) return
         synchronized(lock) {
             if (tickJob == null) return
             touchLocked()
-            val screens = scrollY.coerceAtLeast(0) / viewportHeight.toFloat()
-            if (pageKey != key) { pageKey = key; webHighWater = screens; lastPageEventMs = System.currentTimeMillis(); return }
-            val delta = screens - webHighWater
-            val limit = plausiblePages(MAX_FORWARD_STEP * 2.0)
-            when {
-                delta > 0f && delta <= limit -> { webHighWater = screens; addPagesLocked(delta.toDouble()) }
-                delta > limit -> webHighWater = screens   // Sprung ans Seitenende
-                delta < 0f -> webHighWater = screens                     // zurückscrollen zählt nicht
-            }
+            val screen = (scrollY.coerceAtLeast(0) / viewportHeight).coerceIn(0, WEB_PAGE_SPACE - 1)
+            pageTracker.onViewport(key, WEB_PAGE_SPACE, screen, screen)
         }
     }
 
@@ -165,16 +163,6 @@ object ReadingSessionTracker {
         // Flush the time up to now first (it may still count as active), then mark activity.
         tickLocked()
         lastActivityMs = now
-    }
-
-    private fun addPagesLocked(pages: Double) {
-        pageCarry += pages
-        val whole = pageCarry.toInt()
-        if (whole > 0) {
-            pageCarry -= whole
-            ReadingStatsStore.addPages(LocalDate.now(), whole)
-            evaluateGoalLocked()
-        }
     }
 
     private fun tickLocked() {
