@@ -115,6 +115,18 @@ object ReadingSessionTracker {
     }
 
     /**
+     * Paginated EPUB: record the paginator's actual visible page range.
+     * Unlike virtual pages, these numbers match the pages shown by the reader.
+     */
+    fun onEpubPages(key: String, firstPage: Int, lastPage: Int, totalPages: Int) {
+        synchronized(lock) {
+            if (tickJob == null) return
+            touchLocked()
+            pageTracker.onViewport(key, totalPages, firstPage, lastPage)
+        }
+    }
+
+    /**
      * EPUB reader, any mode: the text between [startFraction] and [endFraction] (0..1 of the whole
      * book) is on screen. A double-page spread simply reports the range of both pages.
      */

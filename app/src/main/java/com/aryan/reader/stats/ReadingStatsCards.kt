@@ -92,7 +92,9 @@ internal fun PagesAndPaceCard(snapshot: ReadingStatsSnapshot, today: LocalDate) 
     val week = remember(snapshot, today) { buildWindow(snapshot, StatsPeriod.WEEK, 0, today) }
     val weekPages = week.bars.sumOf { it.pages }
     val weekSeconds = week.bars.sumOf { it.seconds }
-    val allPages = snapshot.days.values.sumOf { it.pages }
+    // Lifetime pages are unique across the full reading history, not the sum
+    // of daily page visits (which can count a reread on another day again).
+    val allPages = ReadingStatsStore.pagesEverReadAll()
     val allSeconds = snapshot.days.values.sumOf { it.seconds }
 
     StatsSectionCard(title = stringResource(R.string.stats_pages_title)) {
@@ -113,7 +115,7 @@ internal fun PagesAndPaceCard(snapshot: ReadingStatsSnapshot, today: LocalDate) 
         StatProgressRow(
             label = stringResource(R.string.stats_all_time),
             primaryValue = stringResource(R.string.stats_goal_pages_value, allPages),
-            secondaryValue = paceDetail(context, allPages, allSeconds),
+            secondaryValue = paceDetail(context, snapshot.days.values.sumOf { it.pages }, allSeconds),
             icon = Icons.Default.Book,
         )
     }

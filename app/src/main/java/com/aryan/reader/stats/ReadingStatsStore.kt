@@ -83,6 +83,19 @@ object ReadingStatsStore {
     /** Distinct pages of [bookKey] read on any day (0 for unknown books). */
     fun pagesEverRead(bookKey: String): Int = synchronized(lock) { loadBookPages(bookKey)?.ever?.cardinality() ?: 0 }
 
+    /**
+     * Sum of distinct pages ever read across all tracked books.
+     *
+     * Daily totals intentionally count a page again when it is read on a
+     * different day. They are useful for daily goals, but must not be summed
+     * for a lifetime unique-page total.
+     */
+    fun pagesEverReadAll(): Int = synchronized(lock) {
+        val keys = pagesPrefs?.all?.keys.orEmpty()
+        keys.forEach { loadBookPages(it) }
+        bookPages.values.sumOf { it.ever.cardinality() }
+    }
+
     internal fun markPagesRead(bookKey: String, totalPages: Int, first: Int, last: Int, date: LocalDate): Int {
         if (totalPages <= 0 || last < first) return 0
         synchronized(lock) {

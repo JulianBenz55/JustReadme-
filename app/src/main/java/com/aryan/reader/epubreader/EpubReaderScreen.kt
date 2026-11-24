@@ -2833,26 +2833,11 @@ fun EpubReaderHost(
         val visiblePages = currentSpreadBookPages()
         if (visiblePages.isEmpty()) return@LaunchedEffect
 
-        fun fractionAtPageStart(bookPage: Int): Double? {
-            val chapter = bookPaginator.findChapterIndexForPage(bookPage) ?: return null
-            val chapterStartPage = bookPaginator.chapterStartPageIndices[chapter] ?: 0
-            val completedChars = chapters.take(chapter).sumOf { it.plainTextCharacterCount().toLong() }
-            val charsInChapter = bookPaginator.getCharactersScrolledInChapter(chapter, bookPage - chapterStartPage)
-            return (completedChars + charsInChapter).toDouble() / totalBookLengthChars
-        }
-
-        val startFraction = fractionAtPageStart(visiblePages.first()) ?: return@LaunchedEffect
-        val lastVisiblePage = visiblePages.last()
-        val endFraction = if (lastVisiblePage + 1 < bookPaginator.totalPageCount) {
-            fractionAtPageStart(lastVisiblePage + 1) ?: startFraction
-        } else {
-            1.0
-        }
-        com.aryan.reader.stats.ReadingSessionTracker.onEpubViewport(
+        com.aryan.reader.stats.ReadingSessionTracker.onEpubPages(
             key = readerCacheBookId,
-            startFraction = startFraction,
-            endFraction = endFraction,
-            totalChars = statsTotalChars,
+            firstPage = visiblePages.first(),
+            lastPage = visiblePages.last(),
+            totalPages = bookPaginator.totalPageCount,
         )
     }
 
