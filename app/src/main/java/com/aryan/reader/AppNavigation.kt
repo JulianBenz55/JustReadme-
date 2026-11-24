@@ -81,7 +81,6 @@ import com.aryan.reader.shared.samePdfDocument
 import com.aryan.reader.shared.ui.SharedMobileAppDestination
 import com.aryan.reader.shared.reader.plainTextCharacterCount
 import com.aryan.reader.stats.ReadingSessionEffect
-import com.aryan.reader.stats.ReadingSessionTracker
 import com.aryan.reader.stats.ReadingStatsDeepLink
 import com.aryan.reader.stats.ReadingStatsScreen
 import com.aryan.reader.shared.SharedReaderTtsMiniBarState
@@ -487,8 +486,6 @@ fun AppNavigation(
                     val coverPath = uiState.recentFiles.find { it.uriString == uiState.selectedEpubUri.toString() }?.coverImagePath
                     val epubUri = uiState.selectedEpubUri
                     uiState.recentFiles.find { it.uriString == uiState.selectedEpubUri.toString() }?.bookId
-                    // Used only by the reading statistics' page counter; computed once per book.
-                    val readingTotalChars = remember(epubBook) { epubBook.chapters.sumOf { it.plainTextCharacterCount() } }
                     val customFonts by viewModel.customFonts.collectAsStateWithLifecycle()
 
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -507,11 +504,6 @@ fun AppNavigation(
                             onSavePosition = { locator, cfiForWebView, progress ->
                                 Timber.d("Auto-saving EPUB position: Locator $locator, Progress $progress%")
                                 epubUri?.let { uri ->
-                                    ReadingSessionTracker.onEpubProgress(
-                                        uiState.selectedBookId ?: uri.toString(),
-                                        progress,
-                                        readingTotalChars,
-                                    )
                                     viewModel.saveEpubReadingPosition(uri, locator, cfiForWebView, progress)
                                 }
                             },

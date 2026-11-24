@@ -50,7 +50,7 @@ object ReadingSessionTracker {
     private const val IDLE_LIMIT_MS = 10 * 60_000L
 
     /** Paginated EPUB pages are reported directly; progress events in the same window are duplicates. */
-    private const val VIEWPORT_PRIORITY_MS = 8_000L
+    private const val VIEWPORT_PRIORITY_MS = 5 * 60_000L
 
     /** Scroll positions of web pages are counted as one page per screen height; far more than any book. */
     private const val WEB_PAGE_SPACE = 100_000

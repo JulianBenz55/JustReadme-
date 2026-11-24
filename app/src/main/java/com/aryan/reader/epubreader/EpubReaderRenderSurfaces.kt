@@ -621,6 +621,11 @@ internal fun EpubReaderRenderSurfaces(
                                         location.locatorForPersistence()?.let { lastKnownLocator = it }
                                     },
                                     onTap = {
+                                        // Same behaviour as the WebView reader: a tap pauses / resumes
+                                        // auto-scroll and toggles the bars.
+                                        if (isAutoScrollModeActive) {
+                                            isAutoScrollPlaying = !isAutoScrollPlaying
+                                        }
                                         focusManager.clearFocus()
                                         if (prefs.volumeScrollEnabled && !searchState.isSearchActive) {
                                             containerFocusRequester.requestFocus()
@@ -1037,7 +1042,16 @@ internal fun EpubReaderRenderSurfaces(
                                                     }
                                                 }
                                             },
-                                            onTap = {
+                                            onTap = tap@{
+                                                // A finger that was just dragging must never count as a tap:
+                                                // it would toggle auto-scroll and the bars by accident.
+                                                // (Real taps are confirmed >= 300 ms after the touch ends.)
+                                                if (isAutoScrollModeActive &&
+                                                    System.currentTimeMillis() - lastScrollHideTime < 250
+                                                ) {
+                                                    Timber.d("Ignoring tap right after a scroll gesture while auto-scroll is active.")
+                                                    return@tap
+                                                }
                                                 if (isAutoScrollModeActive) {
                                                     isAutoScrollPlaying = !isAutoScrollPlaying
                                                     Timber.d("Auto-scroll toggled via tap: $isAutoScrollPlaying")
@@ -1064,6 +1078,9 @@ internal fun EpubReaderRenderSurfaces(
                                                 }
                                             },
                                             onPotentialScroll = {
+                                                if (isAutoScrollModeActive) {
+                                                    lastScrollHideTime = System.currentTimeMillis()
+                                                }
                                                 if (showBars || navigation.showFormatAdjustmentBars) {
                                                     showBars = false
                                                     navigation.showFormatAdjustmentBars = false

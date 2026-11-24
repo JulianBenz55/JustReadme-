@@ -726,12 +726,21 @@ fun EpubReaderHost(
     val lastPersistedCfiState = remember { mutableStateOf(initialCfi) }
     var lastPersistedCfi by lastPersistedCfiState
     var lastPersistedCfiChapter by remember { mutableIntStateOf(initialLocator?.chapterIndex ?: -1) }
+    // Total text length for the reading statistics' virtual pages. Must match the value used by the
+    // viewport reports further down, otherwise the page ledger of the book would be reset.
+    val statsTotalChars = remember(epubBook) {
+        epubBook.chapters.sumOf { it.plainTextCharacterCount().toLong() }.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
     val emitReadingPosition by rememberUpdatedState<(Locator, String?, Float) -> Unit>({ locator, cfi, progress ->
         lastPersistedLocator = locator
         if (!cfi.isNullOrBlank()) {
             lastPersistedCfi = cfi
             lastPersistedCfiChapter = locator.chapterIndex
         }
+        // Fallback for page counting. It uses the same book key as the viewport reports below (the
+        // old call in AppNavigation used a different key whenever there was no stable book id, which
+        // split one book into two page ledgers).
+        com.aryan.reader.stats.ReadingSessionTracker.onEpubProgress(readerCacheBookId, progress, statsTotalChars)
         onSavePosition(locator, cfi, progress)
     })
 
@@ -1137,17 +1146,44 @@ fun EpubReaderHost(
         }
     }
 
+    // While auto-scroll is playing, the bars stay hidden. Scrolling, flinging or
+    // other incidental events must not bring them back. A tap that pauses
+    // auto-scroll flips isAutoScrollPlaying to false in the same step it shows
+    // the bars, so pausing still reveals them.
+    LaunchedEffect(showBars, isAutoScrollModeActive, isAutoScrollPlaying) {
+        if (isAutoScrollModeActive && isAutoScrollPlaying && showBars &&
+            !searchState.isSearchActive && !isPageSliderVisible
+        ) {
+            showBars = false
+            navigation.showFormatAdjustmentBars = false
+        }
+    }
+
     LaunchedEffect(isNativeVerticalMode, isAutoScrollModeActive, isAutoScrollPlaying, autoScroll.autoScrollSpeed, isAutoScrollTempPaused) {
         if (!isNativeVerticalMode) return@LaunchedEffect
+        // Frame-synchronised and time-based: the distance per frame follows the real
+        // frame time, so speed is steady and not tied to delay(16) + overhead.
+        var lastFrameNanos = 0L
         while (isActive && isAutoScrollModeActive && isAutoScrollPlaying && !isAutoScrollTempPaused) {
+            val frameNanos = androidx.compose.runtime.withFrameNanos { it }
+            val dtSeconds = if (lastFrameNanos == 0L) 0f
+            else ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+            lastFrameNanos = frameNanos
+
             if (nativeVerticalLocation?.isAtEnd == true) {
                 isAutoScrollPlaying = false
                 break
             }
-            verticalScrollRequests.nativeVerticalScrollDeltaRequestId += 1L
-            verticalScrollRequests.nativeVerticalScrollDeltaAnimated = false
-            verticalScrollRequests.nativeVerticalScrollDeltaRequest = autoScroll.autoScrollSpeed.coerceAtLeast(0f) * 0.5f
-            delay(16L)
+            // Speed is "px per frame at 60 fps" (as before: speed * 0.5).
+            val pxPerSecond = autoScroll.autoScrollSpeed.coerceAtLeast(0f) * 0.5f * 60f
+            // Keep a not-yet-consumed request so no distance is lost between frames.
+            val carried = verticalScrollRequests.nativeVerticalScrollDeltaRequest ?: 0f
+            val delta = carried + pxPerSecond * dtSeconds
+            if (delta > 0f) {
+                verticalScrollRequests.nativeVerticalScrollDeltaRequestId += 1L
+                verticalScrollRequests.nativeVerticalScrollDeltaAnimated = false
+                verticalScrollRequests.nativeVerticalScrollDeltaRequest = delta
+            }
         }
     }
 
@@ -2733,6 +2769,50 @@ fun EpubReaderHost(
                 }
             }
     }
+    // Scroll modes (WebView vertical and native vertical) also report what is on screen
+    // continuously. Before, they only fed the page counter through the debounced position save, so
+    // pages passed by during auto-scroll or long reading were often never reported.
+    val chapterStartChars = remember(chapters) {
+        LongArray(chapters.size + 1).also { acc ->
+            for (i in chapters.indices) acc[i + 1] = acc[i] + chapters[i].plainTextCharacterCount()
+        }
+    }
+    LaunchedEffect(
+        currentRenderMode,
+        isNativeVerticalMode,
+        currentChapterIndex,
+        currentScrollYPosition,
+        currentScrollHeightValue,
+        currentClientHeightValue,
+        nativeVerticalProgress,
+        isVerticalRestoreSettled,
+        totalBookLengthChars,
+    ) {
+        if (currentRenderMode == RenderMode.PAGINATED || totalBookLengthChars <= 0L) return@LaunchedEffect
+        val totalChars = statsTotalChars
+        if (totalChars <= 0) return@LaunchedEffect
+        if (isNativeVerticalMode) {
+            val fraction = (nativeVerticalProgress / 100.0).coerceIn(0.0, 1.0)
+            com.aryan.reader.stats.ReadingSessionTracker.onEpubViewport(readerCacheBookId, fraction, fraction, totalChars)
+            return@LaunchedEffect
+        }
+        // Wait until the saved position is restored: the chapter start seen before that is not reading.
+        if (!isVerticalRestoreSettled || currentScrollHeightValue <= 0) return@LaunchedEffect
+        val chapter = currentChapterIndex.coerceIn(0, chapters.size - 1)
+        val chapterStart = chapterStartChars[chapter].toDouble()
+        val chapterLength = (chapterStartChars[chapter + 1] - chapterStartChars[chapter]).toDouble()
+        val scrollHeight = currentScrollHeightValue.toDouble()
+        val startInChapter = (currentScrollYPosition / scrollHeight).coerceIn(0.0, 1.0)
+        val endInChapter = ((currentScrollYPosition + currentClientHeightValue) / scrollHeight).coerceIn(startInChapter, 1.0)
+        val total = totalBookLengthChars.toDouble()
+        com.aryan.reader.stats.ReadingSessionTracker.onEpubViewport(
+            key = readerCacheBookId,
+            startFraction = (chapterStart + startInChapter * chapterLength) / total,
+            endFraction = (chapterStart + endInChapter * chapterLength) / total,
+            totalChars = totalChars,
+        )
+    }
+
     // Tell the reading statistics which part of the book is on screen. The position autosave
     // below waits 1.5 s and is skipped while the pager settles, so it cannot be the source for
     // counting pages: this reports every page (or spread) the moment it is shown, and the page
@@ -2772,7 +2852,7 @@ fun EpubReaderHost(
             key = readerCacheBookId,
             startFraction = startFraction,
             endFraction = endFraction,
-            totalChars = totalBookLengthChars.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+            totalChars = statsTotalChars,
         )
     }
 
@@ -5813,7 +5893,9 @@ fun EpubReaderHost(
                     onStartAutoScroll = {
                         isAutoScrollModeActive = true
                         isAutoScrollPlaying = true
-                        showBars = !isMusicianMode
+                        // Starting auto-scroll hides the top/bottom bars right away.
+                        showBars = false
+                        navigation.showFormatAdjustmentBars = false
                     },
                     searchFocusRequester = searchFocusRequester,
                     modifier = Modifier.align(Alignment.TopCenter),

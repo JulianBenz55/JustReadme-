@@ -4623,29 +4623,58 @@
 })();
 
 (function () {
-    const TAG_AUTO_SCROLL = "AutoScrollDiagnosis";
+    // Frame-rate independent auto-scroll.
+    //
+    // `speed` arrives from Kotlin as "pixels per frame at 60 fps" (see
+    // updateAutoScrollJs), so the velocity is speed * 60 px/s. The scroll
+    // position is tracked as a float and applied with scrollTo(), so slow speeds
+    // (well below 1 css px per frame) advance a little on every frame instead of
+    // jumping 1 px every few frames, which is what used to look like stutter.
+    const FRAME_REFERENCE_HZ = 60;
+    const MAX_FRAME_DT_MS = 50;      // a hitch must never turn into a visible jump
+    const EXTERNAL_SCROLL_EPSILON = 1.5; // css px; larger = the user/fling moved the page
+    const EXTERNAL_SCROLL_SETTLE_MS = 120; // wait for a fling to finish before resuming
+    const END_STUCK_FRAMES = 45;
+
+    let touching = false;
+    let externalUntil = 0;
+
+    function maxScrollY() {
+        const doc = document.documentElement;
+        return Math.max(0, Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0) - window.innerHeight);
+    }
+
+    window.addEventListener("touchstart", function () { touching = true; }, { passive: true, capture: true });
+    const touchDone = function () {
+        touching = false;
+        externalUntil = performance.now() + EXTERNAL_SCROLL_SETTLE_MS;
+    };
+    window.addEventListener("touchend", touchDone, { passive: true, capture: true });
+    window.addEventListener("touchcancel", touchDone, { passive: true, capture: true });
 
     window.autoScroll = {
         active: false,
         speed: 1.0,
-        accumulator: 0.0,
+        position: 0,
+        lastSetY: 0,
+        lastFrameTime: 0,
+        stuckFrames: 0,
         animationId: null,
 
         start: function (speed) {
-            console.log(`$ {
-                        TAG_AUTO_SCROLL
-                    }
-
-                    : Starting auto-scroll. Speed: $ {
-                        speed
-                    }
-
-                    `);
+            if (typeof speed === "number" && !isNaN(speed)) this.speed = speed;
+            // Idempotent: Kotlin calls start() on every state change. Restarting a
+            // running loop would reset its state and cause a hitch.
+            if (this.active && this.animationId) return;
             this.active = true;
-            this.speed = speed || this.speed;
-            this.accumulator = 0.0;
-            if (this.animationId) cancelAnimationFrame(this.animationId);
-            this.loop();
+            this.position = window.scrollY;
+            this.lastSetY = window.scrollY;
+            this.lastFrameTime = 0;
+            this.stuckFrames = 0;
+            externalUntil = 0;
+            const container = document.getElementById("content-container") || document.body;
+            if (container) container.style.transform = "none"; // clear leftovers of the old implementation
+            this.animationId = requestAnimationFrame(this.loop.bind(this));
         },
 
         stop: function () {
@@ -4654,58 +4683,49 @@
                 cancelAnimationFrame(this.animationId);
                 this.animationId = null;
             }
-
-            const container = document.getElementById("content-container") || document.body;
-            if (container) {
-                container.style.transform = "none";
-                window.scrollBy(0, 0);
-            }
         },
 
         updateSpeed: function (newSpeed) {
-            console.log(`$ {
-                        TAG_AUTO_SCROLL
-                    }
-
-                    : Speed updated to $ {
-                        newSpeed
-                    }
-
-                    `);
-            this.speed = newSpeed;
+            if (typeof newSpeed === "number" && !isNaN(newSpeed)) this.speed = newSpeed;
         },
 
-        loop: function () {
+        loop: function (now) {
+            this.animationId = null;
             if (!this.active) return;
 
-            this.accumulator += this.speed;
+            const dtMs = this.lastFrameTime ? Math.min(now - this.lastFrameTime, MAX_FRAME_DT_MS) : 0;
+            this.lastFrameTime = now;
 
-            const totalPixelsToScroll = Math.floor(this.accumulator);
+            const currentY = window.scrollY;
 
-            if (totalPixelsToScroll >= 1) {
-                const prevScrollY = window.scrollY;
-                window.scrollBy(0, totalPixelsToScroll);
+            // Someone else moved the page (finger drag, fling, link jump): follow it
+            // instead of fighting it, and resume once it has settled.
+            if (touching || Math.abs(currentY - this.lastSetY) > EXTERNAL_SCROLL_EPSILON) {
+                this.position = currentY;
+                this.lastSetY = currentY;
+                if (!touching) externalUntil = now + EXTERNAL_SCROLL_SETTLE_MS;
+                this.stuckFrames = 0;
+            } else if (now >= externalUntil && dtMs > 0) {
+                const velocity = Math.max(0, this.speed) * FRAME_REFERENCE_HZ; // px per second
+                const limit = maxScrollY();
+                this.position = Math.min(this.position + (velocity * dtMs) / 1000, limit);
+                window.scrollTo({ top: this.position, left: 0, behavior: "instant" });
+                this.lastSetY = this.position;
 
-                this.accumulator -= totalPixelsToScroll;
+                const atBottom = this.position >= limit - 1 && window.scrollY >= limit - 2;
+                // Layout can briefly refuse to scroll (images/fonts loading). Only treat
+                // "no movement" as the end when we really are near the bottom.
+                const noMovement = velocity > 0 && Math.abs(window.scrollY - currentY) < 0.01;
+                this.stuckFrames = noMovement ? this.stuckFrames + 1 : 0;
+                const stuckAtEnd = this.stuckFrames >= END_STUCK_FRAMES && limit - window.scrollY < 100;
 
-                const scrollY = window.scrollY;
-                const docHeight = document.documentElement.scrollHeight;
-                const innerH = window.innerHeight;
-                const isAtBottom = scrollY + innerH >= docHeight - 3;
-                const isStuck = totalPixelsToScroll > 0 && scrollY === prevScrollY && prevScrollY > 0;
-
-                if (isAtBottom || isStuck) {
+                if (atBottom || stuckAtEnd) {
                     this.stop();
                     if (window.AutoScrollBridge && window.AutoScrollBridge.onChapterEnd) {
                         window.AutoScrollBridge.onChapterEnd();
                     }
                     return;
                 }
-            }
-
-            const container = document.getElementById("content-container") || document.body;
-            if (container) {
-                container.style.transform = `translate3d(0, -${this.accumulator}px, 0)`;
             }
 
             this.animationId = requestAnimationFrame(this.loop.bind(this));
