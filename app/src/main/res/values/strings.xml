@@ -2906,4 +2906,21 @@
     <string name="tooltip_orientation_cycle_desc">Tap to switch between automatic, landscape and portrait</string>
     <string name="menu_tts_start">Start text-to-speech</string>
     <string name="menu_tts_stop">Stop text-to-speech</string>
+    <string name="drawer_tags_custom">Own tags</string>
+    <string name="drawer_tags_show_all">Show all (%1$d)</string>
+    <string name="tracking_settings_title">Tracking settings</string>
+    <string name="tracking_settings_entry_summary">Automatic Reading and Finished tags, re-reading, sidebar</string>
+    <string name="tracking_section_automatic">Automatic tags</string>
+    <string name="tracking_automatic_hint">Turning a tag off only stops future automatic changes. Existing assignments are kept, and you can still change them by hand.</string>
+    <string name="tracking_reading_summary">Added once you have really read into the book, not just opened it</string>
+    <string name="tracking_finished_summary">Added when you reach the end; replaces Reading</string>
+    <string name="tracking_manual_hint">Favorites, Reference and To Read are managed by you. They are never added automatically.</string>
+    <string name="tracking_section_flow">Status flow</string>
+    <string name="tracking_remove_to_read">Remove To Read when reading starts</string>
+    <string name="tracking_remove_to_read_summary">To Read → Reading → Finished</string>
+    <string name="tracking_section_reread">Re-reading a finished book</string>
+    <string name="tracking_reread_keep">Keep Finished</string>
+    <string name="tracking_reread_restart">Remove Finished and mark as Reading again</string>
+    <string name="tracking_reread_hint">Earlier reading passes are always kept; a new pass is recorded instead.</string>
+    <string name="tracking_section_visibility">Show in sidebar</string>
 </resources>

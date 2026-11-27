@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
@@ -152,6 +153,7 @@ private fun MobileUnifiedLibraryDrawerLabel.readerString(): String = when (this)
     MobileUnifiedLibraryDrawerLabel.HOME -> readerString("unified_library_home", "Home")
     MobileUnifiedLibraryDrawerLabel.AUDIOBOOKS -> readerString("listen_title", "Listen")
     MobileUnifiedLibraryDrawerLabel.SHELVES -> readerString("tab_shelves", "Shelves")
+    MobileUnifiedLibraryDrawerLabel.TAGS -> readerString("section_tags", "Tags")
     MobileUnifiedLibraryDrawerLabel.FOLDERS -> readerString("tab_folders", "Folders")
     MobileUnifiedLibraryDrawerLabel.CATALOGS -> readerString("tab_catalogs", "Catalogs")
     MobileUnifiedLibraryDrawerLabel.THEME -> readerString("app_theme_title", "App Theme")
@@ -164,6 +166,7 @@ private fun MobileUnifiedLibraryDrawerDestination.icon(): ImageVector = when (th
     MobileUnifiedLibraryDrawerDestination.HOME -> Icons.Default.Home
     MobileUnifiedLibraryDrawerDestination.AUDIOBOOKS -> Icons.AutoMirrored.Filled.VolumeUp
     MobileUnifiedLibraryDrawerDestination.SHELVES -> Icons.AutoMirrored.Filled.LibraryBooks
+    MobileUnifiedLibraryDrawerDestination.TAGS -> Icons.Default.Tag
     MobileUnifiedLibraryDrawerDestination.FOLDERS -> Icons.Default.Folder
     MobileUnifiedLibraryDrawerDestination.CATALOGS -> Icons.Default.Cloud
 }
@@ -447,6 +450,7 @@ fun SharedMobileUnifiedLibraryScreen(
                         ?: when (section) {
                             MobileUnifiedLibrarySection.HOME -> null
                             MobileUnifiedLibrarySection.SHELVES -> readerString("tab_shelves", "Shelves")
+                            MobileUnifiedLibrarySection.TAGS -> readerString("section_tags", "Tags")
                             MobileUnifiedLibrarySection.FOLDERS -> readerString("tab_folders", "Folders")
                             MobileUnifiedLibrarySection.CATALOGS -> readerString("tab_catalogs", "Catalogs")
                             MobileUnifiedLibrarySection.AUDIOBOOKS -> readerString("listen_title", "Listen")
@@ -681,6 +685,8 @@ fun SharedMobileUnifiedLibraryScreen(
                     onRemoveFolder = onRemoveFolder,
                     modifier = Modifier.fillMaxSize().padding(padding),
                 )
+                // Tags are only implemented in the Android app screen for now.
+                MobileUnifiedLibrarySection.TAGS -> Unit
                 MobileUnifiedLibrarySection.CATALOGS -> catalogContent(Modifier.fillMaxSize().padding(padding))
                 MobileUnifiedLibrarySection.AUDIOBOOKS -> SharedMobileAudiobooksSection(
                     audiobooks = audiobooks,

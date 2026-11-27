@@ -93,6 +93,7 @@ class RecentFilesRepository(
     private val pdfTextRepository by lazy { PdfTextRepository(context) }
     private val bookCacheDao by lazy { BookCacheDatabase.getDatabase(context).bookCacheDao() }
     private val authRepository by lazy { AuthRepository(context) }
+    private val readingTracker by lazy { ReadingTracker(database, TagTrackingSettingsStore(context)) }
 
     init {
         if (!coverCacheDir.exists()) {
@@ -798,6 +799,7 @@ class RecentFilesRepository(
                 progress = progress,
                 timestamp = currentTime
             )
+            readingTracker.onProgress(item.bookId, progress, currentTime)
             val updated = recentFileDao.getFileByBookId(item.bookId)
             cloudFolderLogD(
                 "event=room_position_write_end operation=$operation correlation=$correlation " +
@@ -922,6 +924,7 @@ class RecentFilesRepository(
                     "page=$page progress=$progress",
             )
             recentFileDao.updatePdfReadingPosition(item.bookId, page, progress, currentTime)
+            readingTracker.onProgress(item.bookId, progress, currentTime)
             val updated = recentFileDao.getFileByBookId(item.bookId)
             cloudFolderLogD(
                 "event=room_position_write_end operation=$operation correlation=$correlation " +

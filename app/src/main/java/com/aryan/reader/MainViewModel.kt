@@ -73,6 +73,9 @@ import com.aryan.reader.data.LocalSyncUtils
 import com.aryan.reader.data.PurchaseEntity
 import com.aryan.reader.data.PERSISTED_URI_GRANT_FLAGS
 import com.aryan.reader.data.RecentFileItem
+import com.aryan.reader.data.TAG_TYPE_SYSTEM
+import com.aryan.reader.data.TagTrackingSettings
+import com.aryan.reader.data.TagTrackingSettingsStore
 import com.aryan.reader.data.RecentFilesRepository
 import com.aryan.reader.data.RemoteConfigRepository
 import com.aryan.reader.data.ShelfMetadata
@@ -724,7 +727,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             ),
             mainScreenStartPage = prefs.getInt(KEY_MAIN_SCREEN_START_PAGE, 0).coerceIn(0, 2),
             unifiedLibrarySection = prefs.getInt(KEY_UNIFIED_LIBRARY_SECTION, 0)
-                .coerceIn(0, 4),
+                .coerceIn(0, com.aryan.reader.shared.ui.MobileUnifiedLibrarySection.MAX_PERSISTED_VALUE),
             unifiedLibraryListView = prefs.getBoolean(KEY_UNIFIED_LIBRARY_LIST_VIEW, false),
             pdfSplitWorkspace = restoredPdfSplitWorkspace,
             currentUser = authRepository.getSignedInUser(),
@@ -1435,12 +1438,30 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     private fun buildDefaultTags(): List<TagEntity> {
         val now = System.currentTimeMillis()
         return listOf(
-            TagEntity(id = "default_to_read", name = "To Read", color = 0xFF64B5F6.toInt(), createdAt = now),
-            TagEntity(id = "default_reading", name = "Reading", color = 0xFF81C784.toInt(), createdAt = now + 1),
-            TagEntity(id = "default_finished", name = "Finished", color = 0xFFFFB74D.toInt(), createdAt = now + 2),
-            TagEntity(id = "default_favorites", name = "Favorites", color = 0xFFF06292.toInt(), createdAt = now + 3),
-            TagEntity(id = "default_reference", name = "Reference", color = 0xFF9575CD.toInt(), createdAt = now + 4)
+            TagEntity(id = "default_to_read", name = "To Read", color = 0xFF64B5F6.toInt(), createdAt = now, type = TAG_TYPE_SYSTEM, sortOrder = 4),
+            TagEntity(id = "default_reading", name = "Reading", color = 0xFF81C784.toInt(), createdAt = now + 1, type = TAG_TYPE_SYSTEM, trackingEnabled = true, sortOrder = 2),
+            TagEntity(id = "default_finished", name = "Finished", color = 0xFFFFB74D.toInt(), createdAt = now + 2, type = TAG_TYPE_SYSTEM, trackingEnabled = true, sortOrder = 1),
+            TagEntity(id = "default_favorites", name = "Favorites", color = 0xFFF06292.toInt(), createdAt = now + 3, type = TAG_TYPE_SYSTEM, sortOrder = 0),
+            TagEntity(id = "default_reference", name = "Reference", color = 0xFF9575CD.toInt(), createdAt = now + 4, type = TAG_TYPE_SYSTEM, sortOrder = 3)
         )
+    }
+
+    private val tagTrackingSettingsStore = TagTrackingSettingsStore(appContext)
+
+    /** Global options of the automatic Reading / Finished tracking. */
+    val tagTrackingSettings: StateFlow<TagTrackingSettings> = tagTrackingSettingsStore.observe()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, tagTrackingSettingsStore.read())
+
+    fun updateTagTrackingSettings(settings: TagTrackingSettings) {
+        tagTrackingSettingsStore.write(settings)
+    }
+
+    fun setTagTrackingEnabled(tagId: String, enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { libraryStore.setTagTrackingEnabled(tagId, enabled) }
+    }
+
+    fun setTagVisibleInNavigation(tagId: String, visible: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { libraryStore.setTagVisibleInNavigation(tagId, visible) }
     }
 
     private var googleFontsCache: List<String> = emptyList()
@@ -8959,7 +8980,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setUnifiedLibrarySection(section: Int) {
-        val sanitizedSection = section.coerceIn(0, 4)
+        val sanitizedSection = section.coerceIn(0, com.aryan.reader.shared.ui.MobileUnifiedLibrarySection.MAX_PERSISTED_VALUE)
         if (_internalState.value.unifiedLibrarySection == sanitizedSection) return
         _internalState.update { it.copy(unifiedLibrarySection = sanitizedSection) }
         persistLibraryLandingState()

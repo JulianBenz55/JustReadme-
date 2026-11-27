@@ -36,6 +36,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -57,6 +59,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
@@ -189,6 +192,9 @@ fun UnifiedLibraryScreen(
         else -> null
     }
     var selectedShelfId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedTagId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showTrackingSettings by rememberSaveable { mutableStateOf(false) }
+    val trackingSettings by viewModel.tagTrackingSettings.collectAsStateWithLifecycle()
     var filter by rememberSaveable { mutableStateOf(UnifiedLibraryFilter.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
     // Filtering + sorting is O(n log n) on Main; debounce keystrokes so each
@@ -429,14 +435,30 @@ fun UnifiedLibraryScreen(
     }
     val allShelves = remember(uiState.shelves, virtualShelves) { uiState.shelves + virtualShelves.all }
 
+    // A tag is shown like a shelf of its books; counts are derived so they follow every library change.
+    val tagCounts = remember(uiState.rawLibraryFiles) { tagBookCounts(uiState.rawLibraryFiles) }
+    val selectedTag = selectedTagId?.let { id -> uiState.allTags.find { it.id == id } }
+    val tagShelf = remember(selectedTag, uiState.rawLibraryFiles) {
+        selectedTag?.let { tag ->
+            val tagBooks = uiState.rawLibraryFiles.filter { book -> book.tags.any { it.id == tag.id } }
+            Shelf(id = "tag_${tag.id}", name = tag.name, type = ShelfType.TAG, books = tagBooks, directBooks = tagBooks)
+        }
+    }
+    val inTagDetail = section == UnifiedLibrarySection.TAGS && tagShelf != null
+    val inTrackingSettings = section == UnifiedLibrarySection.TAGS && showTrackingSettings && tagShelf == null
+
     fun navigateShelfUp() {
         val parentId = selectedShelfId?.let { id -> allShelves.find { it.id == id } }?.parentShelfId
         selectedShelfId = parentId
     }
 
-    BackHandler(enabled = selectedItems.isNotEmpty() || selectedShelfId != null) {
+    BackHandler(enabled = selectedItems.isNotEmpty() || selectedShelfId != null || inTagDetail || inTrackingSettings) {
         if (selectedItems.isNotEmpty()) {
             viewModel.clearContextualAction()
+        } else if (inTrackingSettings) {
+            showTrackingSettings = false
+        } else if (inTagDetail) {
+            selectedTagId = null
         } else {
             navigateShelfUp()
         }
@@ -510,8 +532,22 @@ fun UnifiedLibraryScreen(
         drawerContent = {
             UnifiedLibraryDrawer(
                 currentSection = section,
+                tags = uiState.allTags,
+                tagCounts = tagCounts,
+                selectedTagId = selectedTagId,
+                onTagSelected = { tagId ->
+                    selectedShelfId = null
+                    selectedTagId = tagId
+                    showTrackingSettings = false
+                    scope.launch {
+                        drawerState.close()
+                        viewModel.setUnifiedLibrarySection(UnifiedLibrarySection.TAGS.persistedValue)
+                    }
+                },
                 onSectionSelected = { destination ->
                     selectedShelfId = null
+                    selectedTagId = null
+                    showTrackingSettings = false
                     scope.launch {
                         drawerState.close()
                         viewModel.setUnifiedLibrarySection(destination.persistedValue)
@@ -672,9 +708,9 @@ fun UnifiedLibraryScreen(
                 } else {
                     UnifiedLibraryTopBar(
                         section = section,
-                        selectedShelf = selectedShelfId?.let { id -> allShelves.find { it.id == id } },
+                        selectedShelf = if (inTagDetail) tagShelf else selectedShelfId?.let { id -> allShelves.find { it.id == id } },
                         onMenuClick = { scope.launch { drawerState.open() } },
-                        onBackFromShelf = ::navigateShelfUp,
+                        onBackFromShelf = { if (inTagDetail) selectedTagId = null else navigateShelfUp() },
                         uiState = uiState,
                         onAccountClick = { scope.launch { accountDrawerState.open() } },
                         searchQuery = if (section == UnifiedLibrarySection.HOME) query else null,
@@ -824,6 +860,50 @@ fun UnifiedLibraryScreen(
                                 viewModel.setSortOrder(SortOrder.MANUAL)
                             },
                             )
+                    }
+                }
+                UnifiedLibrarySection.TAGS -> {
+                    val shelfOfTag = tagShelf
+                    if (shelfOfTag == null && showTrackingSettings) {
+                        TagTrackingSettingsScreen(
+                            modifier = Modifier.padding(padding),
+                            tags = uiState.allTags,
+                            settings = trackingSettings,
+                            onBack = { showTrackingSettings = false },
+                            onTrackingChanged = viewModel::setTagTrackingEnabled,
+                            onVisibilityChanged = viewModel::setTagVisibleInNavigation,
+                            onSettingsChanged = viewModel::updateTagTrackingSettings,
+                        )
+                    } else if (shelfOfTag == null) {
+                        UnifiedTagsSection(
+                            modifier = Modifier.padding(padding),
+                            tags = uiState.allTags,
+                            counts = tagCounts,
+                            onTagSelected = { selectedTagId = it },
+                            onOpenTrackingSettings = { showTrackingSettings = true },
+                        )
+                    } else {
+                        UnifiedShelvesSection(
+                            modifier = Modifier.padding(padding),
+                            shelves = listOf(shelfOfTag),
+                            selectedShelfId = shelfOfTag.id,
+                            selectedBookIds = uiState.contextualActionItems.mapTo(mutableSetOf()) { it.bookId },
+                            downloadingBookIds = uiState.downloadingBookIds,
+                            usePdfFileNameAsDisplayName = uiState.usePdfFileNameAsDisplayName,
+                            widthSizeClass = widthSizeClass,
+                            onShelfSelected = {},
+                            onBreadcrumbNavigate = { selectedTagId = null },
+                            onRenameShelf = {},
+                            onDeleteShelf = {},
+                            onAddBooks = {},
+                            onBookClick = viewModel::onRecentFileClicked,
+                            onBookLongClick = viewModel::onRecentItemLongPress,
+                            onBookTitleClick = { item ->
+                                if (selectedItems.isNotEmpty()) viewModel.onRecentFileClicked(item)
+                                else overviewBookId = item.bookId
+                            },
+                            sortOrder = uiState.sortOrder,
+                        )
                     }
                 }
                 UnifiedLibrarySection.FOLDERS -> UnifiedFoldersSection(
@@ -1274,6 +1354,10 @@ fun UnifiedLibraryScreen(
 @Composable
 private fun UnifiedLibraryDrawer(
     currentSection: UnifiedLibrarySection,
+    tags: List<com.aryan.reader.data.TagEntity>,
+    tagCounts: Map<String, Int>,
+    selectedTagId: String?,
+    onTagSelected: (String) -> Unit,
     onSectionSelected: (UnifiedLibrarySection) -> Unit,
     onThemeClick: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -1281,6 +1365,7 @@ private fun UnifiedLibraryDrawer(
     onAiSettingsClick: () -> Unit,
     onReadingStatsClick: () -> Unit,
 ) {
+    val drawerScrollState = rememberScrollState()
     ModalDrawerSheet(modifier = Modifier.fillMaxHeight()) {
         Column(modifier = Modifier.fillMaxHeight()) {
             Surface(
@@ -1307,6 +1392,8 @@ private fun UnifiedLibraryDrawer(
                 }
             }
 
+            // Everything below the header scrolls, so no entry (settings, stats, many tags) is ever cut off.
+            Column(modifier = Modifier.weight(1f).verticalScroll(drawerScrollState)) {
             Text(
                 stringResource(R.string.library_title),
                 style = MaterialTheme.typography.labelLarge,
@@ -1336,6 +1423,20 @@ private fun UnifiedLibraryDrawer(
                         currentSection == destination.section,
                         { Icon(Icons.AutoMirrored.Filled.LibraryBooks, null) },
                     ) { onSectionSelected(destination.section) }
+                    MobileUnifiedLibraryDrawerDestination.TAGS -> {
+                        UnifiedLibraryDestination(
+                            stringResource(R.string.section_tags),
+                            currentSection == destination.section && selectedTagId == null,
+                            { Icon(Icons.Default.Tag, null) },
+                        ) { onSectionSelected(destination.section) }
+                        UnifiedLibraryDrawerTagEntries(
+                            tags = tags,
+                            counts = tagCounts,
+                            selectedTagId = if (currentSection == destination.section) selectedTagId else null,
+                            onTagSelected = onTagSelected,
+                            onShowAll = { onSectionSelected(destination.section) },
+                        )
+                    }
                     MobileUnifiedLibraryDrawerDestination.FOLDERS -> UnifiedLibraryDestination(
                         stringResource(R.string.tab_folders),
                         currentSection == destination.section,
@@ -1392,7 +1493,8 @@ private fun UnifiedLibraryDrawer(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
             )
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
 }

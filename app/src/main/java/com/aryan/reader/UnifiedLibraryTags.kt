@@ -81,7 +81,7 @@ internal fun UnifiedLibraryDrawerTagEntries(
     onShowAll: () -> Unit,
 ) {
     val system = remember(tags) {
-        tags.filter { it.isSystemTag() }
+        tags.filter { it.isSystemTag() && it.visibleInNavigation }
             .sortedBy { tag -> SYSTEM_TAG_ORDER.indexOf(tag.id).takeIf { it >= 0 } ?: Int.MAX_VALUE }
     }
     val custom = remember(tags) { tags.filterNot { it.isSystemTag() } }
@@ -140,6 +140,7 @@ internal fun UnifiedTagsSection(
     tags: List<TagEntity>,
     counts: Map<String, Int>,
     onTagSelected: (String) -> Unit,
+    onOpenTrackingSettings: () -> Unit,
 ) {
     if (tags.isEmpty()) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -161,6 +162,28 @@ internal fun UnifiedTagsSection(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item(key = "tracking_settings_entry") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable(onClick = onOpenTrackingSettings)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.tracking_settings_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(R.string.tracking_settings_entry_summary),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         items(ordered, key = { it.id }) { tag ->
             val count = counts[tag.id] ?: 0
             Row(

@@ -91,6 +91,14 @@ internal class AndroidLibraryMutationStore(
         withContext(Dispatchers.IO) { tagDao.deleteTag(tagId) }
     }
 
+    suspend fun setTagTrackingEnabled(tagId: String, enabled: Boolean) {
+        withContext(Dispatchers.IO) { tagDao.setTrackingEnabled(tagId, enabled) }
+    }
+
+    suspend fun setTagVisibleInNavigation(tagId: String, visible: Boolean) {
+        withContext(Dispatchers.IO) { tagDao.setVisibleInNavigation(tagId, visible) }
+    }
+
     suspend fun seedTagsIfEmpty(tags: List<TagEntity>) = withContext(Dispatchers.IO) {
         if (tags.isNotEmpty() && tagDao.getTagCount() == 0) tagDao.insertTags(tags)
     }

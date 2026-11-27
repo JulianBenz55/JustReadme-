@@ -206,6 +206,7 @@ internal fun UnifiedLibraryTopBar(
         UnifiedLibrarySection.HOME -> null
         UnifiedLibrarySection.AUDIOBOOKS -> stringResource(R.string.listen_title)
         UnifiedLibrarySection.SHELVES -> stringResource(R.string.tab_shelves)
+        UnifiedLibrarySection.TAGS -> stringResource(R.string.section_tags)
         UnifiedLibrarySection.FOLDERS -> stringResource(R.string.tab_folders)
         UnifiedLibrarySection.CATALOGS -> stringResource(R.string.tab_catalogs)
     }

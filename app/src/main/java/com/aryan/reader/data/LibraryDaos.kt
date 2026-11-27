@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -77,9 +78,45 @@ interface TagDao {
     @Query("DELETE FROM tags WHERE id = :tagId")
     suspend fun deleteTag(tagId: String)
 
+    @Query("SELECT * FROM tags WHERE id = :tagId")
+    suspend fun getTagById(tagId: String): TagEntity?
+
+    @Query("SELECT COUNT(*) FROM book_tag_cross_ref WHERE bookId = :bookId AND tagId = :tagId")
+    suspend fun countBookTag(bookId: String, tagId: String): Int
+
+    @Query("UPDATE tags SET trackingEnabled = :enabled WHERE id = :tagId")
+    suspend fun setTrackingEnabled(tagId: String, enabled: Boolean)
+
+    @Query("UPDATE tags SET visibleInNavigation = :visible WHERE id = :tagId")
+    suspend fun setVisibleInNavigation(tagId: String, visible: Boolean)
+
     @Query("DELETE FROM book_tag_cross_ref")
     suspend fun clearAllBookTagCrossRefs()
 
     @Query("DELETE FROM tags")
     suspend fun clearAll()
+}
+
+@Dao
+interface ReadingTrackingDao {
+    @Insert
+    suspend fun insertSession(session: ReadingSessionEntity): Long
+
+    @Update
+    suspend fun updateSession(session: ReadingSessionEntity)
+
+    @Query("SELECT * FROM reading_sessions WHERE bookId = :bookId ORDER BY startedAt DESC, id DESC LIMIT 1")
+    suspend fun getLatestSession(bookId: String): ReadingSessionEntity?
+
+    @Query("SELECT COUNT(*) FROM reading_sessions WHERE bookId = :bookId AND finishedAt IS NOT NULL")
+    suspend fun countFinishedSessions(bookId: String): Int
+
+    @Query("SELECT * FROM reading_sessions WHERE bookId = :bookId ORDER BY startedAt DESC, id DESC")
+    fun observeSessions(bookId: String): Flow<List<ReadingSessionEntity>>
+
+    @Insert
+    suspend fun insertEvent(event: TagTrackingEventEntity)
+
+    @Query("SELECT * FROM tag_tracking_events ORDER BY createdAt DESC, id DESC LIMIT :limit")
+    fun observeRecentEvents(limit: Int): Flow<List<TagTrackingEventEntity>>
 }

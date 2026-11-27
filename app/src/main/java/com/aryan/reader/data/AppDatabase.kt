@@ -37,6 +37,8 @@ import com.aryan.reader.audiobook.BookTtsListeningProgressEntity
         BookShelfCrossRef::class,
         TagEntity::class,
         BookTagCrossRef::class,
+        ReadingSessionEntity::class,
+        TagTrackingEventEntity::class,
         AudiobookEntity::class,
         BookTtsListeningProgressEntity::class,
         PendingFolderAnnotationExportEntity::class,
@@ -52,7 +54,7 @@ import com.aryan.reader.audiobook.BookTtsListeningProgressEntity
         CloudFolderMetadataOutboxEntity::class,
         CloudBookDeleteIntentEntity::class,
     ],
-    version = 39,
+    version = 40,
     exportSchema = false
 )
 @TypeConverters(FileTypeConverter::class)
@@ -61,6 +63,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun customFontDao(): CustomFontDao
     abstract fun shelfDao(): ShelfDao
     abstract fun tagDao(): TagDao
+    abstract fun readingTrackingDao(): ReadingTrackingDao
     abstract fun audiobookDao(): AudiobookDao
     abstract fun bookTtsListeningProgressDao(): BookTtsListeningProgressDao
     abstract fun pendingFolderAnnotationExportDao(): PendingFolderAnnotationExportDao
@@ -984,6 +987,67 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Vellum smart tags: richer tag metadata, per-book reading sessions and an audit log of
+         * automatic tag changes. Existing `default_*` tags become SYSTEM tags; Reading and
+         * Finished start with automatic tracking enabled.
+         */
+        val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `description` TEXT")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `icon` TEXT")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `type` TEXT NOT NULL DEFAULT 'CUSTOM'")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `trackingEnabled` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `visibleInNavigation` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    "UPDATE `tags` SET `type` = 'SYSTEM' WHERE `id` IN " +
+                        "('default_favorites', 'default_finished', 'default_reading', 'default_reference', 'default_to_read')"
+                )
+                db.execSQL("UPDATE `tags` SET `trackingEnabled` = 1 WHERE `id` IN ('default_reading', 'default_finished')")
+                db.execSQL("UPDATE `tags` SET `sortOrder` = 0 WHERE `id` = 'default_favorites'")
+                db.execSQL("UPDATE `tags` SET `sortOrder` = 1 WHERE `id` = 'default_finished'")
+                db.execSQL("UPDATE `tags` SET `sortOrder` = 2 WHERE `id` = 'default_reading'")
+                db.execSQL("UPDATE `tags` SET `sortOrder` = 3 WHERE `id` = 'default_reference'")
+                db.execSQL("UPDATE `tags` SET `sortOrder` = 4 WHERE `id` = 'default_to_read'")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `reading_sessions` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `bookId` TEXT NOT NULL,
+                        `startedAt` INTEGER NOT NULL,
+                        `finishedAt` INTEGER,
+                        `startProgress` REAL NOT NULL,
+                        `endProgress` REAL NOT NULL,
+                        `maxProgress` REAL NOT NULL,
+                        `lastUpdatedAt` INTEGER NOT NULL,
+                        `readingAwardedAt` INTEGER,
+                        `endReachedAt` INTEGER,
+                        FOREIGN KEY(`bookId`) REFERENCES `recent_files`(`bookId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_reading_sessions_bookId` ON `reading_sessions` (`bookId`)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `tag_tracking_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `bookId` TEXT NOT NULL,
+                        `tagId` TEXT NOT NULL,
+                        `action` TEXT NOT NULL,
+                        `reason` TEXT NOT NULL,
+                        `progress` REAL NOT NULL,
+                        `sessionId` INTEGER,
+                        `createdAt` INTEGER NOT NULL,
+                        FOREIGN KEY(`bookId`) REFERENCES `recent_files`(`bookId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tag_tracking_events_bookId` ON `tag_tracking_events` (`bookId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_tag_tracking_events_createdAt` ON `tag_tracking_events` (`createdAt`)")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 CloudFolderPrivateStateMigrator.importLegacyState(context.applicationContext)
@@ -1002,7 +1066,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28,
                         MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32,
                         MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
-                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39
+                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40
                     )
                     .fallbackToDestructiveMigration(false)
                     .build()

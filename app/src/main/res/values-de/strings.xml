@@ -2126,4 +2126,21 @@
     <string name="tooltip_orientation_cycle_desc">Tippen, um zwischen automatisch, horizontal und vertikal zu wechseln</string>
     <string name="menu_tts_start">Text-zu-Sprache starten</string>
     <string name="menu_tts_stop">Text-zu-Sprache stoppen</string>
+    <string name="drawer_tags_custom">Eigene Schlagwörter</string>
+    <string name="drawer_tags_show_all">Alle anzeigen (%1$d)</string>
+    <string name="tracking_settings_title">Tracking-Einstellungen</string>
+    <string name="tracking_settings_entry_summary">Automatische Reading- und Finished-Schlagwörter, erneutes Lesen, Seitenleiste</string>
+    <string name="tracking_section_automatic">Automatische Schlagwörter</string>
+    <string name="tracking_automatic_hint">Ausschalten stoppt nur künftige automatische Änderungen. Vorhandene Zuordnungen bleiben erhalten und lassen sich weiter von Hand ändern.</string>
+    <string name="tracking_reading_summary">Wird vergeben, sobald du wirklich ins Buch hineingelesen hast, nicht schon beim Öffnen</string>
+    <string name="tracking_finished_summary">Wird vergeben, wenn du das Ende erreichst; ersetzt Reading</string>
+    <string name="tracking_manual_hint">Favorites, Reference und To Read verwaltest du selbst. Sie werden nie automatisch vergeben.</string>
+    <string name="tracking_section_flow">Statusablauf</string>
+    <string name="tracking_remove_to_read">To Read entfernen, sobald das Lesen beginnt</string>
+    <string name="tracking_remove_to_read_summary">To Read → Reading → Finished</string>
+    <string name="tracking_section_reread">Abgeschlossenes Buch erneut lesen</string>
+    <string name="tracking_reread_keep">Finished beibehalten</string>
+    <string name="tracking_reread_restart">Finished entfernen und wieder Reading vergeben</string>
+    <string name="tracking_reread_hint">Frühere Lesedurchgänge bleiben immer erhalten; stattdessen wird ein neuer Durchgang angelegt.</string>
+    <string name="tracking_section_visibility">In der Seitenleiste anzeigen</string>
 </resources>
