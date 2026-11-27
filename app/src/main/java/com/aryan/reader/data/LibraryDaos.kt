@@ -90,6 +90,23 @@ interface TagDao {
     @Query("UPDATE tags SET visibleInNavigation = :visible WHERE id = :tagId")
     suspend fun setVisibleInNavigation(tagId: String, visible: Boolean)
 
+    /**
+     * Changes the editable fields of an own tag in place. Never use [insertTag] for this: REPLACE deletes
+     * the row first, and the CASCADE on book_tag_cross_ref would drop every book assignment.
+     * System tags are excluded by the type check.
+     */
+    @Query(
+        "UPDATE tags SET name = :name, description = :description, icon = :icon, color = :color " +
+            "WHERE id = :tagId AND type = 'CUSTOM'"
+    )
+    suspend fun updateCustomTagDetails(tagId: String, name: String, description: String?, icon: String?, color: Int?): Int
+
+    @Query("UPDATE tags SET sortOrder = :sortOrder WHERE id = :tagId AND type = 'CUSTOM'")
+    suspend fun updateCustomTagSortOrder(tagId: String, sortOrder: Int)
+
+    @Query("SELECT MAX(sortOrder) FROM tags WHERE type = 'CUSTOM'")
+    suspend fun getMaxCustomSortOrder(): Int?
+
     @Query("DELETE FROM book_tag_cross_ref")
     suspend fun clearAllBookTagCrossRefs()
 

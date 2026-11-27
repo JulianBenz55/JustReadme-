@@ -1137,12 +1137,15 @@ fun TagSelectionBottomSheet(
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f)
                         )
-                        IconButton(onClick = { tagPendingDeletion = tag }) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = stringResource(R.string.menu_delete_tag),
-                                tint = MaterialTheme.colorScheme.error
-                            )
+                        // The five built-in tags cannot be deleted.
+                        if (!tag.id.startsWith("default_")) {
+                            IconButton(onClick = { tagPendingDeletion = tag }) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = stringResource(R.string.menu_delete_tag),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }

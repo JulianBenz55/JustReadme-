@@ -194,6 +194,8 @@ fun UnifiedLibraryScreen(
     var selectedShelfId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTagId by rememberSaveable { mutableStateOf<String?>(null) }
     var showTrackingSettings by rememberSaveable { mutableStateOf(false) }
+    var showTagEditor by rememberSaveable { mutableStateOf(false) }
+    var editingTagId by rememberSaveable { mutableStateOf<String?>(null) }
     val trackingSettings by viewModel.tagTrackingSettings.collectAsStateWithLifecycle()
     var filter by rememberSaveable { mutableStateOf(UnifiedLibraryFilter.ALL) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -437,6 +439,7 @@ fun UnifiedLibraryScreen(
 
     // A tag is shown like a shelf of its books; counts are derived so they follow every library change.
     val tagCounts = remember(uiState.rawLibraryFiles) { tagBookCounts(uiState.rawLibraryFiles) }
+    val booksWithTagCount = remember(uiState.rawLibraryFiles) { uiState.rawLibraryFiles.count { it.tags.isNotEmpty() } }
     val selectedTag = selectedTagId?.let { id -> uiState.allTags.find { it.id == id } }
     val tagShelf = remember(selectedTag, uiState.rawLibraryFiles) {
         selectedTag?.let { tag ->
@@ -879,12 +882,33 @@ fun UnifiedLibraryScreen(
                             modifier = Modifier.padding(padding),
                             tags = uiState.allTags,
                             counts = tagCounts,
+                            booksWithTagCount = booksWithTagCount,
                             onTagSelected = { selectedTagId = it },
                             onOpenTrackingSettings = { showTrackingSettings = true },
+                            onCreateTag = {
+                                editingTagId = null
+                                showTagEditor = true
+                            },
+                            onEditTag = { tagId ->
+                                editingTagId = tagId
+                                showTagEditor = true
+                            },
+                            onMoveTag = viewModel::moveCustomTag,
                         )
                     } else {
+                      Column(modifier = Modifier.padding(padding)) {
+                        selectedTag?.let { openTag ->
+                            TagDetailHeader(
+                                tag = openTag,
+                                count = tagCounts[openTag.id] ?: 0,
+                                onEdit = if (openTag.isSystemTag()) null else ({
+                                    editingTagId = openTag.id
+                                    showTagEditor = true
+                                }),
+                            )
+                        }
                         UnifiedShelvesSection(
-                            modifier = Modifier.padding(padding),
+                            modifier = Modifier.weight(1f),
                             shelves = listOf(shelfOfTag),
                             selectedShelfId = shelfOfTag.id,
                             selectedBookIds = uiState.contextualActionItems.mapTo(mutableSetOf()) { it.bookId },
@@ -904,6 +928,7 @@ fun UnifiedLibraryScreen(
                             },
                             sortOrder = uiState.sortOrder,
                         )
+                      }
                     }
                 }
                 UnifiedLibrarySection.FOLDERS -> UnifiedFoldersSection(
@@ -1122,6 +1147,52 @@ fun UnifiedLibraryScreen(
             onDismiss = { audiobookPlayerItem = null },
             getAuthToken = viewModel::getAuthToken,
         )
+    }
+    val editingTag = editingTagId?.let { id -> uiState.allTags.find { it.id == id } }
+    // An editor for a tag that no longer exists (or is a system tag) is simply not shown.
+    if (showTagEditor && (editingTagId == null || (editingTag != null && !editingTag.isSystemTag()))) {
+        run {
+            TagEditorDialog(
+                existing = editingTag,
+                allTags = uiState.allTags,
+                books = uiState.rawLibraryFiles,
+                onDismiss = {
+                    showTagEditor = false
+                    editingTagId = null
+                },
+                onSave = { result ->
+                    if (editingTag == null) {
+                        viewModel.createCustomTag(
+                            name = result.name,
+                            description = result.description,
+                            icon = result.icon,
+                            color = result.color,
+                            bookIds = result.addBookIds,
+                        )
+                    } else {
+                        viewModel.updateCustomTag(
+                            tagId = editingTag.id,
+                            name = result.name,
+                            description = result.description,
+                            icon = result.icon,
+                            color = result.color,
+                            addBookIds = result.addBookIds,
+                            removeBookIds = result.removeBookIds,
+                        )
+                    }
+                    showTagEditor = false
+                    editingTagId = null
+                },
+                onDelete = editingTag?.let { tag ->
+                    {
+                        viewModel.deleteTag(tag.id)
+                        if (selectedTagId == tag.id) selectedTagId = null
+                        showTagEditor = false
+                        editingTagId = null
+                    }
+                },
+            )
+        }
     }
     if (showAdvancedFilters) {
         LibraryFilterSheet(

@@ -7,6 +7,7 @@ import com.aryan.reader.data.AppDatabase
 import com.aryan.reader.data.BookShelfCrossRef
 import com.aryan.reader.data.BookTagCrossRef
 import com.aryan.reader.data.ShelfEntity
+import com.aryan.reader.data.TAG_TYPE_CUSTOM
 import com.aryan.reader.data.TagEntity
 import com.aryan.reader.shared.LibraryMutationStore
 import com.aryan.reader.shared.ShelfRecord
@@ -97,6 +98,70 @@ internal class AndroidLibraryMutationStore(
 
     suspend fun setTagVisibleInNavigation(tagId: String, visible: Boolean) {
         withContext(Dispatchers.IO) { tagDao.setVisibleInNavigation(tagId, visible) }
+    }
+
+    /** Creates an own tag with all its fields and its book assignments in one transaction. */
+    suspend fun createCustomTag(
+        tagId: String,
+        name: String,
+        description: String?,
+        icon: String?,
+        color: Int?,
+        bookIds: Set<String>,
+    ) {
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val nextOrder = (tagDao.getMaxCustomSortOrder() ?: 0) + 1
+                tagDao.insertTag(
+                    TagEntity(
+                        id = tagId,
+                        name = name,
+                        color = color,
+                        createdAt = System.currentTimeMillis(),
+                        description = description,
+                        icon = icon,
+                        type = TAG_TYPE_CUSTOM,
+                        trackingEnabled = false,
+                        visibleInNavigation = true,
+                        sortOrder = nextOrder,
+                    ),
+                )
+                bookIds.forEach { tagDao.insertBookTagCrossRef(BookTagCrossRef(it, tagId)) }
+            }
+        }
+    }
+
+    /**
+     * Updates an own tag in place (UPDATE, never REPLACE) and applies the book changes in the same
+     * transaction. Does nothing for system tags.
+     */
+    suspend fun updateCustomTag(
+        tagId: String,
+        name: String,
+        description: String?,
+        icon: String?,
+        color: Int?,
+        addBookIds: Set<String>,
+        removeBookIds: Set<String>,
+    ) {
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val changed = tagDao.updateCustomTagDetails(tagId, name, description, icon, color)
+                if (changed > 0) {
+                    addBookIds.forEach { tagDao.insertBookTagCrossRef(BookTagCrossRef(it, tagId)) }
+                    removeBookIds.forEach { tagDao.removeTagFromBook(tagId, it) }
+                }
+            }
+        }
+    }
+
+    /** Stores the manual position of own tags: index in [orderedTagIds] becomes the sortOrder. */
+    suspend fun setCustomTagOrder(orderedTagIds: List<String>) {
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                orderedTagIds.forEachIndexed { index, id -> tagDao.updateCustomTagSortOrder(id, index + 1) }
+            }
+        }
     }
 
     suspend fun seedTagsIfEmpty(tags: List<TagEntity>) = withContext(Dispatchers.IO) {

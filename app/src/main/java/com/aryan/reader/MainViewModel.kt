@@ -73,6 +73,7 @@ import com.aryan.reader.data.LocalSyncUtils
 import com.aryan.reader.data.PurchaseEntity
 import com.aryan.reader.data.PERSISTED_URI_GRANT_FLAGS
 import com.aryan.reader.data.RecentFileItem
+import com.aryan.reader.data.TAG_TYPE_CUSTOM
 import com.aryan.reader.data.TAG_TYPE_SYSTEM
 import com.aryan.reader.data.TagTrackingSettings
 import com.aryan.reader.data.TagTrackingSettingsStore
@@ -1425,6 +1426,9 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun deleteTag(tagId: String) {
         val cleanTagId = tagId.trim().takeIf { it.isNotBlank() } ?: return
+        // The five built-in tags are never deleted; only own tags can be removed.
+        val existingTag = uiState.value.allTags.firstOrNull { it.id == cleanTagId }
+        if (existingTag?.type == TAG_TYPE_SYSTEM || cleanTagId.startsWith("default_")) return
         viewModelScope.launch {
             libraryMutationController.deleteTag(cleanTagId)
             val projectedFilters = uiState.value.libraryFilters
@@ -1435,6 +1439,58 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
     }
+    /** Creates an own tag with description, icon key, color and books. Blank names are ignored. */
+    fun createCustomTag(name: String, description: String, icon: String, color: Int, bookIds: Set<String>) {
+        val cleanName = SharedLibraryEditor.cleanTagName(name) ?: return
+        val cleanDescription = description.trim().takeIf { it.isNotBlank() }
+        val cleanBookIds = SharedLibraryEditor.cleanBookIds(bookIds)
+        viewModelScope.launch(Dispatchers.IO) {
+            libraryStore.createCustomTag(
+                tagId = "tag_" + java.util.UUID.randomUUID().toString(),
+                name = cleanName,
+                description = cleanDescription,
+                icon = icon,
+                color = color,
+                bookIds = cleanBookIds,
+            )
+        }
+    }
+
+    /** Edits an own tag in place; system tags are rejected here and again by the DAO query. */
+    fun updateCustomTag(
+        tagId: String,
+        name: String,
+        description: String,
+        icon: String,
+        color: Int,
+        addBookIds: Set<String>,
+        removeBookIds: Set<String>,
+    ) {
+        val cleanId = tagId.trim().takeIf { it.isNotBlank() } ?: return
+        if (cleanId.startsWith("default_")) return
+        val cleanName = SharedLibraryEditor.cleanTagName(name) ?: return
+        val cleanDescription = description.trim().takeIf { it.isNotBlank() }
+        val toAdd = SharedLibraryEditor.cleanBookIds(addBookIds)
+        val toRemove = SharedLibraryEditor.cleanBookIds(removeBookIds)
+        viewModelScope.launch(Dispatchers.IO) {
+            libraryStore.updateCustomTag(cleanId, cleanName, cleanDescription, icon, color, toAdd, toRemove)
+        }
+    }
+
+    /** Moves an own tag one step up or down in the manual order (by sortOrder, then name). */
+    fun moveCustomTag(tagId: String, up: Boolean) {
+        val ordered = uiState.value.allTags
+            .filter { it.type == TAG_TYPE_CUSTOM && !it.id.startsWith("default_") }
+            .sortedWith(compareBy<TagEntity>({ it.sortOrder }, { it.name.lowercase() }))
+            .map { it.id }
+            .toMutableList()
+        val index = ordered.indexOf(tagId)
+        val target = if (up) index - 1 else index + 1
+        if (index < 0 || target !in ordered.indices) return
+        ordered[index] = ordered[target].also { ordered[target] = ordered[index] }
+        viewModelScope.launch(Dispatchers.IO) { libraryStore.setCustomTagOrder(ordered) }
+    }
+
     private fun buildDefaultTags(): List<TagEntity> {
         val now = System.currentTimeMillis()
         return listOf(
