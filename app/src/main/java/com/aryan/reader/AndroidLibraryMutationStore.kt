@@ -1,3 +1,4 @@
+
 package com.aryan.reader
 
 import android.content.Context
@@ -9,6 +10,7 @@ import com.aryan.reader.data.BookTagCrossRef
 import com.aryan.reader.data.ShelfEntity
 import com.aryan.reader.data.TAG_TYPE_CUSTOM
 import com.aryan.reader.data.TagEntity
+import com.aryan.reader.data.TagRepository
 import com.aryan.reader.shared.LibraryMutationStore
 import com.aryan.reader.shared.ShelfRecord
 import com.aryan.reader.shared.Tag
@@ -75,7 +77,9 @@ internal class AndroidLibraryMutationStore(
 
     override suspend fun createTag(tag: Tag, createdAt: Long) {
         // Insert-or-update by name/color: REPLACE would delete the row and cascade away all assignments.
-        withContext(Dispatchers.IO) { TagRepository(database).createOrUpdateNameAndColor(tag.toTagEntity(createdAt)) }
+        withContext(Dispatchers.IO) {
+            TagRepository(database).createOrUpdateNameAndColor(tag.toTagEntity(createdAt))
+        }
     }
 
     override suspend fun assignTagToBooks(tagId: String, bookIds: Set<String>) {
