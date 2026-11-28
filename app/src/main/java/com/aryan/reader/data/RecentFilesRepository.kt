@@ -93,9 +93,22 @@ class RecentFilesRepository(
     private val pdfTextRepository by lazy { PdfTextRepository(context) }
     private val bookCacheDao by lazy { BookCacheDatabase.getDatabase(context).bookCacheDao() }
     private val authRepository by lazy { AuthRepository(context) }
-    private val readingTracker by lazy { ReadingTracker(database, TagTrackingSettingsStore(context)) }
+    private val tagTrackingSettingsStore by lazy { TagTrackingSettingsStore(context) }
+    private val readingTracker by lazy { ReadingTracker(database, tagTrackingSettingsStore) }
+    private val readingPositionRecorder by lazy { ReadingPositionRecorder(database, tagTrackingSettingsStore) }
+    private val readingStatusTracker by lazy { ReadingStatusTracker(database, tagTrackingSettingsStore) }
+    private val seriesRepository by lazy { SeriesRepository(database) }
+    private val vellumScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
+    /** Confirms the page currently on screen if it was visible long enough. Call on reader pause/close. */
+    suspend fun flushReadingPosition(bookId: String) = withContext(Dispatchers.IO) {
+        readingPositionRecorder.flush(bookId)
+        readingTracker.onProgress(bookId, recentFileDao.getFileByBookId(bookId)?.progressPercentage ?: 0f)
+        readingStatusTracker.onBookChanged(bookId)
+    }
 
     init {
+        seriesRepository.startReconciler(vellumScope)
         if (!coverCacheDir.exists()) {
             coverCacheDir.mkdirs()
         }
@@ -799,7 +812,14 @@ class RecentFilesRepository(
                 progress = progress,
                 timestamp = currentTime
             )
+            readingPositionRecorder.onPosition(
+                item.bookId,
+                ReadPageGate.epubKey(locator.chapterIndex, locator.blockIndex),
+                totalUnits = null,
+                now = currentTime
+            )
             readingTracker.onProgress(item.bookId, progress, currentTime)
+            readingStatusTracker.onBookChanged(item.bookId, currentTime)
             val updated = recentFileDao.getFileByBookId(item.bookId)
             cloudFolderLogD(
                 "event=room_position_write_end operation=$operation correlation=$correlation " +
@@ -924,7 +944,9 @@ class RecentFilesRepository(
                     "page=$page progress=$progress",
             )
             recentFileDao.updatePdfReadingPosition(item.bookId, page, progress, currentTime)
+            readingPositionRecorder.onPosition(item.bookId, ReadPageGate.pdfKey(page), totalUnits = null, now = currentTime)
             readingTracker.onProgress(item.bookId, progress, currentTime)
+            readingStatusTracker.onBookChanged(item.bookId, currentTime)
             val updated = recentFileDao.getFileByBookId(item.bookId)
             cloudFolderLogD(
                 "event=room_position_write_end operation=$operation correlation=$correlation " +

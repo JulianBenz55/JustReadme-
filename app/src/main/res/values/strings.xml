@@ -2954,4 +2954,18 @@
     <string name="tag_editor_no_books">No books found.</string>
     <string name="tag_editor_delete">Delete tag</string>
     <string name="tag_editor_delete_message">Delete tag &quot;%1$s&quot;? It is removed from all books; the books themselves stay in your library.</string>
+    <string name="tags_manage_system">System tags</string>
+    <string name="tags_manage_custom">Own tags</string>
+    <string name="tag_opt_enabled">Tag enabled</string>
+    <string name="tag_opt_enabled_summary">A disabled tag is hidden and not assigned automatically. All assignments are kept.</string>
+    <string name="tag_opt_sidebar">Show in sidebar</string>
+    <string name="tag_opt_show_icon">Show symbol</string>
+    <string name="tag_opt_show_description">Show description</string>
+    <string name="tag_opt_show_count">Show number of books</string>
+    <string name="tag_manage_disabled">Disabled</string>
+    <string name="tracking_auto_reading">Assign Reading automatically</string>
+    <string name="tracking_auto_finished">Assign Finished automatically</string>
+    <string name="tracking_auto_finished_summary">Only for complete works. 100 percent of one file of a longer story never counts.</string>
+    <string name="tracking_dwell_title">A page counts as read after being visible for</string>
+    <string name="tracking_dwell_seconds">%1$d seconds</string>
 </resources>

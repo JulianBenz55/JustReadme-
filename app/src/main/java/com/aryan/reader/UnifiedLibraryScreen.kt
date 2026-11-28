@@ -876,6 +876,13 @@ fun UnifiedLibraryScreen(
                             onTrackingChanged = viewModel::setTagTrackingEnabled,
                             onVisibilityChanged = viewModel::setTagVisibleInNavigation,
                             onSettingsChanged = viewModel::updateTagTrackingSettings,
+                            counts = tagCounts,
+                            onEnabledChanged = viewModel::setTagEnabled,
+                            onDisplayOptionsChanged = viewModel::setTagDisplayOptions,
+                            onEditTag = { tagId ->
+                                editingTagId = tagId
+                                showTagEditor = true
+                            },
                         )
                     } else if (shelfOfTag == null) {
                         UnifiedTagsSection(
@@ -1168,6 +1175,7 @@ fun UnifiedLibraryScreen(
                             icon = result.icon,
                             color = result.color,
                             bookIds = result.addBookIds,
+                            visibleInNavigation = result.visibleInNavigation,
                         )
                     } else {
                         viewModel.updateCustomTag(
@@ -1179,6 +1187,9 @@ fun UnifiedLibraryScreen(
                             addBookIds = result.addBookIds,
                             removeBookIds = result.removeBookIds,
                         )
+                        viewModel.setTagVisibleInNavigation(editingTag.id, result.visibleInNavigation)
+                        viewModel.setTagEnabled(editingTag.id, result.isEnabled)
+                        viewModel.setTagDisplayOptions(editingTag.id, editingTag.showIcon, editingTag.showDescription, result.showCount)
                     }
                     showTagEditor = false
                     editingTagId = null

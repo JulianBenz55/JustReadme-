@@ -21,7 +21,11 @@ enum class RereadMode {
 /** Global tracking options. Per-tag on/off lives in `TagEntity.trackingEnabled`. */
 data class TagTrackingSettings(
     val removeToReadWhenReading: Boolean = true,
-    val rereadMode: RereadMode = RereadMode.KEEP_FINISHED
+    val rereadMode: RereadMode = RereadMode.KEEP_FINISHED,
+    val autoAssignReading: Boolean = true,
+    val autoAssignFinished: Boolean = true,
+    /** Minimum time a page must be visible before it counts as read. */
+    val minPageDwellMs: Long = ReadPageGate.DEFAULT_MIN_DWELL_MS
 )
 
 class TagTrackingSettingsStore(context: Context) {
@@ -34,7 +38,10 @@ class TagTrackingSettingsStore(context: Context) {
         }.getOrDefault(RereadMode.KEEP_FINISHED)
         return TagTrackingSettings(
             removeToReadWhenReading = prefs.getBoolean(KEY_REMOVE_TO_READ, true),
-            rereadMode = mode
+            rereadMode = mode,
+            autoAssignReading = prefs.getBoolean(KEY_AUTO_READING, true),
+            autoAssignFinished = prefs.getBoolean(KEY_AUTO_FINISHED, true),
+            minPageDwellMs = prefs.getLong(KEY_MIN_DWELL, ReadPageGate.DEFAULT_MIN_DWELL_MS).coerceIn(500L, 60_000L)
         )
     }
 
@@ -42,6 +49,9 @@ class TagTrackingSettingsStore(context: Context) {
         prefs.edit()
             .putBoolean(KEY_REMOVE_TO_READ, settings.removeToReadWhenReading)
             .putString(KEY_REREAD_MODE, settings.rereadMode.name)
+            .putBoolean(KEY_AUTO_READING, settings.autoAssignReading)
+            .putBoolean(KEY_AUTO_FINISHED, settings.autoAssignFinished)
+            .putLong(KEY_MIN_DWELL, settings.minPageDwellMs)
             .apply()
     }
 
@@ -56,6 +66,9 @@ class TagTrackingSettingsStore(context: Context) {
         const val PREFS_NAME = "vellum_tag_tracking"
         const val KEY_REMOVE_TO_READ = "remove_to_read_when_reading"
         const val KEY_REREAD_MODE = "reread_mode"
+        const val KEY_AUTO_READING = "auto_assign_reading"
+        const val KEY_AUTO_FINISHED = "auto_assign_finished"
+        const val KEY_MIN_DWELL = "min_page_dwell_ms"
     }
 }
 
@@ -78,6 +91,9 @@ object ReadingTrackingRules {
 
     fun isReadingConfirmed(startProgress: Float, progress: Float): Boolean =
         progress - startProgress >= READING_DELTA_PERCENT
+
+    /** "Reading" needs at least one page that was really read (confirmed by the page gate). */
+    fun isReadingConfirmedByPages(confirmedPages: Int): Boolean = confirmedPages >= 1
 
     fun isFinishConfirmed(previousMaxProgress: Float, progress: Float, endReachedAt: Long?, now: Long): Boolean {
         if (progress < FINISH_PERCENT) return false
@@ -104,6 +120,7 @@ class ReadingTracker(
     private val tagDao = database.tagDao()
     private val trackingDao = database.readingTrackingDao()
     private val recentFileDao = database.recentFileDao()
+    private val readPositionDao = database.readPositionDao()
 
     /** [progress] is a percentage in 0..100; values <= 0 mean "unknown" and are ignored. */
     suspend fun onProgress(bookId: String, progress: Float, now: Long = System.currentTimeMillis()) {
@@ -152,11 +169,16 @@ class ReadingTracker(
             lastUpdatedAt = now
         )
 
-        val readingTag = tagDao.getTagById(SYSTEM_TAG_READING)?.takeIf { it.trackingEnabled }
-        val finishedTag = tagDao.getTagById(SYSTEM_TAG_FINISHED)?.takeIf { it.trackingEnabled }
+        val readingTag = tagDao.getTagById(SYSTEM_TAG_READING)
+            ?.takeIf { it.trackingEnabled && it.isEnabled && settings.autoAssignReading }
+        // A file that is only part of a longer work never gets "Finished" automatically.
+        val coversWholeWork = readPositionDao.getWorkInfo(bookId)?.coversWholeWork ?: true
+        val finishedTag = tagDao.getTagById(SYSTEM_TAG_FINISHED)
+            ?.takeIf { it.trackingEnabled && it.isEnabled && settings.autoAssignFinished && coversWholeWork }
+        val confirmedPages = readPositionDao.countPositions(bookId)
 
         if (updated.readingAwardedAt == null &&
-            ReadingTrackingRules.isReadingConfirmed(updated.startProgress, p) &&
+            ReadingTrackingRules.isReadingConfirmedByPages(confirmedPages) &&
             readingTag != null
         ) {
             val isReread = finishedBefore > 0

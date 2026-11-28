@@ -27,7 +27,8 @@ internal class AndroidLibraryMutationStore(
     val activeShelvesFlow = shelfDao.getAllActiveShelves()
     val shelfCrossRefsFlow = shelfDao.getAllBookShelfCrossRefs()
     val tagsFlow = tagDao.getAllTags()
-    val tagCrossRefsFlow = tagDao.getAllBookTagCrossRefs()
+    // Direct plus inherited (series) tags, so every projection and counter sees inherited tags.
+    val tagCrossRefsFlow = database.seriesDao().observeEffectiveBookTags()
 
     override suspend fun createShelf(record: ShelfRecord, createdAt: Long) {
         withContext(Dispatchers.IO) { shelfDao.insertShelf(record.toShelfEntity(createdAt)) }
@@ -73,7 +74,8 @@ internal class AndroidLibraryMutationStore(
     }
 
     override suspend fun createTag(tag: Tag, createdAt: Long) {
-        withContext(Dispatchers.IO) { tagDao.insertTag(tag.toTagEntity(createdAt)) }
+        // Insert-or-update by name/color: REPLACE would delete the row and cascade away all assignments.
+        withContext(Dispatchers.IO) { TagRepository(database).createOrUpdateNameAndColor(tag.toTagEntity(createdAt)) }
     }
 
     override suspend fun assignTagToBooks(tagId: String, bookIds: Set<String>) {
@@ -96,6 +98,14 @@ internal class AndroidLibraryMutationStore(
         withContext(Dispatchers.IO) { tagDao.setTrackingEnabled(tagId, enabled) }
     }
 
+    suspend fun setTagEnabled(tagId: String, enabled: Boolean) {
+        withContext(Dispatchers.IO) { tagDao.setEnabled(tagId, enabled) }
+    }
+
+    suspend fun setTagDisplayOptions(tagId: String, showIcon: Boolean, showDescription: Boolean, showCount: Boolean) {
+        withContext(Dispatchers.IO) { tagDao.setDisplayOptions(tagId, showIcon, showDescription, showCount) }
+    }
+
     suspend fun setTagVisibleInNavigation(tagId: String, visible: Boolean) {
         withContext(Dispatchers.IO) { tagDao.setVisibleInNavigation(tagId, visible) }
     }
@@ -108,6 +118,7 @@ internal class AndroidLibraryMutationStore(
         icon: String?,
         color: Int?,
         bookIds: Set<String>,
+        visibleInNavigation: Boolean = false,
     ) {
         withContext(Dispatchers.IO) {
             database.withTransaction {
@@ -122,7 +133,7 @@ internal class AndroidLibraryMutationStore(
                         icon = icon,
                         type = TAG_TYPE_CUSTOM,
                         trackingEnabled = false,
-                        visibleInNavigation = true,
+                        visibleInNavigation = visibleInNavigation,
                         sortOrder = nextOrder,
                     ),
                 )

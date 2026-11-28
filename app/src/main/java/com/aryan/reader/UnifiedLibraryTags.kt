@@ -90,9 +90,12 @@ internal fun UnifiedLibraryDrawerTagEntries(
     onShowAll: () -> Unit,
 ) {
     val system = remember(tags) {
-        tags.filter { it.isSystemTag() && it.visibleInNavigation }.inSystemOrder()
+        tags.filter { it.isSystemTag() && it.isEnabled && it.visibleInNavigation }.inSystemOrder()
     }
-    val custom = remember(tags) { tags.filterNot { it.isSystemTag() }.inManualOrder() }
+    // Same rule for every tag: only enabled tags the user explicitly showed appear in the sidebar.
+    val custom = remember(tags) {
+        tags.filter { !it.isSystemTag() && it.isEnabled && it.visibleInNavigation }.inManualOrder()
+    }
 
     system.forEach { tag ->
         DrawerTagItem(tag, counts[tag.id] ?: 0, tag.id == selectedTagId, onTagSelected)
@@ -126,15 +129,23 @@ private fun DrawerTagItem(
     onTagSelected: (String) -> Unit,
 ) {
     NavigationDrawerItem(
-        icon = {
-            Icon(
-                tag.displayIcon(),
-                contentDescription = null,
-                tint = tag.color?.let { Color(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        icon = if (tag.showIcon) {
+            {
+                Icon(
+                    tag.displayIcon(),
+                    contentDescription = null,
+                    tint = tag.color?.let { Color(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            null
         },
         label = { Text(tag.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        badge = { Text(count.toString(), style = MaterialTheme.typography.labelMedium) },
+        badge = if (tag.showCount) {
+            { Text(count.toString(), style = MaterialTheme.typography.labelMedium) }
+        } else {
+            null
+        },
         selected = selected,
         onClick = { onTagSelected(tag.id) },
         modifier = Modifier.padding(start = 24.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
@@ -162,11 +173,13 @@ internal fun TagDetailHeader(
             modifier = Modifier.size(28.dp),
         )
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                pluralStringResource(R.plurals.book_count, count, count),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            val description = tag.description?.takeIf { it.isNotBlank() }
+            if (tag.showCount) {
+                Text(
+                    pluralStringResource(R.plurals.book_count, count, count),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            }
+            val description = tag.description?.takeIf { it.isNotBlank() && tag.showDescription }
             if (description != null) {
                 Text(
                     description,

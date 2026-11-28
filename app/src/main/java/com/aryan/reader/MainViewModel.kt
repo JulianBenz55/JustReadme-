@@ -1440,7 +1440,14 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
     /** Creates an own tag with description, icon key, color and books. Blank names are ignored. */
-    fun createCustomTag(name: String, description: String, icon: String, color: Int, bookIds: Set<String>) {
+    fun createCustomTag(
+        name: String,
+        description: String,
+        icon: String,
+        color: Int,
+        bookIds: Set<String>,
+        visibleInNavigation: Boolean = false,
+    ) {
         val cleanName = SharedLibraryEditor.cleanTagName(name) ?: return
         val cleanDescription = description.trim().takeIf { it.isNotBlank() }
         val cleanBookIds = SharedLibraryEditor.cleanBookIds(bookIds)
@@ -1452,6 +1459,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 icon = icon,
                 color = color,
                 bookIds = cleanBookIds,
+                visibleInNavigation = visibleInNavigation,
             )
         }
     }
@@ -1514,6 +1522,14 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setTagTrackingEnabled(tagId: String, enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) { libraryStore.setTagTrackingEnabled(tagId, enabled) }
+    }
+
+    fun setTagEnabled(tagId: String, enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { libraryStore.setTagEnabled(tagId, enabled) }
+    }
+
+    fun setTagDisplayOptions(tagId: String, showIcon: Boolean, showDescription: Boolean, showCount: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { libraryStore.setTagDisplayOptions(tagId, showIcon, showDescription, showCount) }
     }
 
     fun setTagVisibleInNavigation(tagId: String, visible: Boolean) {

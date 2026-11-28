@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -60,6 +61,9 @@ internal data class TagEditorResult(
     val color: Int,
     val addBookIds: Set<String>,
     val removeBookIds: Set<String>,
+    val visibleInNavigation: Boolean,
+    val isEnabled: Boolean,
+    val showCount: Boolean,
 )
 
 /**
@@ -80,6 +84,10 @@ internal fun TagEditorDialog(
     var description by remember { mutableStateOf(existing?.description.orEmpty()) }
     var iconKey by remember { mutableStateOf(existing?.icon ?: TAG_ICON_DEFAULT_KEY) }
     var color by remember { mutableStateOf(existing?.color ?: TAG_COLOR_CHOICES.random()) }
+    // New tags start hidden from the sidebar; the choice is part of creating and editing.
+    var visibleInNavigation by remember { mutableStateOf(existing?.visibleInNavigation ?: false) }
+    var isEnabled by remember { mutableStateOf(existing?.isEnabled ?: true) }
+    var showCount by remember { mutableStateOf(existing?.showCount ?: true) }
     var bookQuery by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
 
@@ -147,6 +155,9 @@ internal fun TagEditorDialog(
                                     color = color,
                                     addBookIds = selectedIds - initialIds,
                                     removeBookIds = initialIds - selectedIds,
+                                    visibleInNavigation = visibleInNavigation,
+                                    isEnabled = isEnabled,
+                                    showCount = showCount,
                                 ),
                             )
                         },
@@ -249,6 +260,13 @@ internal fun TagEditorDialog(
                                     }
                                 }
                             }
+                        }
+                    }
+                    item(key = "options") {
+                        Column {
+                            TagEditorSwitchRow(stringResource(R.string.tag_opt_enabled), isEnabled) { isEnabled = it }
+                            TagEditorSwitchRow(stringResource(R.string.tag_opt_sidebar), visibleInNavigation) { visibleInNavigation = it }
+                            TagEditorSwitchRow(stringResource(R.string.tag_opt_show_count), showCount) { showCount = it }
                         }
                     }
                     item(key = "books_header") {
@@ -354,5 +372,20 @@ internal fun TagEditorDialog(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun TagEditorSwitchRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

@@ -2174,4 +2174,18 @@
     <string name="tag_editor_no_books">Keine Bücher gefunden.</string>
     <string name="tag_editor_delete">Schlagwort löschen</string>
     <string name="tag_editor_delete_message">Schlagwort \"%1$s\" löschen? Es wird von allen Büchern entfernt; die Bücher selbst bleiben in deiner Bibliothek.</string>
+    <string name="tags_manage_system">System-Schlagwörter</string>
+    <string name="tags_manage_custom">Eigene Schlagwörter</string>
+    <string name="tag_opt_enabled">Schlagwort aktiviert</string>
+    <string name="tag_opt_enabled_summary">Ein deaktiviertes Schlagwort wird ausgeblendet und nicht automatisch vergeben. Alle Zuordnungen bleiben erhalten.</string>
+    <string name="tag_opt_sidebar">In Seitenleiste anzeigen</string>
+    <string name="tag_opt_show_icon">Symbol anzeigen</string>
+    <string name="tag_opt_show_description">Beschreibung anzeigen</string>
+    <string name="tag_opt_show_count">Anzahl der Bücher anzeigen</string>
+    <string name="tag_manage_disabled">Deaktiviert</string>
+    <string name="tracking_auto_reading">„Wird gelesen“ automatisch vergeben</string>
+    <string name="tracking_auto_finished">„Gelesen“ automatisch vergeben</string>
+    <string name="tracking_auto_finished_summary">Nur für vollständige Werke. 100 Prozent einer Datei einer längeren Geschichte zählt nie.</string>
+    <string name="tracking_dwell_title">Eine Seite gilt als gelesen nach einer Sichtbarkeit von</string>
+    <string name="tracking_dwell_seconds">%1$d Sekunden</string>
 </resources>

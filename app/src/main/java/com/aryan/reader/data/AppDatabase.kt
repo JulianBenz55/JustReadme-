@@ -37,6 +37,12 @@ import com.aryan.reader.audiobook.BookTtsListeningProgressEntity
         BookShelfCrossRef::class,
         TagEntity::class,
         BookTagCrossRef::class,
+        SeriesEntity::class,
+        SeriesTagAssignmentEntity::class,
+        BookTagInheritedEntity::class,
+        ReadPositionEntity::class,
+        BookReadStatsEntity::class,
+        BookWorkInfoEntity::class,
         ReadingSessionEntity::class,
         TagTrackingEventEntity::class,
         AudiobookEntity::class,
@@ -54,7 +60,7 @@ import com.aryan.reader.audiobook.BookTtsListeningProgressEntity
         CloudFolderMetadataOutboxEntity::class,
         CloudBookDeleteIntentEntity::class,
     ],
-    version = 40,
+    version = 41,
     exportSchema = false
 )
 @TypeConverters(FileTypeConverter::class)
@@ -64,6 +70,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun shelfDao(): ShelfDao
     abstract fun tagDao(): TagDao
     abstract fun readingTrackingDao(): ReadingTrackingDao
+    abstract fun seriesDao(): SeriesDao
+    abstract fun readPositionDao(): ReadPositionDao
     abstract fun audiobookDao(): AudiobookDao
     abstract fun bookTtsListeningProgressDao(): BookTtsListeningProgressDao
     abstract fun pendingFolderAnnotationExportDao(): PendingFolderAnnotationExportDao
@@ -1048,6 +1056,93 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Existing tags keep their current visibility; only new rows default to hidden.
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `isEnabled` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `showIcon` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `showDescription` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `tags` ADD COLUMN `showCount` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `series` (
+                        `seriesKey` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `knownVolumeCount` INTEGER,
+                        `isStoryComplete` INTEGER NOT NULL DEFAULT 0,
+                        `autoStatus` TEXT NOT NULL DEFAULT 'NOT_STARTED',
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`seriesKey`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `series_tag_assignments` (
+                        `seriesKey` TEXT NOT NULL,
+                        `tagId` TEXT NOT NULL,
+                        `inheritMode` TEXT NOT NULL DEFAULT 'SERIES_ONLY',
+                        `isAutomatic` INTEGER NOT NULL DEFAULT 0,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`seriesKey`, `tagId`),
+                        FOREIGN KEY(`seriesKey`) REFERENCES `series`(`seriesKey`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`tagId`) REFERENCES `tags`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_series_tag_assignments_tagId` ON `series_tag_assignments` (`tagId`)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `book_tag_inherited` (
+                        `bookId` TEXT NOT NULL,
+                        `tagId` TEXT NOT NULL,
+                        `seriesKey` TEXT NOT NULL,
+                        PRIMARY KEY(`bookId`, `tagId`, `seriesKey`),
+                        FOREIGN KEY(`bookId`) REFERENCES `recent_files`(`bookId`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`tagId`) REFERENCES `tags`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_tag_inherited_tagId` ON `book_tag_inherited` (`tagId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_book_tag_inherited_seriesKey_tagId` ON `book_tag_inherited` (`seriesKey`, `tagId`)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `read_positions` (
+                        `bookId` TEXT NOT NULL,
+                        `positionKey` TEXT NOT NULL,
+                        `readAt` INTEGER NOT NULL,
+                        `sessionId` INTEGER,
+                        PRIMARY KEY(`bookId`, `positionKey`),
+                        FOREIGN KEY(`bookId`) REFERENCES `recent_files`(`bookId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `book_read_stats` (
+                        `bookId` TEXT NOT NULL,
+                        `totalUnits` INTEGER,
+                        `readUnits` INTEGER NOT NULL DEFAULT 0,
+                        `lastPositionKey` TEXT,
+                        `lastUpdatedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`bookId`),
+                        FOREIGN KEY(`bookId`) REFERENCES `recent_files`(`bookId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `book_work_info` (
+                        `bookId` TEXT NOT NULL,
+                        `coversWholeWork` INTEGER NOT NULL DEFAULT 1,
+                        PRIMARY KEY(`bookId`),
+                        FOREIGN KEY(`bookId`) REFERENCES `recent_files`(`bookId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 CloudFolderPrivateStateMigrator.importLegacyState(context.applicationContext)
@@ -1066,7 +1161,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_24_25, MIGRATION_25_26, MIGRATION_26_27, MIGRATION_27_28,
                         MIGRATION_28_29, MIGRATION_29_30, MIGRATION_30_31, MIGRATION_31_32,
                         MIGRATION_32_33, MIGRATION_33_34, MIGRATION_34_35, MIGRATION_35_36,
-                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40
+                        MIGRATION_36_37, MIGRATION_37_38, MIGRATION_38_39, MIGRATION_39_40,
+                        MIGRATION_40_41
                     )
                     .fallbackToDestructiveMigration(false)
                     .build()

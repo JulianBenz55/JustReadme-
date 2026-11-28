@@ -38,4 +38,10 @@ class ReadingTrackingRulesTest {
         assertTrue(ReadingTrackingRules.startsNewPass(latestPassFinished = true, progress = 2f))
         assertFalse(ReadingTrackingRules.startsNewPass(latestPassFinished = false, progress = 2f))
     }
+
+    @Test
+    fun readingNeedsAtLeastOneConfirmedPage() {
+        assertFalse(ReadingTrackingRules.isReadingConfirmedByPages(0))
+        assertTrue(ReadingTrackingRules.isReadingConfirmedByPages(1))
+    }
 }

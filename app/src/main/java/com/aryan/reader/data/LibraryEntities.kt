@@ -54,8 +54,15 @@ data class TagEntity(
     val icon: String? = null,
     @ColumnInfo(defaultValue = "'CUSTOM'") val type: String = TAG_TYPE_CUSTOM,
     @ColumnInfo(defaultValue = "0") val trackingEnabled: Boolean = false,
-    @ColumnInfo(defaultValue = "1") val visibleInNavigation: Boolean = true,
-    @ColumnInfo(defaultValue = "0") val sortOrder: Int = 0
+    // The SQL default stays 1 so the column matches what MIGRATION_39_40 created (Room validates it);
+    // new rows always get the Kotlin default: a tag is hidden from the sidebar until enabled.
+    @ColumnInfo(defaultValue = "1") val visibleInNavigation: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val sortOrder: Int = 0,
+    /** Master switch: a disabled tag is neither shown nor assigned automatically; assignments stay. */
+    @ColumnInfo(defaultValue = "1") val isEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "1") val showIcon: Boolean = true,
+    @ColumnInfo(defaultValue = "1") val showDescription: Boolean = true,
+    @ColumnInfo(defaultValue = "1") val showCount: Boolean = true
 )
 
 const val TAG_TYPE_SYSTEM = "SYSTEM"

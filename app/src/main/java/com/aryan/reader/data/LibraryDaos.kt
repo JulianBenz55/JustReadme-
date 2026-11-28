@@ -54,11 +54,24 @@ interface ShelfDao {
 
 @Dao
 interface TagDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertTag(tag: TagEntity)
+    /**
+     * Never REPLACE: that deletes the row first and the CASCADE would drop every assignment and reset
+     * the per-tag settings. An existing id is left untouched; use the UPDATE queries to change a tag.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertTag(tag: TagEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertTags(tags: List<TagEntity>)
+
+    @Query("UPDATE tags SET name = :name, color = :color WHERE id = :tagId")
+    suspend fun updateTagNameAndColor(tagId: String, name: String, color: Int?)
+
+    @Query("UPDATE tags SET isEnabled = :enabled WHERE id = :tagId")
+    suspend fun setEnabled(tagId: String, enabled: Boolean)
+
+    @Query("UPDATE tags SET showIcon = :showIcon, showDescription = :showDescription, showCount = :showCount WHERE id = :tagId")
+    suspend fun setDisplayOptions(tagId: String, showIcon: Boolean, showDescription: Boolean, showCount: Boolean)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertBookTagCrossRef(crossRef: BookTagCrossRef)
